@@ -1,0 +1,102 @@
+import "std/str.nino"
+
+fn vec_add(dst: [int], a: [int], b: [int], n: int) {
+    for i in 0..n {
+        dst[i] = a[i] + b[i]
+    }
+}
+
+fn vec_dot(a: [int], b: [int], n: int) -> int {
+    mut acc: int = 0
+    for i in 0..n {
+        acc = acc + a[i] * b[i]
+    }
+    return acc
+}
+
+fn vec_scale_f64(dst: [float], src: [float], factor: float, n: int) {
+    for k in 0..n {
+        dst[k] = src[k] * factor + 1.0
+    }
+}
+
+fn scalar_dot_ref(a: [int], b: [int], n: int) -> int {
+    mut acc = 0
+    mut i = 0
+    while i < n {
+        acc = acc + a[i] * b[i]
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() -> int {
+    mut a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    mut b = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170]
+    mut dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    vec_add(dst, a, b, 0)
+    require(dst[0] == 0, "Zero-length vector loop must not mutate dst")
+    vec_add(dst, a, b, 3)
+    require(dst[0] == 11 && dst[2] == 33 && dst[3] == 0, "Tail-only length 3 check")
+    vec_add(dst, a, b, 17)
+    for chk in 0..17 {
+        require(dst[chk] == a[chk] + b[chk], "Vector add mismatch")
+    }
+    require(vec_dot(a, b, 17) == scalar_dot_ref(a, b, 17), "Vector reduction must match scalar")
+    require(vec_dot(a, b, 13) == scalar_dot_ref(a, b, 13), "Vector reduction tail 13 mismatch")
+
+    vec_add(a, a, b, 7)
+    require(a[0] == 11 && a[6] == 77, "Aliased in-place fallback mismatch")
+
+    let fa = [1.5, 2.5, 3.5, 4.5, 5.5]
+    mut fd = [0.0, 0.0, 0.0, 0.0, 0.0]
+    vec_scale_f64(fd, fa, 2.0, 5)
+    require(fd[0] > 3.9 && fd[0] < 4.1, "Float vec element 0")
+    require(fd[4] > 11.9 && fd[4] < 12.1, "Float vec tail element 4")
+
+    let base_tmp = len(get_env("TEMP")) > 0 ? get_env("TEMP") : "/tmp"
+    let pid_s = int_to_str(nino_get_pid())
+    let helper = "fn vmap(d: [int], x: [int], n: int) {\n    for i in 0..n {\n        d[i] = x[i] + 1\n    }\n}\nfn main() -> int { return 0 }\n"
+    if len(get_env("OS")) > 0 {
+        let ws = str_replace(base_tmp, "/", "\\") + "\\nino_e2e_vec_" + pid_s
+        let src = ws + "\\v.nino"
+        let exe = ws + "\\v.exe"
+        let ir = ws + "\\v.nir"
+        let ll = ws + "\\v.ll"
+        let bo = ws + "\\b.out"
+        exec_cmd("mkdir \"" + ws + "\" >nul 2>&1")
+        write_file(src, helper)
+        let rcb = exec_cmd("ninoc.exe build \"" + src + "\" -o \"" + exe + "\" --strict-c11 > \"" + bo + "\" 2>&1")
+        let btxt = read_file(bo)
+        let rci = exec_cmd("ninoc.exe ir \"" + src + "\" -o \"" + ir + "\" >nul")
+        let irtxt = read_file(ir)
+        let rcl = exec_cmd("ninoc.exe llvm \"" + src + "\" -o \"" + ll + "\" >nul")
+        let lltxt = read_file(ll)
+        exec_cmd("rmdir /s /q \"" + ws + "\" >nul 2>&1")
+        require(rcb == 0 && str_contains(btxt, "VecLoop=1"), "Windows VecLoop=1 telemetry missing")
+        require(rci == 0 && str_contains(irtxt, "@nir_vec_loop"), "Windows NIR vector marker missing")
+        require(rcl == 0 && str_contains(lltxt, "llvm.loop.vectorize.width"), "Windows LLVM vector metadata missing")
+    } else {
+        let ws = base_tmp + "/nino_e2e_vec_" + pid_s
+        let src = ws + "/v.nino"
+        let exe = ws + "/v.out"
+        let ir = ws + "/v.nir"
+        let ll = ws + "/v.ll"
+        let bo = ws + "/b.out"
+        exec_cmd("mkdir -p \"" + ws + "\"")
+        write_file(src, helper)
+        let rcb = exec_cmd("./ninoc build \"" + src + "\" -o \"" + exe + "\" --strict-c11 > \"" + bo + "\" 2>&1")
+        let btxt = read_file(bo)
+        let rci = exec_cmd("./ninoc ir \"" + src + "\" -o \"" + ir + "\" >/dev/null")
+        let irtxt = read_file(ir)
+        let rcl = exec_cmd("./ninoc llvm \"" + src + "\" -o \"" + ll + "\" >/dev/null")
+        let lltxt = read_file(ll)
+        exec_cmd("rm -rf \"" + ws + "\"")
+        require(rcb == 0 && str_contains(btxt, "VecLoop=1"), "POSIX VecLoop=1 telemetry missing")
+        require(rci == 0 && str_contains(irtxt, "@nir_vec_loop"), "POSIX NIR vector marker missing")
+        require(rcl == 0 && str_contains(lltxt, "llvm.loop.vectorize.width"), "POSIX LLVM vector metadata missing")
+    }
+    print("T1-F20-01:PASS")
+    return 0
+}

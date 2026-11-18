@@ -1,0 +1,28 @@
+import "std/str.nino"
+
+fn main() -> int {
+    let base_tmp = len(get_env("TEMP")) > 0 ? get_env("TEMP") : "/tmp"
+    let pid_s = int_to_str(nino_get_pid())
+    if len(get_env("OS")) > 0 {
+        let ws = str_replace(base_tmp, "/", "\\") + "\\nino_e2e_pkg_" + pid_s
+        let bat1 = ws + "\\step1.bat"
+        let bat2 = ws + "\\step2.bat"
+        exec_cmd("mkdir \"" + ws + "\" >nul 2>&1")
+        write_file(bat1, "@echo off\nset \"NP=%CD%\\ninoc.exe\"\ncd /d \"" + ws + "\" || exit /b 1\n\"%NP%\" pkg init >nul || exit /b 1\n\"%NP%\" pkg add m_alpha@1.0.0 >nul || exit /b 1\n\"%NP%\" pkg install >nul || exit /b 1\n")
+        write_file(bat2, "@echo off\nset \"NP=%CD%\\ninoc.exe\"\ncd /d \"" + ws + "\" || exit /b 1\n\"%NP%\" pkg install >nul 2>&1\n")
+        let rc_add = exec_cmd("call \"" + bat1 + "\"")
+        write_file(ws + "\\pkg\\m_alpha\\module.nino", "tampered = 1\n")
+        let rc_tamper = exec_cmd("call \"" + bat2 + "\"")
+        exec_cmd("rmdir /s /q \"" + ws + "\" >nul 2>&1")
+        require(rc_add == 0 && rc_tamper != 0, "Windows pkg tamper check failed")
+    } else {
+        let ws = base_tmp + "/nino_e2e_pkg_" + pid_s
+        let rc_add = exec_cmd("NP=\"$(pwd)/ninoc\" && mkdir -p \"" + ws + "\" && cd \"" + ws + "\" && \"$NP\" pkg init >/dev/null && \"$NP\" pkg add m_alpha@1.0.0 >/dev/null && \"$NP\" pkg install >/dev/null")
+        write_file(ws + "/pkg/m_alpha/module.nino", "tampered = 1\n")
+        let rc_tamper = exec_cmd("NP=\"$(pwd)/ninoc\" && cd \"" + ws + "\" && \"$NP\" pkg install >/dev/null 2>&1")
+        exec_cmd("rm -rf \"" + ws + "\"")
+        require(rc_add == 0 && rc_tamper != 0, "POSIX pkg tamper check failed")
+    }
+    print("T3-F14-01:PASS")
+    return 0
+}

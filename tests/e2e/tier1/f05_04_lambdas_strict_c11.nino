@@ -1,0 +1,9 @@
+fn main() -> int {
+    let nums: [int] = [2, 4, 6, 8]
+    let big = arr_filter(nums, |x| x >= 4)
+    let inc = arr_map(big, |x| x + 3)
+    let prod = arr_reduce(inc, 0, |acc, x| acc + x)
+    require(len(big) == 3 && prod == 27, "strict-c11 lambda result must be 27")
+    print("T1-F05-04:PASS")
+    return 0
+}

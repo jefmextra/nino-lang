@@ -1,0 +1,11 @@
+fn fp_absorb_bug(x: float) -> float {
+    require(x > 0.0)
+    let y = x + 1.0
+    ensure(y > x)
+    return y
+}
+
+fn main() -> int {
+    print(fp_absorb_bug(1.0))
+    return 0
+}

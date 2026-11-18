@@ -1,0 +1,13 @@
+struct BoxedMsg {
+    mut f: string
+}
+
+fn main() -> int {
+    mut s = BoxedMsg { f: "base" }
+    let m = arena_mark()
+    let tmp = "field_tmp_" + int_to_str(33)
+    s.f = tmp
+    arena_rollback(m)
+    print(s.f)
+    return 0
+}

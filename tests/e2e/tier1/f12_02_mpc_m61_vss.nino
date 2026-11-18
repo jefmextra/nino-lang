@@ -1,0 +1,15 @@
+import "std/mpc.nino"
+
+fn main() -> int {
+    let sec: i64 = 987654321012345
+    let key = mpc_split_secret(sec, 3, 5)
+    mut sub: [MpcShare] = [key.shares[0], key.shares[2], key.shares[4]]
+    let ok_s = mpc_verify_share_vss(key.shares[0], key)
+    mut bad_s = key.shares[0]
+    bad_s.y = bad_s.y + 3
+    let fail_s = mpc_verify_share_vss(bad_s, key)
+    let rec = mpc_reconstruct_secret(sub, 3)
+    require(key.prime_mod == 2305843009213693951 && ok_s && !fail_s && rec == sec, "M61 Feldman VSS MPC failed")
+    print("T1-F12-02:PASS")
+    return 0
+}

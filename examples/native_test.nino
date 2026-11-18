@@ -1,0 +1,31 @@
+fn calculate_speed(base: int64_t, mult: int64_t) -> int64_t {
+    let boost = 250
+    return (base * mult) + boost
+}
+
+fn main() {
+    print("==================================================")
+    print("   NINO NATIVE COMPILER - STANDALONE BINARY .EXE  ")
+    print("==================================================")
+
+    defer print("[Defer Engine] Standalone Binary Terminated Gracefully.")
+
+    let base_speed = 1000
+    mut multiplier = 5
+    let total_throughput = calculate_speed(base_speed, multiplier)
+    print("Total Bare-Metal Throughput (ops/sec):")
+    print(total_throughput)
+
+    print("\n--- Iterating Native CPU Loop (1 to 5) ---")
+    for i in 1..5 {
+        print(i)
+    }
+
+    guard total_throughput > 5000 else {
+        print("Throughput below threshold! Aborting...")
+        return 0
+    }
+
+    print("\n==================================================")
+    print("SUCCESS: Running 100% Native Machine Binary! [OK]")
+}

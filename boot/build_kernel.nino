@@ -1,0 +1,106 @@
+fn resolve_ninoc_bin() -> string {
+    if is_windows() {
+        if file_exists("ninoc.exe") {
+            return "ninoc.exe"
+        }
+        return "ninoc"
+    }
+    if file_exists("./ninoc") {
+        return "./ninoc"
+    }
+    return "ninoc"
+}
+
+fn resolve_clang_bin() -> string {
+    let env_cc = get_env("NINO_CC")
+    if len(env_cc) > 0 && file_exists(env_cc) {
+        return "\"" + env_cc + "\""
+    }
+    let cc = get_env("CC")
+    if len(cc) > 0 && file_exists(cc) {
+        return "\"" + cc + "\""
+    }
+    let pf = get_env("ProgramFiles")
+    if len(pf) > 0 {
+        let p = pf + "\\LLVM\\bin\\clang.exe"
+        if file_exists(p) {
+            return "\"" + p + "\""
+        }
+    }
+    return "clang"
+}
+
+fn resolve_lld_bin() -> string {
+    let env_ld = get_env("NINO_LLD")
+    if len(env_ld) > 0 && file_exists(env_ld) {
+        return "\"" + env_ld + "\" -flavor gnu"
+    }
+    let pf = get_env("ProgramFiles")
+    if len(pf) > 0 {
+        let ld1 = pf + "\\LLVM\\bin\\ld.lld.exe"
+        if file_exists(ld1) {
+            return "\"" + ld1 + "\""
+        }
+        let ld2 = pf + "\\LLVM\\bin\\lld.exe"
+        if file_exists(ld2) {
+            return "\"" + ld2 + "\" -flavor gnu"
+        }
+    }
+    return "lld -flavor gnu"
+}
+
+fn main() -> int {
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Sovereign OS Bare-Metal Kernel Builder]\033[0m")
+    print("Self-Hosted Bare-Metal Synthesis for 32-bit x86 Multiboot v1 Architecture\n")
+
+    let boot_s = "boot/boot.s"
+    let linker_ld = "boot/linker.ld"
+    let kernel_nino = "examples/kernel_os.nino"
+    let kernel_c = "examples/kernel_os.nino.c"
+    let kernel_host_o = "boot/kernel_host.o"
+    let boot_o = "boot/boot.o"
+    let kernel_o = "boot/kernel.o"
+    let output_bin = "boot/nino_kernel.bin"
+
+    require(file_exists(boot_s), "boot/boot.s not found")
+    require(file_exists(linker_ld), "boot/linker.ld not found")
+    require(file_exists(kernel_nino), "examples/kernel_os.nino not found")
+
+    let ninoc = resolve_ninoc_bin()
+    let clang_cmd = resolve_clang_bin()
+    let lld_cmd = resolve_lld_bin()
+
+    print("  Nino -> Freestanding C: " + kernel_nino)
+    let trans_rc = exec_cmd(ninoc + " build " + kernel_nino + " -o " + kernel_host_o)
+    require(trans_rc == 0 && file_exists(kernel_c), "ninoc freestanding C generation failed")
+
+    print("  Bootloader Assembly   : " + boot_s + " -> " + boot_o)
+    let as_cmd = clang_cmd + " -target i686-unknown-none-elf -c " + boot_s + " -o " + boot_o
+    let as_status = exec_cmd(as_cmd)
+    require(as_status == 0, "Bootloader assembly failed")
+
+    print("  Bare-Metal Kernel C   : " + kernel_c + " -> " + kernel_o)
+    let cc_cmd = clang_cmd + " -target i686-unknown-none-elf -ffreestanding -fno-builtin -fno-stack-protector -nostdlib -O2 -c " + kernel_c + " -o " + kernel_o
+    let cc_status = exec_cmd(cc_cmd)
+    require(cc_status == 0, "Kernel compilation failed")
+
+    print("  Multiboot ELF Link    : " + output_bin)
+    let ld_cmd = lld_cmd + " -m elf_i386 -T " + linker_ld + " " + boot_o + " " + kernel_o + " -o " + output_bin
+    let ld_status = exec_cmd(ld_cmd)
+    require(ld_status == 0, "Kernel link failed")
+
+    let bin_exists = file_exists(output_bin)
+    require(bin_exists, "Kernel binary verification failed")
+
+    file_delete(kernel_c)
+    file_delete(kernel_host_o)
+    file_delete(boot_o)
+    file_delete(kernel_o)
+
+    print("\n\033[92m[✓ BARE-METAL KERNEL BUILT SUCCESSFULLY]\033[0m")
+    print("  Output Image: " + output_bin)
+    print("  Launch with : qemu-system-i386 -kernel " + output_bin)
+    print("\033[96m================================================================================\033[0m\n")
+    return 0
+}

@@ -1,0 +1,16 @@
+fn early_exit_bug() -> int {
+    mut x = 0
+    while x < 10 {
+        invariant(x >= 0, "nonneg")
+        if x == 2 {
+            break
+        }
+        x = x + 1
+    }
+    ensure(x == 10, "unsound due to break exit")
+    return x
+}
+
+fn main() -> int {
+    return early_exit_bug()
+}

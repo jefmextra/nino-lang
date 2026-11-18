@@ -1,0 +1,15 @@
+fn combine_tokens(a: string, b: string) -> string {
+    return a + ":" + b
+}
+
+fn main() -> int {
+    let t1 = "a => b |> c"
+    let t2 = "// not_a_comment"
+    let t3 = "let x = 1; mut y = 2"
+    let t4 = "a,b,{c:1},[d]"
+    let joined = combine_tokens(t1, t4)
+    require(len(t2) == 16 && len(t3) == 20, "literal token string lengths")
+    require(joined == "a => b |> c:a,b,{c:1},[d]", "comma and brace inside string args")
+    print("T2-F01-06:PASS")
+    return 0
+}

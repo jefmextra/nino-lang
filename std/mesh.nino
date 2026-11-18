@@ -1,0 +1,84 @@
+struct MeshPacket {
+    sender_id: str,
+    topic: str,
+    payload: str,
+    signature: str
+}
+
+struct MeshNode {
+    node_id: str,
+    port: i64,
+    cipher: str,
+    mut peers: [str],
+    mut inbox: [MeshPacket]
+}
+
+fn mesh_node_init(node_id: str, port: i64, cipher: str) -> MeshNode {
+    require(port > 1024, "P2P port must be unprivileged port > 1024")
+    return MeshNode {
+        node_id: node_id,
+        port: port,
+        cipher: cipher,
+        peers: [],
+        inbox: []
+    }
+}
+
+fn mesh_connect_peer(mut node: MeshNode, peer_addr: str) -> bool {
+    let count = len(node.peers)
+    if count > 0 {
+        for i in 0..count {
+            if node.peers[i] == peer_addr {
+                return false
+            }
+        }
+    }
+    node.peers = push(node.peers, peer_addr)
+    return true
+}
+
+fn mesh_peers_count(node: MeshNode) -> i64 {
+    return len(node.peers)
+}
+
+fn mesh_broadcast(mut node: MeshNode, topic: str, payload: str) -> i64 {
+    let peer_count = len(node.peers)
+    require(peer_count > 0, "No active peers connected in mesh")
+    let sig_hash = sha256(node.node_id + ":" + topic + ":" + payload)
+    let packet = MeshPacket {
+        sender_id: node.node_id,
+        topic: topic,
+        payload: payload,
+        signature: "SHA256_" + slice(sig_hash, 0, 16)
+    }
+    node.inbox = push(node.inbox, packet)
+    return peer_count
+}
+
+fn mesh_receive(mut node: MeshNode) -> MeshPacket {
+    let total = len(node.inbox)
+    if total == 0 {
+        return MeshPacket {
+            sender_id: "",
+            topic: "",
+            payload: "",
+            signature: ""
+        }
+    }
+    let pkt = node.inbox[0]
+    if total > 1 {
+        for i in 1..total {
+            node.inbox[i - 1] = node.inbox[i]
+        }
+    }
+    pop(node.inbox)
+    return pkt
+}
+
+fn mesh_verify_packet(pkt: MeshPacket) -> bool {
+    if len(pkt.sender_id) == 0 || len(pkt.signature) == 0 {
+        return false
+    }
+    let expected = "SHA256_" + slice(sha256(pkt.sender_id + ":" + pkt.topic + ":" + pkt.payload), 0, 16)
+    return pkt.signature == expected
+}

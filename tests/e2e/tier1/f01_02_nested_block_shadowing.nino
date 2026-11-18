@@ -1,0 +1,25 @@
+fn main() -> int {
+    let x: int = 10
+    mut outer_sum: int = 0
+    if true {
+        mut x: string = "inner"
+        require(x == "inner", "inner string shadow mismatch")
+        x = x + "_ok"
+        require(x == "inner_ok", "inner string mutation mismatch")
+        outer_sum = outer_sum + 1
+    }
+    require(x == 10, "outer int x must remain 10 after if shadow")
+
+    mut step: int = 0
+    while step < 2 {
+        let x: bool = true
+        if x {
+            outer_sum = outer_sum + 10
+        }
+        step = step + 1
+    }
+    require(x == 10, "outer int x must remain 10 after while shadow")
+    require(outer_sum == 21, "outer_sum must equal 21")
+    print("T1-F01-02:PASS")
+    return 0
+}

@@ -1,0 +1,22 @@
+import "std/jwt.nino"
+
+fn main() -> int {
+    let tok = jwt_sign_hs256("{\"sub\":\"42\",\"exp\":2000,\"nbf\":1000}", "sec123")
+    require(jwt_verify_hs256(tok, "sec123"), "valid HS256 token passes")
+    require(jwt_verify_hs256_claims(tok, "sec123", 1500), "claims valid at t=1500")
+    require(!jwt_verify_hs256_claims(tok, "sec123", 2000), "expired token rejected at exp")
+    require(!jwt_verify_hs256_claims(tok, "sec123", 999), "premature token rejected before nbf")
+
+    let none_hdr = base64url_encode("{\"alg\":\"none\",\"typ\":\"JWT\"}")
+    let pay = base64url_encode("{\"sub\":\"admin\"}")
+    let none_sig_forged = base64url_encode_hex(hmac_sha256("sec123", none_hdr + "." + pay))
+    require(!jwt_verify_hs256(none_hdr + "." + pay + "." + none_sig_forged, "sec123"), "alg=none must be rejected even with matching HMAC")
+    require(!jwt_verify_hs256(none_hdr + "." + pay + ".", "sec123"), "unsigned alg=none must be rejected")
+
+    let rs_hdr = base64url_encode("{\"alg\":\"RS256\",\"typ\":\"JWT\"}")
+    let rs_sig_forged = base64url_encode_hex(hmac_sha256("sec123", rs_hdr + "." + pay))
+    require(!jwt_verify_hs256(rs_hdr + "." + pay + "." + rs_sig_forged, "sec123"), "alg=RS256 key confusion must be rejected")
+
+    print("T1-F12-04:PASS")
+    return 0
+}

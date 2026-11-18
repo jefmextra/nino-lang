@@ -1,0 +1,47 @@
+import "std/str.nino"
+
+fn resolve_ninoc_cmd() -> string {
+    if is_windows() { return "ninoc.exe" }
+    if file_exists("./ninoc") { return "./ninoc" }
+    return "ninoc"
+}
+
+fn resolve_gcc_cmd() -> string {
+    let eg = get_env("NINO_GCC")
+    if len(eg) > 0 && file_exists(eg) {
+        return "\"" + eg + "\""
+    }
+    if is_windows() {
+        let la = get_env("LOCALAPPDATA")
+        if len(la) > 0 {
+            let cg = la + "\\Programs\\CLion\\bin\\mingw\\bin\\gcc.exe"
+            if file_exists(cg) { return "\"" + cg + "\"" }
+        }
+    }
+    return "gcc"
+}
+
+fn main() -> int {
+    let ninoc = resolve_ninoc_cmd()
+    let gcc = resolve_gcc_cmd()
+    let src_p = "temp_e2e_f22_01_nostd.nino"
+    let obj_p = "temp_e2e_f22_01_nostd.o"
+    let c_p = "temp_e2e_f22_01_nostd.nino.c"
+    let lb = "{"
+    let rb = "}"
+    let hash = "#"
+    mut ksrc = hash + "no_std\nfn kmain() " + lb + "\n    write_vga(0, 0, \"OK\", 15)\n    outb(61, 1)\n    hlt()\n" + rb + "\n"
+    write_file(src_p, ksrc)
+
+    require(exec_cmd(ninoc + " build " + src_p + " -o " + obj_p) == 0, "#no_std freestanding build must succeed")
+    let c_out = read_file(c_p)
+    require(!str_contains(c_out, "<stdio.h>") && !str_contains(c_out, "<stdlib.h>") && !str_contains(c_out, "<windows.h>"), "#no_std C output must omit hosted OS and libc headers")
+    require(str_contains(c_out, "<stdint.h>") && str_contains(c_out, "0xB8000"), "#no_std C output must emit freestanding stdint and VGA MMIO")
+    require(exec_cmd(gcc + " -ffreestanding -std=c11 -Wall -Wextra -Werror -c " + c_p + " -o " + obj_p) == 0, "GCC -ffreestanding -std=c11 -Werror must compile #no_std output with 0 warnings")
+
+    file_delete(src_p)
+    file_delete(c_p)
+    file_delete(obj_p)
+    print("T1-F22-01:PASS")
+    return 0
+}

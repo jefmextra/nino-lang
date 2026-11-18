@@ -1,0 +1,72 @@
+struct Point {
+    x: int,
+    y: int
+}
+
+fn inline_sq(x: int) -> int { return x * x }
+
+fn add_vals(a: int, b: int) -> int {
+    return a + b
+}
+
+fn test_generics() -> Option<Point> {
+    let p = (Point){ .x = 42, .y = 84 }
+    return (Option_Point){ .is_some = true, .val = p }
+}
+
+fn test_result() -> Result<Point, str> {
+    let p = (Point){ .x = 7, .y = 14 }
+    return (Result_Point){ .is_ok = true, .ok_val = p, .err_val = "" }
+}
+
+fn main() {
+    let sq = inline_sq(5)
+    require(sq == 25, "Single line function failed")
+
+    let shl_val = 1 << 4
+    require(shl_val == 16, "Bitwise shift left failed")
+
+    let shr_val = 32 >> 2
+    require(shr_val == 8, "Bitwise shift right failed")
+
+    let compound_shift = (2 + 2) << 3
+    require(compound_shift == 32, "Compound shift precedence failed")
+
+    mut nums = [100, 200, 300]
+    require(len(nums) == 3, "Array length check")
+    require(nums[0] == 100, "Array read index 0")
+    nums[1] = 999
+    require(nums[1] == 999, "Array write index 1 with bounds check")
+
+    let base_val = 10
+    if true {
+        mut base_val = 88
+        base_val = 99
+        require(base_val == 99, "Inner mut scope failed")
+    }
+    require(base_val == 10, "Outer let scope preservation failed")
+
+    mut tx_state = 12345
+    transaction {
+        tx_state = 99999
+        abort("Deliberate transaction abort")
+    } compensate {
+        tx_state = 12345
+    }
+    require(tx_state == 12345, "Dynamic STM rollback failed")
+
+    arena_reset()
+
+    let interp_res = "Sum is {add_vals(15, 25)}"
+    require(interp_res == "Sum is 40", "Multi-argument string interpolation failed")
+
+    let opt_pt = test_generics()
+    require(opt_pt.is_some, "Custom generic Option failed")
+    require(opt_pt.val.x == 42, "Custom generic Option val.x failed")
+
+    let res_pt = test_result()
+    require(res_pt.is_ok, "Custom generic Result failed")
+    require(res_pt.ok_val.y == 14, "Custom generic Result ok_val.y failed")
+
+    print("[Hardened Audit Test: ALL 10 ARCHITECTURAL INVARIANTS VERIFIED 100%]")
+}

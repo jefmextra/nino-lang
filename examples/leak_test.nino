@@ -1,0 +1,8 @@
+fn main() {
+    print("Testing Cryptographic Zero-Leak Memory Guard...")
+
+    sealed let api_token = "SK_SUPER_SECRET_PAYLOAD_9999"
+
+    let plain = unseal(api_token)
+    print("Audited unsealed payload: " + plain)
+}

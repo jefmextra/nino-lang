@@ -1,0 +1,8 @@
+import "std/wasm.nino"
+
+fn main() -> int {
+    mut w = wasm_spawn("div0.wasm", 1, 5000)
+    wasm_load_hex(w, "0061736d010000000105016000017f0302010007080104626f6f6d00000a09010700410a41006d0b")
+    print(wasm_invoke(w, "boom", []))
+    return 0
+}

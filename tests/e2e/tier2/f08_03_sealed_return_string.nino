@@ -1,0 +1,11 @@
+fn leak_str() -> string {
+    sealed sec = "TOP_SECRET"
+    let alias = sec
+    return alias
+}
+
+fn main() -> int {
+    let s = leak_str()
+    print(len(s))
+    return 0
+}

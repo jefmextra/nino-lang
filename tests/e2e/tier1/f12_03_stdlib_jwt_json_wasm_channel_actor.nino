@@ -1,0 +1,53 @@
+import "std/jwt.nino"
+import "std/json.nino"
+import "std/wasm.nino"
+import "std/channel.nino"
+import "std/privacy.nino"
+import "std/regex.nino"
+import "std/str.nino"
+
+actor Doubler {
+    receive(msg) {
+        return "DBL:" + msg
+    }
+}
+
+fn main() -> int {
+    let tok = jwt_sign_hs256("{\"sub\":\"42\"}", "supersecret")
+    let parts = str_split(tok, ".")
+    require(len(parts) == 3 && len(parts[2]) == 43, "HS256 JWT signature must encode raw 32-byte digest into 43 base64url chars")
+    require(jwt_verify_hs256(tok, "supersecret"), "valid HS256 JWT must verify true")
+    require(!jwt_verify_hs256(tok, "wrongsecret"), "wrong secret JWT must verify false")
+
+    let j = "{\"nested\":{\"k\":\"wrong\",\"n\":9},\"k\":\"right\",\"n\":7}"
+    require(json_get_string(j, "k") == "right" && json_get_number(j, "n") == 7, "JSON parser must read top-level keys without shadowing by nested keys")
+
+    mut w = wasm_spawn("shift.wasm", 4, 5000)
+    let mod_hex = "0061736d0100000001070160027f7f017f0303020000070f0204736872730000047368727500010a1102070020002001750b070020002001760b"
+    require(wasm_load_hex(w, mod_hex), "shift Wasm module must load")
+    let s_res = wasm_invoke(w, "shrs", [-8, 1])
+    let u_res = wasm_invoke(w, "shru", [-8, 1])
+    require(s_res == -4 && u_res == 2147483644, "Wasm must distinguish i32.shr_s vs i32.shr_u")
+
+    mut ch = channel_create(2)
+    require(channel_send(ch, "A") && channel_send(ch, "B"), "channel within capacity must accept")
+    require(!channel_send(ch, "C"), "bounded channel must reject send at capacity")
+    require(channel_recv(ch) == "A" && channel_recv(ch) == "B" && channel_recv(ch) == "", "channel FIFO drain must work cleanly")
+
+    mut tracker = dp_budget_init(1.0)
+    require(dp_consume_budget(tracker, 0.6) && !dp_consume_budget(tracker, 0.6), "DP budget tracker must enforce cumulative budget")
+    let ncnt = dp_count(50, 1.0)
+    require(ncnt >= 0, "dp_count must return non-negative int")
+
+    require(regex_match("^(foo|bar)_[a-z0-9]+$", "foo_x9"), "regex must support grouping, alternation, and character ranges")
+    require(!regex_match("^[0-9]+$", "12a"), "regex must reject non-matching chars")
+    require(regex_match("^[^0-9]+$", "abc"), "regex must support negated character classes")
+
+    let pid = spawn_actor("Doubler")
+    actor_send(pid, "PING42")
+    let reply = actor_receive(pid)
+    require(reply == "DBL:PING42", "compiled actor body must execute on received message")
+
+    print("T1-F12-03:PASS")
+    return 0
+}

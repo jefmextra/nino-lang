@@ -1,0 +1,9 @@
+fn leak(x: string) {
+    print(x)
+}
+
+fn main() -> int {
+    sealed s = "TOP_SECRET_VALUE"
+    leak(s)
+    return 0
+}

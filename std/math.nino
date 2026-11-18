@@ -1,0 +1,15 @@
+fn clamp(val: i32, low: i32, high: i32) -> i32 {
+    require(low <= high, "Lower bound must be <= upper bound")
+    if val < low { return low }
+    if val > high { return high }
+    return val
+}
+
+fn lerp(start: f64, target: f64, t: f64) -> f64 {
+    require(t >= 0.0 and t <= 1.0, "Interpolation factor t must be between 0.0 and 1.0")
+    return start + (target - start) * t
+}
+
+fn square(x: i32) -> i32 {
+    return x * x
+}

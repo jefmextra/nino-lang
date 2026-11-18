@@ -1,0 +1,31 @@
+// Line comment before any code: { unmatched [ braces ( inside comment
+/* Block comment with ignored import and unbalanced delimiters:
+import "nonexistent_block_comment_import.nino"
+{ [ ( "unterminated quote inside block comment
+*/
+// import "nonexistent_line_comment_import.nino"
+
+fn clamped_accumulate(limit: int, bias: int) -> int {
+    require(limit >= 0 && limit <= 16, "limit out of bounds")
+    require(bias >= 0 && bias <= 100, "bias out of bounds")
+    /* Inline block comment inside function body */
+    mut total = bias // trailing comment with { and }
+    for i in 0..limit {
+        invariant(i >= 0 && total >= bias && total <= bias + i * 16)
+        total = total + i
+    }
+    ensure(total >= bias, "total must stay >= bias")
+    return total
+}
+
+fn main() -> int {
+    /* Multi-line block comment
+    spanning several lines inside main()
+    verified cleanly across parser, SMT prover, fmt, lint, and llvm */
+    let res = clamped_accumulate(5, 10)
+    if res != 20 {
+        return 1
+    }
+    print("T1-F01-07:PASS")
+    return 0
+}

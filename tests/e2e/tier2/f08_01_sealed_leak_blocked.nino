@@ -1,0 +1,6 @@
+fn main() -> int {
+    sealed let secret_key = "TOP_SECRET_E2E_KEY"
+    let derived = seal_is_locked(secret_key)
+    print(derived)
+    return 0
+}

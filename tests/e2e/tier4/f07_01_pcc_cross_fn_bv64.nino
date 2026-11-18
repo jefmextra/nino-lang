@@ -1,0 +1,20 @@
+fn clamp_step(x: int) -> int {
+    require(x >= 0 && x <= 10000, "bounded step")
+    let y = (x ^ 0x55) & 0xFFFF
+    ensure(y >= 0 && y <= 65535, "clamped bitwise output")
+    return y
+}
+
+fn combine_mask(a: int, b: int) -> int {
+    require(a >= 0 && a <= 0xFFFF && b >= 0 && b <= 0xFF, "bounded args")
+    let c = (a | b) & 0xFFFF
+    ensure(c >= 0 && c <= 65535, "bounded mask union")
+    return c
+}
+
+fn main() -> int {
+    let v = clamp_step(42)
+    let w = combine_mask(v, 0x0F)
+    print("T4-F07-01:" + int_to_str(w))
+    return 0
+}

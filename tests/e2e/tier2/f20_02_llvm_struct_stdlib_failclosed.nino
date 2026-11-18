@@ -1,0 +1,12 @@
+import "std/crypto.nino"
+
+struct Packet {
+    seq: int,
+    tag: string
+}
+
+fn main() -> int {
+    let p = Packet { seq: 7, tag: sha256("nino") }
+    print(p.tag)
+    return 0
+}

@@ -1,0 +1,14 @@
+fn main() -> int {
+    mut arr = [10, 20, 30]
+    mut ok_aborted = false
+    transact {
+        arr[0] = 99
+        arr_free(arr)
+        abort "rollback after arr_free"
+    } compensate {
+        ok_aborted = true
+    }
+    require(ok_aborted, "transact abort after arr_free must safely reach compensate without UAF")
+    print("T1-F10-03:PASS")
+    return 0
+}

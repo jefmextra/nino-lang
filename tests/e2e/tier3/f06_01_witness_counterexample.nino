@@ -1,0 +1,10 @@
+fn check_limit(x: int) -> int {
+    require(x >= 0, "non-negative")
+    let y = x * 2
+    ensure(y <= 100, "x > 50 or overflow breaks postcondition")
+    return y
+}
+
+fn main() -> int {
+    return check_limit(10)
+}

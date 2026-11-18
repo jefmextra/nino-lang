@@ -1,0 +1,11 @@
+import "std/wasm.nino"
+
+fn main() -> int {
+    mut w = wasm_spawn("calc.wasm", 2, 50000)
+    let bad = wasm_load_hex(w, "deadbeef")
+    let ok = wasm_load_hex(w, "0061736d0100000001060160017f017f03030200000503010001070d010973756d5f747769636500010a2e020700200041026c0b2401017f03402001200010006a2101200041016b220041004a0d000b200141002802006a0b0b0a010041000b0464000000")
+    let val = wasm_invoke(w, "sum_twice", [5])
+    require(!bad && ok && val == 130, "wasm binary VM failed")
+    print("T1-F12-01:PASS")
+    return 0
+}

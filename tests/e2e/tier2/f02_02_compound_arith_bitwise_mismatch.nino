@@ -1,0 +1,6 @@
+fn main() -> int {
+    let a: int = (1 + 2) * "bad"
+    let b: int = "abc" << 2
+    print(a, b)
+    return 0
+}

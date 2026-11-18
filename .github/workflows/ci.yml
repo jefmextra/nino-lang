@@ -1,0 +1,740 @@
+name: NinoLang CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: Bootstrap & 3-Stage Convergence (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install and verify GCC (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          gcc --version
+
+      - name: Verify or install GCC (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) {
+              foreach ($dir in @("C:\msys64\mingw64\bin", "C:\msys64\ucrt64\bin")) {
+                  if (Test-Path (Join-Path $dir "gcc.exe")) {
+                      $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                      $env:PATH = "$dir;$env:PATH"
+                      $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+                      break
+                  }
+              }
+          }
+          if (-not $gcc) {
+              choco install mingw -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+              $mingwDir = Split-Path -Parent (Get-Command gcc -ErrorAction Stop).Source
+              $mingwDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          gcc --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compile stage1 from bootstrap seed (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Path stage1.exe -Force -ErrorAction SilentlyContinue
+          gcc -O3 -s -fomit-frame-pointer -frandom-seed=42 "-Wl,--no-insert-timestamp" -std=c11 bootstrap/ninoc_seed.c -o stage1.exe -lm -lgdi32 -luser32 -lbcrypt -lws2_32
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to compile stage1.exe from bootstrap/ninoc_seed.c"
+              exit $LASTEXITCODE
+          }
+          if (-not (Test-Path stage1.exe)) {
+              Write-Error "stage1.exe was not created"
+              exit 1
+          }
+
+      - name: Compile stage1 from bootstrap seed (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rm -f stage1
+          gcc -O3 -s -fomit-frame-pointer -frandom-seed=42 -std=c11 bootstrap/ninoc_seed.c -o stage1 -lm -lpthread -ldl
+          test -x stage1
+
+      - name: Compile stage2/stage3 and assert SHA-256 convergence (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Path stage2.exe, stage3.exe -Force -ErrorAction SilentlyContinue
+          .\stage1.exe build compiler/ninoc.nino -o stage2.exe
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "stage1 failed to compile stage2.exe"
+              exit $LASTEXITCODE
+          }
+          if (-not (Test-Path stage2.exe)) {
+              Write-Error "stage2.exe was not created"
+              exit 1
+          }
+          .\stage2.exe build compiler/ninoc.nino -o stage3.exe
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "stage2 failed to compile stage3.exe"
+              exit $LASTEXITCODE
+          }
+          if (-not (Test-Path stage3.exe)) {
+              Write-Error "stage3.exe was not created"
+              exit 1
+          }
+          $sha2 = (Get-FileHash -Path stage2.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sha3 = (Get-FileHash -Path stage3.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "SHA-256(stage2.exe) = $sha2"
+          Write-Host "SHA-256(stage3.exe) = $sha3"
+          if ($sha2 -ne $sha3) {
+              Write-Error "3-stage bootstrap divergence: SHA-256(stage2.exe) != SHA-256(stage3.exe)"
+              exit 1
+          }
+          Write-Host "OK: 3-stage bootstrap converged bit-for-bit."
+
+      - name: Compile stage2/stage3 and assert SHA-256 convergence (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rm -f stage2 stage3
+          ./stage1 build compiler/ninoc.nino -o stage2
+          test -x stage2
+          ./stage2 build compiler/ninoc.nino -o stage3
+          test -x stage3
+          sha2=$(sha256sum stage2 | awk '{print $1}')
+          sha3=$(sha256sum stage3 | awk '{print $1}')
+          echo "SHA-256(stage2) = $sha2"
+          echo "SHA-256(stage3) = $sha3"
+          if [ "$sha2" != "$sha3" ]; then
+              echo "ERROR: 3-stage bootstrap divergence: SHA-256(stage2) != SHA-256(stage3)" >&2
+              exit 1
+          fi
+          echo "OK: 3-stage bootstrap converged bit-for-bit."
+
+      - name: Upload converged ninoc artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ninoc-${{ matrix.os }}
+          path: ${{ runner.os == 'Windows' && 'stage3.exe' || 'stage3' }}
+          if-no-files-found: error
+          retention-days: 7
+
+  test-suite:
+    name: Pure Native Test Suite & Fuzzer (${{ matrix.os }})
+    needs: bootstrap
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download converged ninoc artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ninoc-${{ matrix.os }}
+          path: ${{ github.workspace }}
+
+      - name: Install and verify GCC, Z3, Clang, LLD (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential z3 clang lld
+          gcc --version
+          z3 --version
+          clang --version
+          lld -flavor gnu --version
+
+      - name: Verify or install GCC, Clang, LLD, Z3 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) {
+              foreach ($dir in @("C:\msys64\mingw64\bin", "C:\msys64\ucrt64\bin")) {
+                  if (Test-Path (Join-Path $dir "gcc.exe")) {
+                      $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                      $env:PATH = "$dir;$env:PATH"
+                      $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+                      break
+                  }
+              }
+          }
+          if (-not $gcc) {
+              choco install mingw -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+              $mingwDir = Split-Path -Parent (Get-Command gcc -ErrorAction Stop).Source
+              $mingwDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+
+          $clang = Get-Command clang -ErrorAction SilentlyContinue
+          $lld = Get-Command lld -ErrorAction SilentlyContinue
+          if (-not $clang -or -not $lld) {
+              if (Test-Path "C:\Program Files\LLVM\bin\clang.exe") {
+                  "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                  $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+                  $clang = Get-Command clang -ErrorAction SilentlyContinue
+                  $lld = Get-Command lld -ErrorAction SilentlyContinue
+              }
+          }
+          if (-not $clang -or -not $lld) {
+              choco install llvm -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+              if (Test-Path "C:\Program Files\LLVM\bin") {
+                  "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                  $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+              }
+          }
+
+          if (-not (Test-Path "tools\z3.exe") -or -not (Test-Path "tools\libz3.dll")) {
+              Write-Error "Missing tools/z3.exe or tools/libz3.dll"
+              exit 1
+          }
+          & .\tools\z3.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gcc --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          lld -flavor gnu --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install ninoc into workspace and prepend PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path stage3.exe)) {
+              Write-Error "Downloaded artifact stage3.exe not found"
+              exit 1
+          }
+          Copy-Item -Path stage3.exe -Destination ninoc.exe -Force
+          Copy-Item -Path stage3.exe -Destination nino.exe -Force
+          Join-Path $env:GITHUB_WORKSPACE "tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:GITHUB_WORKSPACE | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install ninoc into workspace and prepend PATH (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          test -f stage3
+          cp -f stage3 ninoc
+          cp -f stage3 nino
+          chmod +x ninoc nino
+          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+
+      - name: Verify ninoc resolves to workspace binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $resolved = (Get-Command ninoc -ErrorAction Stop).Source
+          $expected = Join-Path $env:GITHUB_WORKSPACE "ninoc.exe"
+          Write-Host "Resolved ninoc: $resolved"
+          Write-Host "Expected ninoc: $expected"
+          if ([System.IO.Path]::GetFullPath($resolved).ToLowerInvariant() -ne [System.IO.Path]::GetFullPath($expected).ToLowerInvariant()) {
+              Write-Error "ninoc resolves to unexpected location: $resolved (expected $expected)"
+              exit 1
+          }
+
+      - name: Verify ninoc resolves to workspace binary (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          resolved="$(command -v ninoc)"
+          expected="$GITHUB_WORKSPACE/ninoc"
+          echo "Resolved ninoc: $resolved"
+          echo "Expected ninoc: $expected"
+          if [ "$(readlink -f "$resolved")" != "$(readlink -f "$expected")" ]; then
+              echo "ERROR: ninoc resolves to unexpected location: $resolved (expected $expected)" >&2
+              exit 1
+          fi
+
+      - name: Run ninoc test and verify suite assertions (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath (Resolve-Path ".\ninoc.exe").Path -ArgumentList "test" -NoNewWindow -Wait -PassThru -RedirectStandardOutput "test_stdout.log" -RedirectStandardError "test_stderr.log"
+          $rc = $p.ExitCode
+          $outText = ""
+          if (Test-Path "test_stdout.log") { $outText += (Get-Content "test_stdout.log" -Raw) }
+          if (Test-Path "test_stderr.log") { $outText += "`n" + (Get-Content "test_stderr.log" -Raw) }
+          $outText | Set-Content -Path "test_suite.log" -Encoding utf8
+          Write-Host $outText
+          if ($rc -ne 0) {
+              Write-Error "ninoc test exited with code $rc"
+              exit 1
+          }
+          $log = Get-Content -Path test_suite.log -Raw
+          if ($log -notmatch "\[ALL TEST SUITES PASSED SUCCESSFULLY\]") {
+              Write-Error "Expected marker '[ALL TEST SUITES PASSED SUCCESSFULLY]' not found"
+              exit 1
+          }
+          if ($log -match "\[TEST FAILURES DETECTED\]") {
+              Write-Error "Failure marker '[TEST FAILURES DETECTED]' detected in output"
+              exit 1
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: Run 145-test Cross-Platform E2E Suite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File tests/e2e/run_e2e.ps1 -StrictCompliance
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $global:LASTEXITCODE = 0
+
+      - name: Run ninoc test and verify suite assertions (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          rc=0
+          ninoc test 2>&1 | tee test_suite.log || rc=$?
+          if [ "$rc" -ne 0 ]; then
+              echo "ERROR: ninoc test exited with code $rc" >&2
+              exit "$rc"
+          fi
+          if ! grep -Fq "[ALL TEST SUITES PASSED SUCCESSFULLY]" test_suite.log; then
+              echo "ERROR: Expected marker '[ALL TEST SUITES PASSED SUCCESSFULLY]' not found" >&2
+              exit 1
+          fi
+          if grep -Fq "[TEST FAILURES DETECTED]" test_suite.log; then
+              echo "ERROR: Failure marker '[TEST FAILURES DETECTED]' detected in output" >&2
+              exit 1
+          fi
+
+      - name: Run 145-test Cross-Platform E2E Suite (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bash tests/e2e/run_e2e.sh --strict-compliance
+
+  pcc-verify:
+    name: Proof-Carrying Code Verification (${{ matrix.os }})
+    needs: bootstrap
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download converged ninoc artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ninoc-${{ matrix.os }}
+          path: ${{ github.workspace }}
+
+      - name: Install and verify GCC and Z3 (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential z3
+          gcc --version
+          z3 --version
+
+      - name: Verify or install GCC and Z3 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) {
+              foreach ($dir in @("C:\msys64\mingw64\bin", "C:\msys64\ucrt64\bin")) {
+                  if (Test-Path (Join-Path $dir "gcc.exe")) {
+                      $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                      $env:PATH = "$dir;$env:PATH"
+                      $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+                      break
+                  }
+              }
+          }
+          if (-not $gcc) {
+              choco install mingw -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+              $mingwDir = Split-Path -Parent (Get-Command gcc -ErrorAction Stop).Source
+              $mingwDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          if (-not (Test-Path "tools\z3.exe") -or -not (Test-Path "tools\libz3.dll")) {
+              Write-Error "Missing tools/z3.exe or tools/libz3.dll"
+              exit 1
+          }
+          & .\tools\z3.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gcc --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install ninoc into workspace and prepend PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path stage3.exe)) {
+              Write-Error "Downloaded artifact stage3.exe not found"
+              exit 1
+          }
+          Copy-Item -Path stage3.exe -Destination ninoc.exe -Force
+          Copy-Item -Path stage3.exe -Destination nino.exe -Force
+          Join-Path $env:GITHUB_WORKSPACE "tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:GITHUB_WORKSPACE | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install ninoc into workspace and prepend PATH (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          test -f stage3
+          cp -f stage3 ninoc
+          cp -f stage3 nino
+          chmod +x ninoc nino
+          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+
+      - name: Verify ninoc resolves to workspace binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $resolved = (Get-Command ninoc -ErrorAction Stop).Source
+          $expected = Join-Path $env:GITHUB_WORKSPACE "ninoc.exe"
+          if ([System.IO.Path]::GetFullPath($resolved).ToLowerInvariant() -ne [System.IO.Path]::GetFullPath($expected).ToLowerInvariant()) {
+              Write-Error "ninoc resolves to unexpected location: $resolved (expected $expected)"
+              exit 1
+          }
+
+      - name: Verify ninoc resolves to workspace binary (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          resolved="$(command -v ninoc)"
+          expected="$GITHUB_WORKSPACE/ninoc"
+          if [ "$(readlink -f "$resolved")" != "$(readlink -f "$expected")" ]; then
+              echo "ERROR: ninoc resolves to unexpected location: $resolved (expected $expected)" >&2
+              exit 1
+          fi
+
+      - name: Negative PCC refutation test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Path pcc_fail_out.exe, examples\pcc_fail_demo.nino.c -Force -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath (Resolve-Path ".\ninoc.exe").Path -ArgumentList "build examples/pcc_fail_demo.nino -o pcc_fail_out.exe --proof" -NoNewWindow -Wait -PassThru -RedirectStandardOutput "pcc_neg_out.log" -RedirectStandardError "pcc_neg_err.log"
+          $rc = $p.ExitCode
+          $out = ""
+          if (Test-Path "pcc_neg_out.log") { $out += (Get-Content "pcc_neg_out.log" -Raw) }
+          if (Test-Path "pcc_neg_err.log") { $out += "`n" + (Get-Content "pcc_neg_err.log" -Raw) }
+          Write-Host $out
+          if ($rc -ne 1) {
+              Write-Error "Expected exit code 1 for unsound PCC refutation, got $rc"
+              exit 1
+          }
+          if (Test-Path pcc_fail_out.exe) {
+              Write-Error "Refuted PCC build unexpectedly generated pcc_fail_out.exe"
+              exit 1
+          }
+          if ($out -notmatch "(?m)\bsat\b") {
+              Write-Error "Expected Z3 'sat' counterexample output"
+              exit 1
+          }
+          if ($out -notmatch "PCC CERTIFICATION FAILED") {
+              Write-Error "Expected 'PCC CERTIFICATION FAILED' in output"
+              exit 1
+          }
+          $global:LASTEXITCODE = 0
+          Write-Host "OK: Negative PCC refutation test passed on Windows."
+
+      - name: Negative PCC refutation test (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rm -f pcc_fail_out examples/pcc_fail_demo.nino.c
+          set +e
+          out="$(ninoc build examples/pcc_fail_demo.nino -o pcc_fail_out --proof 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$rc" -ne 1 ]; then
+              echo "ERROR: Expected exit code 1 for unsound PCC refutation, got $rc" >&2
+              exit 1
+          fi
+          if [ -e pcc_fail_out ]; then
+              echo "ERROR: Refuted PCC build unexpectedly generated pcc_fail_out" >&2
+              exit 1
+          fi
+          if ! printf '%s\n' "$out" | grep -Eq '(^|[^[:alnum:]_])sat([^[:alnum:]_]|$)'; then
+              echo "ERROR: Expected Z3 'sat' counterexample output" >&2
+              exit 1
+          fi
+          if ! printf '%s\n' "$out" | grep -Fq "PCC CERTIFICATION FAILED"; then
+              echo "ERROR: Expected 'PCC CERTIFICATION FAILED' in output" >&2
+              exit 1
+          fi
+
+      - name: Positive PCC proof and --verify-proof tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          function Invoke-VerifyProof([string]$ExePath) {
+              $psi = [System.Diagnostics.ProcessStartInfo]::new((Resolve-Path $ExePath).Path, "--verify-proof")
+              $psi.RedirectStandardOutput = $true
+              $psi.RedirectStandardError = $true
+              $psi.UseShellExecute = $false
+              $p = [System.Diagnostics.Process]::Start($psi)
+              $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+              $stderrTask = $p.StandardError.ReadToEndAsync()
+              if (-not $p.WaitForExit(15000)) {
+                  $p.Kill()
+                  Write-Error "$ExePath --verify-proof timed out after 15s"
+                  exit 1
+              }
+              $p.WaitForExit()
+              $out = $stdoutTask.Result + $stderrTask.Result
+              Write-Host $out
+              if ($p.ExitCode -ne 0) {
+                  Write-Error "$ExePath --verify-proof exited with $($p.ExitCode)"
+                  exit 1
+              }
+              if ($out -notmatch "Nino Sovereign Proof-Carrying Binary") {
+                  Write-Error "$ExePath --verify-proof missing 'Nino Sovereign Proof-Carrying Binary'"
+                  exit 1
+              }
+              if ($out -notmatch "UNSAT Verified") {
+                  Write-Error "$ExePath --verify-proof missing 'UNSAT Verified'"
+                  exit 1
+              }
+          }
+
+          $cases = @(
+              @{ Src = "examples/pcc_sound_demo.nino"; Out = "pcc_sound_out.exe" },
+              @{ Src = "examples/http_microservice.nino"; Out = "http_ms_out.exe" }
+          )
+          foreach ($c in $cases) {
+              Remove-Item -Path $c.Out -Force -ErrorAction SilentlyContinue
+              $prevEap = $ErrorActionPreference
+              $ErrorActionPreference = 'Continue'
+              $buildOut = & ninoc build $c.Src -o $c.Out --proof 2>&1 | Out-String
+              $rc = $LASTEXITCODE
+              $ErrorActionPreference = $prevEap
+              Write-Host $buildOut
+              if ($rc -ne 0) {
+                  Write-Error "PCC build failed for $($c.Src) with exit code $rc"
+                  exit 1
+              }
+              if (-not (Test-Path $c.Out)) {
+                  Write-Error "Expected certified binary $($c.Out) was not created"
+                  exit 1
+              }
+              if ($buildOut -notmatch "UNSAT") {
+                  Write-Error "PCC build output missing 'UNSAT' for $($c.Src)"
+                  exit 1
+              }
+              if ($buildOut -notmatch "Embedded Cryptographic Certificate") {
+                  Write-Error "PCC build output missing 'Embedded Cryptographic Certificate' for $($c.Src)"
+                  exit 1
+              }
+              Invoke-VerifyProof -ExePath $c.Out
+          }
+
+      - name: Positive PCC proof and --verify-proof tests (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          verify_case() {
+              local src="$1"
+              local out_bin="$2"
+              rm -f "$out_bin"
+              local build_out
+              if ! build_out="$(ninoc build "$src" -o "$out_bin" --proof 2>&1)"; then
+                  printf '%s\n' "$build_out"
+                  exit 1
+              fi
+              printf '%s\n' "$build_out"
+              test -x "$out_bin"
+              if ! printf '%s\n' "$build_out" | grep -Fq "UNSAT"; then
+                  echo "ERROR: PCC build output missing 'UNSAT' for $src" >&2
+                  exit 1
+              fi
+              if ! printf '%s\n' "$build_out" | grep -Fq "Embedded Cryptographic Certificate"; then
+                  echo "ERROR: PCC build output missing 'Embedded Cryptographic Certificate' for $src" >&2
+                  exit 1
+              fi
+              local verify_out
+              if ! verify_out="$(timeout 15s "./$out_bin" --verify-proof 2>&1)"; then
+                  printf '%s\n' "$verify_out"
+                  exit 1
+              fi
+              printf '%s\n' "$verify_out"
+              if ! printf '%s\n' "$verify_out" | grep -Fq "Nino Sovereign Proof-Carrying Binary"; then
+                  echo "ERROR: $out_bin --verify-proof missing 'Nino Sovereign Proof-Carrying Binary'" >&2
+                  exit 1
+              fi
+              if ! printf '%s\n' "$verify_out" | grep -Fq "UNSAT Verified"; then
+                  echo "ERROR: $out_bin --verify-proof missing 'UNSAT Verified'" >&2
+                  exit 1
+              fi
+          }
+
+          verify_case "examples/pcc_sound_demo.nino" "pcc_sound_out"
+          verify_case "examples/http_microservice.nino" "http_ms_out"
+
+      - name: Verify Formal Memory & Vectorization Metatheory (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zout = & .\tools\z3.exe -T:15 -t:5000 -smt2 formal\arena_soundness.smt2 2>&1 | Out-String
+          Write-Host $zout
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $unsats = ($zout -split "\r?\n" | Where-Object { $_.Trim() -eq "unsat" }).Count
+          if ($unsats -ne 5) {
+              Write-Error "Expected 5 formal unsat theorems, got $unsats"
+              exit 1
+          }
+
+      - name: Verify Formal Memory & Vectorization Metatheory (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          zout="$(z3 -T:15 -t:5000 -smt2 formal/arena_soundness.smt2 2>&1)"
+          printf '%s\n' "$zout"
+          unsats="$(printf '%s\n' "$zout" | grep -cx 'unsat')"
+          test "$unsats" -eq 5
+
+  compliance:
+    name: Code Hygiene & Conformance Check
+    needs: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download converged ninoc artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ninoc-ubuntu-latest
+          path: ${{ github.workspace }}
+
+      - name: Run pure Nino compliance auditor (tools/compliance_check.nino)
+        shell: bash
+        run: |
+          test -f stage3
+          cp -f stage3 ninoc
+          chmod +x ninoc
+          ./ninoc run tools/compliance_check.nino
+
+  lsp:
+    name: Native LSP JSON-RPC 2.0 Verification (${{ matrix.os }})
+    needs: bootstrap
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download converged ninoc artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ninoc-${{ matrix.os }}
+          path: ${{ github.workspace }}
+
+      - name: Install and verify GCC and Z3 (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential z3
+          test -f stage3
+          cp -f stage3 ninoc
+          chmod +x ninoc
+
+      - name: Verify or install MinGW runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path stage3.exe)) {
+              Write-Error "Downloaded artifact stage3.exe not found"
+              exit 1
+          }
+          Copy-Item -Path stage3.exe -Destination ninoc.exe -Force
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) {
+              foreach ($dir in @("C:\msys64\mingw64\bin", "C:\msys64\ucrt64\bin")) {
+                  if (Test-Path (Join-Path $dir "gcc.exe")) {
+                      $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                      $env:PATH = "$dir;$env:PATH"
+                      $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+                      break
+                  }
+              }
+          }
+          if (-not $gcc) {
+              choco install mingw -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+              $mingwDir = Split-Path -Parent (Get-Command gcc -ErrorAction Stop).Source
+              $mingwDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          Join-Path $env:GITHUB_WORKSPACE "tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:GITHUB_WORKSPACE | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify Native LSP JSON-RPC 2.0 & Toolchain Verification Suite (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ./ninoc run examples/lsp_protocol_test.nino
+          ./ninoc run examples/toolchain_verification.nino
+          ./ninoc run pilots/ledger_microservice.nino
+          ./ninoc run pilots/iot_edge_telemetry.nino
+          ./ninoc run pilots/xdp_packet_firewall.nino
+
+      - name: Verify Native LSP JSON-RPC 2.0 & Toolchain Verification Suite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .\ninoc.exe run examples/lsp_protocol_test.nino
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\ninoc.exe run examples/toolchain_verification.nino
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\ninoc.exe run pilots/ledger_microservice.nino
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\ninoc.exe run pilots/iot_edge_telemetry.nino
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\ninoc.exe run pilots/xdp_packet_firewall.nino
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $global:LASTEXITCODE = 0

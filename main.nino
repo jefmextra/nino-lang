@@ -1,0 +1,29 @@
+fn calculate_buffer(size: int, mult: int) -> int {
+    let base_overhead = 16
+    return (size * mult) + base_overhead
+}
+
+fn main() {
+    print("========================================")
+    print("  Welcome to The Nino Language Engine   ")
+    print("                N I N O                 ")
+    print("========================================")
+
+    let architecture = "Native Self-Hosted"
+    let version = 1.0
+    print("Architecture: " + architecture)
+
+    mut buffer_size = 64
+    let multiplier = 4
+    let total_buffer = calculate_buffer(buffer_size, multiplier)
+    print("Total Allocated Buffer: " + total_buffer + " bytes")
+
+    if total_buffer >= 256 {
+        print("Status: Verified (Buffer Bounds Check Passed)")
+    } else {
+        print("Status: Warning (Buffer Below Threshold)")
+    }
+
+    print("========================================")
+    print("Execution Completed Successfully")
+}

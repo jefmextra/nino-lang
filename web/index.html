@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Nino Programming Language - Deterministic Systems &amp; Formal Verification</title>
+    <meta name="description" content="A self-hosted systems programming language uniting compile-time SMT theorem proving, scoped arena memory safety, NIR loop vectorization, and deterministic native compilation.">
+    <meta name="author" content="vvictor">
+    <link rel="canonical" href="https://ninosec.me/">
+    <meta property="og:title" content="The Nino Programming Language">
+    <meta property="og:description" content="Self-hosted systems language with integrated Z3 theorem proving, scoped arena memory, and reproducible native builds.">
+    <meta property="og:url" content="https://ninosec.me/">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="https://ninosec.me/assets/nino_hero_editorial.jpg">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests;">
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="Permissions-Policy" content="camera=(), microphone=(), geolocation=(), payment=(), usb=()">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/nino_icon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;1,6..72,500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        try {
+            if (localStorage.getItem('nino_editorial_theme') === 'inkwell') {
+                document.documentElement.setAttribute('data-theme', 'inkwell');
+            }
+        } catch (e) {}
+    </script>
+    <style>
+        :root {
+            --bg-page: #EAE5DB;
+            --bg-surface: #F2EFE6;
+            --bg-inset: #E2DDD0;
+            --bg-header: rgba(234, 229, 219, 0.90);
+            --bg-plate: #EAE5DB;
+            --bg-code: #1D1C19;
+            --bg-code-bar: #151412;
+            --rule: #CFC8B8;
+            --rule-strong: #1B1A17;
+            --accent-cobalt: #1E40AF;
+            --accent-cobalt-hover: #1D4ED8;
+            --accent-soft: rgba(30, 64, 175, 0.08);
+            --accent-border: rgba(30, 64, 175, 0.25);
+            --accent-teal: #0F766E;
+            --text-primary: #1B1A17;
+            --text-secondary: #48443C;
+            --text-muted: #6C675D;
+            --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+            --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            --font-mono: 'Geist Mono', 'Fira Code', 'Cascadia Code', monospace;
+        }
+        html[data-theme="inkwell"] {
+            --bg-page: #1A1916;
+            --bg-surface: #22201C;
+            --bg-inset: #2A2722;
+            --bg-header: rgba(26, 25, 22, 0.92);
+            --bg-plate: #E9E4DA;
+            --bg-code: #12110F;
+            --bg-code-bar: #0D0C0B;
+            --rule: #38342D;
+            --rule-strong: #EAE5DB;
+            --accent-cobalt: #60A5FA;
+            --accent-cobalt-hover: #93C5FD;
+            --accent-soft: rgba(96, 165, 250, 0.14);
+            --accent-border: rgba(147, 197, 253, 0.30);
+            --accent-teal: #2DD4BF;
+            --text-primary: #EAE5DB;
+            --text-secondary: #C5BFB2;
+            --text-muted: #928B7E;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-page);
+            color: var(--text-primary);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+        a { color: inherit; text-decoration: none; }
+        .container {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 0 28px;
+        }
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: var(--bg-header);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--rule);
+        }
+        .header-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: var(--font-serif);
+            font-weight: 600;
+            font-size: 21px;
+            letter-spacing: -0.3px;
+        }
+        .brand img {
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            border: 1px solid var(--rule);
+        }
+        .brand-ver {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            color: var(--accent-cobalt);
+            border: 1px solid var(--accent-border);
+            background: var(--accent-soft);
+            padding: 2px 8px;
+            border-radius: 3px;
+        }
+        nav {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+        nav a.nav-link {
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            transition: color 0.15s ease;
+        }
+        nav a.nav-link:hover { color: var(--text-primary); }
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            font-family: var(--font-sans);
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 15px;
+            border-radius: 4px;
+            border: 1px solid var(--rule);
+            background: var(--bg-surface);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .btn:hover {
+            border-color: var(--text-primary);
+        }
+        .btn.ink {
+            background: var(--text-primary);
+            border-color: var(--text-primary);
+            color: var(--bg-page);
+        }
+        .btn.ink:hover {
+            background: var(--accent-cobalt-hover);
+            border-color: var(--accent-cobalt-hover);
+            color: #F2EFE6;
+        }
+        html[data-theme="inkwell"] .btn.ink:hover {
+            color: #1A1916;
+        }
+        .btn.theme-toggle {
+            font-family: var(--font-mono);
+            font-size: 11.5px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            color: var(--text-secondary);
+            background: transparent;
+            padding: 7px 11px;
+        }
+
+        /* Editorial Hero Split */
+        .hero {
+            padding: 52px 0 56px;
+            border-bottom: 1px solid var(--rule);
+        }
+        .hero-grid {
+            display: grid;
+            grid-template-columns: 1.15fr 0.85fr;
+            gap: 44px;
+            align-items: center;
+        }
+        .hero-kicker {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--font-mono);
+            font-size: 11.5px;
+            font-weight: 600;
+            letter-spacing: 0.9px;
+            text-transform: uppercase;
+            color: var(--accent-teal);
+            margin-bottom: 16px;
+        }
+        .hero-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--accent-teal);
+        }
+        .hero h1 {
+            font-family: var(--font-serif);
+            font-size: 46px;
+            font-weight: 600;
+            line-height: 1.09;
+            letter-spacing: -1.1px;
+            margin-bottom: 18px;
+            color: var(--text-primary);
+        }
+        .hero-lead {
+            font-size: 16px;
+            color: var(--text-secondary);
+            line-height: 1.65;
+            max-width: 560px;
+            margin-bottom: 26px;
+        }
+        .hero-cta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 26px;
+        }
+        .btn.lg {
+            font-size: 14px;
+            padding: 10px 20px;
+        }
+        .install-strip {
+            max-width: 560px;
+            border: 1px solid var(--rule);
+            border-radius: 5px;
+            overflow: hidden;
+            background: var(--bg-surface);
+        }
+        .install-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 7px 14px;
+            background: var(--bg-inset);
+            border-bottom: 1px solid var(--rule);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .install-tabs {
+            display: flex;
+            gap: 14px;
+        }
+        .install-tab {
+            background: none;
+            border: none;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding-bottom: 2px;
+            border-bottom: 2px solid transparent;
+        }
+        .install-tab.active {
+            color: var(--accent-cobalt);
+            border-bottom-color: var(--accent-cobalt);
+        }
+        .install-body {
+            background: var(--bg-code);
+            padding: 11px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .install-cmd {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            color: #EAE5DB;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .copy-btn {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: #2D2B26;
+            color: #EAE5DB;
+            border: 1px solid #444038;
+            border-radius: 3px;
+            padding: 4px 10px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .copy-btn:hover { background: #3D3A33; }
+
+        /* Hero Architectural Figure */
+        .hero-figure {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .plate-hero {
+            width: 100%;
+            max-width: 470px;
+        }
+        .plate-hero img {
+            width: 100%;
+            height: auto;
+            display: block;
+            -webkit-mask-image: radial-gradient(ellipse 84% 84% at 50% 50%, #000 56%, transparent 98%);
+            mask-image: radial-gradient(ellipse 84% 84% at 50% 50%, #000 56%, transparent 98%);
+        }
+        html[data-theme="inkwell"] .plate-hero {
+            background: var(--bg-plate);
+            padding: 14px;
+            border: 1px solid var(--rule);
+            border-radius: 5px;
+        }
+        html[data-theme="inkwell"] .plate-hero img {
+            mix-blend-mode: normal;
+            -webkit-mask-image: none;
+            mask-image: none;
+        }
+        .figure-caption {
+            margin-top: 10px;
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        /* Editorial Sections & Hairline Matrix */
+        .section { padding: 52px 0; }
+        .section.alt {
+            background: var(--bg-surface);
+            border-top: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
+        }
+        .section-head {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 24px;
+            margin-bottom: 28px;
+        }
+        .section-index {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.9px;
+            text-transform: uppercase;
+            color: var(--accent-cobalt);
+            margin-bottom: 6px;
+        }
+        .section-head h2 {
+            font-family: var(--font-serif);
+            font-size: 30px;
+            font-weight: 600;
+            letter-spacing: -0.6px;
+            line-height: 1.15;
+        }
+        .section-lead {
+            color: var(--text-secondary);
+            font-size: 14px;
+            max-width: 390px;
+            text-align: right;
+            line-height: 1.55;
+        }
+
+        /* 3x2 Swiss Hairline Matrix (Zero rounded generic boxes) */
+        .hairline-matrix {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1px;
+            background: var(--rule);
+            border: 1px solid var(--rule);
+        }
+        .matrix-cell {
+            background: var(--bg-surface);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            transition: background-color 0.15s ease;
+        }
+        .matrix-cell:hover {
+            background: var(--bg-page);
+        }
+        .cell-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        .cell-num {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+        }
+        .cell-mark {
+            width: 24px;
+            height: 24px;
+            color: var(--accent-cobalt);
+        }
+        .cell-mark.teal { color: var(--accent-teal); }
+        .matrix-cell h3 {
+            font-family: var(--font-serif);
+            font-size: 19px;
+            font-weight: 600;
+            letter-spacing: -0.25px;
+            color: var(--text-primary);
+        }
+        .matrix-cell p {
+            font-size: 13.5px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        /* Monograph Feature Showcase + Engineering Scope Ledger */
+        .monograph-band {
+            margin-top: 38px;
+            border-top: 2px solid var(--rule-strong);
+            border-bottom: 1px solid var(--rule);
+            padding: 36px 0 32px;
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 40px;
+            align-items: center;
+        }
+        .proof-plate-wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .proof-plate {
+            width: 100%;
+            max-width: 260px;
+            background: #EDE7D7;
+            padding: 10px;
+            border: 1px solid var(--rule);
+            border-radius: 3px;
+        }
+        .proof-plate img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        html[data-theme="inkwell"] .proof-plate {
+            background: var(--bg-plate);
+            padding: 12px;
+            border: 1px solid var(--rule);
+            border-radius: 5px;
+        }
+        html[data-theme="inkwell"] .proof-plate img {
+            mix-blend-mode: normal;
+            -webkit-mask-image: none;
+            mask-image: none;
+        }
+        .monograph-copy {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .monograph-kicker {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.9px;
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+        .monograph-copy h3 {
+            font-family: var(--font-serif);
+            font-size: 26px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            line-height: 1.2;
+        }
+        .monograph-copy p {
+            font-size: 14.5px;
+            line-height: 1.65;
+            color: var(--text-secondary);
+        }
+        .telemetry-ledger {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            border-top: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
+            margin: 6px 0 8px;
+        }
+        .telemetry-item {
+            padding: 12px 14px;
+            border-right: 1px solid var(--rule);
+        }
+        .telemetry-item:last-child { border-right: none; }
+        .telemetry-val {
+            font-family: var(--font-mono);
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .telemetry-lbl {
+            font-size: 11.5px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .monograph-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 4px;
+        }
+
+        /* Code Tour Specimen */
+        .code-specimen {
+            background: var(--bg-code);
+            border: 1px solid var(--rule);
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .code-tabs {
+            display: flex;
+            background: var(--bg-code-bar);
+            border-bottom: 1px solid #2E2B26;
+            overflow-x: auto;
+        }
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: #9C9588;
+            padding: 11px 17px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            white-space: nowrap;
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s ease, background-color 0.15s ease;
+        }
+        .tab-btn:hover { color: #EAE5DB; }
+        .tab-btn.active {
+            color: #93C5FD;
+            border-bottom-color: #60A5FA;
+            background: rgba(96, 165, 250, 0.10);
+        }
+        .code-body {
+            padding: 20px 24px;
+            font-family: var(--font-mono);
+            font-size: 13.5px;
+            color: #EAE5DB;
+            overflow-x: auto;
+            line-height: 1.65;
+        }
+        .kw { color: #93C5FD; font-weight: 600; }
+        .fn { color: #5EEAD4; }
+        .str { color: #86EFAC; }
+        .num { color: #C4B5FD; }
+        .type { color: #FDA4AF; }
+
+        /* Toolchain Hairline Index */
+        .tool-matrix {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1px;
+            background: var(--rule);
+            border: 1px solid var(--rule);
+            margin-bottom: 20px;
+        }
+        .tool-cell {
+            background: var(--bg-page);
+            padding: 18px 22px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .tool-top {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .tool-cmd {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent-cobalt-hover);
+        }
+        .tool-area {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-muted);
+        }
+        .tool-desc {
+            font-size: 13.5px;
+            color: var(--text-secondary);
+            line-height: 1.55;
+        }
+        .tooling-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            font-size: 13.5px;
+            color: var(--text-secondary);
+        }
+        .editorial-link {
+            font-weight: 600;
+            color: var(--accent-cobalt);
+            border-bottom: 1px solid var(--accent-border);
+            padding-bottom: 1px;
+        }
+        .editorial-link:hover {
+            color: var(--accent-cobalt-hover);
+            border-bottom-color: var(--accent-cobalt-hover);
+        }
+
+        footer {
+            border-top: 1px solid var(--rule);
+            background: var(--bg-surface);
+            padding: 26px 0;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+        .footer-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+        .footer-links {
+            display: flex;
+            gap: 20px;
+        }
+        .footer-links a:hover { color: var(--text-primary); }
+
+        @media (max-width: 960px) {
+            .hero-grid { grid-template-columns: 1fr; gap: 32px; }
+            .hairline-matrix { grid-template-columns: repeat(2, 1fr); }
+            .monograph-band { grid-template-columns: 1fr; gap: 24px; }
+            .telemetry-ledger { grid-template-columns: repeat(2, 1fr); }
+            .section-head { flex-direction: column; align-items: flex-start; }
+            .section-lead { text-align: left; }
+        }
+        @media (max-width: 720px) {
+            .hero h1 { font-size: 34px; }
+            .hairline-matrix { grid-template-columns: 1fr; }
+            .tool-matrix { grid-template-columns: 1fr; }
+            .tooling-footer { flex-direction: column; align-items: flex-start; }
+            .footer-inner { flex-direction: column; align-items: flex-start; }
+            nav a.nav-link { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container header-inner">
+            <a href="/" class="brand">
+                <img src="assets/nino_icon.png" alt="Nino">
+                <span>Nino</span>
+                <span class="brand-ver">v1.2.1</span>
+            </a>
+            <nav>
+                <a href="#pillars" class="nav-link">Architecture</a>
+                <a href="#code-tour" class="nav-link">Syntax</a>
+                <a href="#tooling" class="nav-link">Toolchain</a>
+                <a href="docs.html" class="nav-link">Manual</a>
+                <div class="nav-actions">
+                    <button class="btn theme-toggle" id="themeBtn" onclick="toggleTheme()">Inkwell</button>
+                    <a href="https://github.com/jefmextra/nino-lang" target="_blank" rel="noopener" class="btn">GitHub</a>
+                    <a href="docs.html" class="btn ink">Documentation</a>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="container hero-grid">
+                <div>
+                    <div class="hero-kicker">
+                        <span class="hero-dot"></span>
+                        <span>Release v1.2.1 &middot; Linux x86_64 &amp; Windows x64</span>
+                    </div>
+                    <h1>A Self-Hosted Systems Language with Formal Verification.</h1>
+                    <p class="hero-lead">Nino unites compile-time SMT theorem proving, scoped arena memory safety, NIR loop vectorization, and deterministic native compilation in a standalone binary.</p>
+                    <div class="hero-cta-row">
+                        <a href="docs.html" class="btn lg ink">Read Reference Manual &rarr;</a>
+                        <a href="https://github.com/jefmextra/nino-lang/releases/tag/v1.2.1" target="_blank" rel="noopener" class="btn lg">Download v1.2.1</a>
+                    </div>
+                    <div class="install-strip">
+                        <div class="install-bar">
+                            <span>Toolchain Install</span>
+                            <div class="install-tabs">
+                                <button class="install-tab active" onclick="setPlatform('win')">Windows</button>
+                                <button class="install-tab" onclick="setPlatform('nix')">Linux / macOS</button>
+                            </div>
+                        </div>
+                        <div class="install-body">
+                            <span class="install-cmd" id="installCmd">irm https://ninosec.me/install.ps1 | iex</span>
+                            <button class="copy-btn" id="copyBtn" onclick="copyInstall()">Copy</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="hero-figure">
+                    <div class="plate-hero">
+                        <img src="assets/nino_hero_editorial.jpg" alt="Isometric architectural diagram of Nino compiler monoliths, logic gates, and scoped memory rings">
+                    </div>
+                    <div class="figure-caption">Fig. 01 / Compiler Monoliths, Z3 Logic Gates &amp; Arena Rings</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section alt" id="pillars">
+            <div class="container">
+                <div class="section-head">
+                    <div>
+                        <div class="section-index">01 / Core Architecture</div>
+                        <h2>Design &amp; Engineering Foundations</h2>
+                    </div>
+                    <p class="section-lead">Explicit memory boundaries, machine-checked mathematical contracts, and bit-reproducible compiler builds.</p>
+                </div>
+
+                <div class="hairline-matrix">
+                    <div class="matrix-cell">
+                        <div class="cell-meta">
+                            <span class="cell-num">01 / PROOF</span>
+                            <svg class="cell-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><polygon points="12 2 20 7 20 17 12 22 4 17 4 7"/><polyline points="8.5 12.5 11 15 16 9.5"/></svg>
+                        </div>
+                        <h3>SMT Proof-Carrying Code</h3>
+                        <p>Compile-time contract and loop invariant verification via Z3 across 64-bit BitVectors, IEEE 754 floating-point, and integer theories, embedding verifiable HMAC-SHA256 and Ed25519 certificates into executables.</p>
+                    </div>
+
+                    <div class="matrix-cell">
+                        <div class="cell-meta">
+                            <span class="cell-num">02 / GENERICS</span>
+                            <svg class="cell-mark teal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="8" height="8"/><rect x="13" y="3" width="8" height="8"/><rect x="3" y="13" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/></svg>
+                        </div>
+                        <h3>Monomorphized Generics</h3>
+                        <p>Parametric structures and algebraic data containers specialize at compile time into deduplicated, type-safe native memory layouts with zero runtime boxing or dynamic dispatch overhead.</p>
+                    </div>
+
+                    <div class="matrix-cell">
+                        <div class="cell-meta">
+                            <span class="cell-num">03 / VECTORIZER</span>
+                            <svg class="cell-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><polyline points="15 8 20 12 15 16"/></svg>
+                        </div>
+                        <h3>NIR SSA &amp; Loop Vectorizer</h3>
+                        <p>Linear-time expression lowering paired with SSA dead-code elimination, 64-bit constant folding, proven bounds-check elision, and affine four-lane SIMD auto-vectorization.</p>
+                    </div>
+
+                    <div class="matrix-cell">
+                        <div class="cell-meta">
+                            <span class="cell-num">04 / ARENA</span>
+                            <svg class="cell-mark teal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>
+                        </div>
+                        <h3>Scoped Arena Memory</h3>
+                        <p>Multi-slab bump allocation with epoch-stamped array headers, deterministic Use-After-Rollback traps, static region escape checking, and machine-verified Z3 soundness theorems.</p>
+                    </div>
+
+                    <div class="matrix-cell">
+                        <div class="cell-meta">
+                            <span class="cell-num">05 / BOOTSTRAP</span>
+                            <svg class="cell-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><polygon points="12 3 21 8 12 13 3 8"/><polyline points="3 13 12 18 21 13"/><polyline points="3 17 12 22 21 17"/></svg>
+                        </div>
+                        <h3>Deterministic Self-Hosting</h3>
+                        <p>Self-hosted Pratt AST compiler converging bit-for-bit across bootstrap stages on both Linux and Windows from a single portable ISO C11 seed.</p>
+                    </div>
+
+                    <div class="matrix-cell">
+                        <div class="cell-meta">
+                            <span class="cell-num">06 / TARGETS</span>
+                            <svg class="cell-mark teal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="14" height="14"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="2" x2="9" y2="5"/><line x1="15" y1="2" x2="15" y2="5"/><line x1="9" y1="19" x2="9" y2="22"/><line x1="15" y1="19" x2="15" y2="22"/></svg>
+                        </div>
+                        <h3>ISO C11 &amp; Native Backends</h3>
+                        <p>Emits strict freestanding ISO C11, LLVM SSA IR, and direct x86_64 and AArch64 machine code for Windows and Linux without external runtime dependencies.</p>
+                    </div>
+                </div>
+
+                <div class="monograph-band">
+                    <div class="proof-plate-wrap">
+                        <div class="proof-plate">
+                            <img src="assets/nino_emblem_proof.jpg" alt="Isometric translucent cobalt crystal emblem balanced above an obsidian stone fulcrum">
+                        </div>
+                        <div class="figure-caption">Fig. 02 / SMT Soundness Emblem</div>
+                    </div>
+                    <div class="monograph-copy">
+                        <div class="monograph-kicker">Metatheory &amp; Engineering Scope / TRL 7 Prototype</div>
+                        <h3>Formal Arena Soundness &amp; Clear Engineering Boundaries</h3>
+                        <p>Nino is an evolving systems prototype backed by cross-platform end-to-end compliance tests, five machine-checked Z3 arena theorems, and open specification RFCs. Exploratory cryptography modules remain under active review and require independent auditing prior to safety-critical deployment.</p>
+                        <div class="telemetry-ledger">
+                            <div class="telemetry-item">
+                                <div class="telemetry-val">145 / 145</div>
+                                <div class="telemetry-lbl">Cross-Platform E2E</div>
+                            </div>
+                            <div class="telemetry-item">
+                                <div class="telemetry-val">5 UNSAT</div>
+                                <div class="telemetry-lbl">Z3 Arena Theorems</div>
+                            </div>
+                            <div class="telemetry-item">
+                                <div class="telemetry-val">3 RFCs</div>
+                                <div class="telemetry-lbl">Open Standards</div>
+                            </div>
+                            <div class="telemetry-item">
+                                <div class="telemetry-val">Stage-4</div>
+                                <div class="telemetry-lbl">Bit-Identical DDC</div>
+                            </div>
+                        </div>
+                        <div class="monograph-actions">
+                            <a href="https://github.com/jefmextra/nino-lang/tree/main/rfcs" target="_blank" rel="noopener" class="btn">Read Open RFCs</a>
+                            <a href="https://github.com/jefmextra/nino-lang/blob/main/CHALLENGE.md" target="_blank" rel="noopener" class="btn">Break the Prover</a>
+                            <a href="docs.html" class="btn ink">Open Reference Manual &rarr;</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="code-tour">
+            <div class="container">
+                <div class="section-head">
+                    <div>
+                        <div class="section-index">02 / Language Specimen</div>
+                        <h2>Direct Systems Syntax</h2>
+                    </div>
+                    <p class="section-lead">Explicit contracts, deterministic region lifecycles, and clean standard library pipelines.</p>
+                </div>
+
+                <div class="code-specimen">
+                    <div class="code-tabs">
+                        <button class="tab-btn active" onclick="switchTour(0)">1. Formal Contracts</button>
+                        <button class="tab-btn" onclick="switchTour(1)">2. Sealed Buffers</button>
+                        <button class="tab-btn" onclick="switchTour(2)">3. Scoped Arenas</button>
+                        <button class="tab-btn" onclick="switchTour(3)">4. Capability Sandboxing</button>
+                        <button class="tab-btn" onclick="switchTour(4)">5. Stdlib Pipeline</button>
+                    </div>
+                    <div class="code-body" id="tourContent">
+                        <pre><code><span class="kw">fn</span> <span class="fn">transfer_funds</span>(sender_id: <span class="type">i64</span>, amount: <span class="type">f64</span>) -&gt; <span class="type">bool</span> {
+    <span class="kw">require</span>(amount &gt; <span class="num">0.0</span>, <span class="str">"Transfer amount must be strictly positive"</span>)
+    <span class="kw">require</span>(sender_id &gt; <span class="num">0</span>, <span class="str">"Invalid sender identifier"</span>)
+
+    <span class="kw">let</span> updated_balance = <span class="num">5000.0</span> - amount
+    <span class="kw">ensure</span>(updated_balance &gt;= <span class="num">0.0</span>, <span class="str">"Solvency invariant breached"</span>)
+
+    <span class="kw">return</span> <span class="kw">true</span>
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section alt" id="tooling">
+            <div class="container">
+                <div class="section-head">
+                    <div>
+                        <div class="section-index">03 / Developer CLI</div>
+                        <h2>Integrated Toolchain</h2>
+                    </div>
+                    <p class="section-lead">Compiler, formal prover, native assembler, LSP, and test runner unified in a single binary.</p>
+                </div>
+
+                <div class="tool-matrix">
+                    <div class="tool-cell">
+                        <div class="tool-top">
+                            <span class="tool-cmd">ninoc build / run</span>
+                            <span class="tool-area">Compilation</span>
+                        </div>
+                        <p class="tool-desc">Compiles and executes sources via GCC strict C11, LLVM, or direct PE/ELF native code generation with optional Z3 PCC certificates.</p>
+                    </div>
+                    <div class="tool-cell">
+                        <div class="tool-top">
+                            <span class="tool-cmd">ninoc check / lint</span>
+                            <span class="tool-area">Static Analysis</span>
+                        </div>
+                        <p class="tool-desc">Enforces static types, arity rules, sealed taint isolation, region escape analysis, and bounded control-flow checks.</p>
+                    </div>
+                    <div class="tool-cell">
+                        <div class="tool-top">
+                            <span class="tool-cmd">ninoc prove / witness / equiv</span>
+                            <span class="tool-area">Formal SMT</span>
+                        </div>
+                        <p class="tool-desc">Verifies contract invariants, synthesizes counterexample tests, and checks equivalence across BitVector and Float64 models.</p>
+                    </div>
+                    <div class="tool-cell">
+                        <div class="tool-top">
+                            <span class="tool-cmd">ninoc ast / ir / llvm / asm</span>
+                            <span class="tool-area">IR &amp; Machine Code</span>
+                        </div>
+                        <p class="tool-desc">Inspects linked syntax trees, NIR SSA passes with loop vectorization, fail-closed direct LLVM SSA IR subset, and x86_64 or AArch64 assembly listings.</p>
+                    </div>
+                    <div class="tool-cell">
+                        <div class="tool-top">
+                            <span class="tool-cmd">ninoc keygen / sbom / trace</span>
+                            <span class="tool-area">Assurance</span>
+                        </div>
+                        <p class="tool-desc">Generates Ed25519 signing keys, CycloneDX software bills of materials, and SHA-256 execution state chains.</p>
+                    </div>
+                    <div class="tool-cell">
+                        <div class="tool-top">
+                            <span class="tool-cmd">ninoc lsp / fmt / doc</span>
+                            <span class="tool-area">IDE &amp; Tooling</span>
+                        </div>
+                        <p class="tool-desc">Runs the JSON-RPC language server with live Z3 diagnostics, canonical code formatting, and Markdown API generation.</p>
+                    </div>
+                    <div class="tool-cell">
+                        <div class="tool-top">
+                            <span class="tool-cmd">ninoc bindgen / mobile</span>
+                            <span class="tool-area">FFI &amp; Mobile</span>
+                        </div>
+                        <p class="tool-desc">Generates zero-overhead C FFI bindings and bridges targeting Android NDK Kotlin and Apple iOS Swift.</p>
+                    </div>
+                    <div class="tool-cell">
+                        <div class="tool-top">
+                            <span class="tool-cmd">ninoc pkg / test</span>
+                            <span class="tool-area">Packages &amp; QA</span>
+                        </div>
+                        <p class="tool-desc">Resolves lockfile-verified packages and runs native unit suites alongside the cross-platform E2E conformance matrix.</p>
+                    </div>
+                </div>
+
+                <div class="tooling-footer">
+                    <span>Need exact compiler CLI flags, proof modes, or certificate layouts?</span>
+                    <a href="docs.html#cli" class="editorial-link">View Full CLI Reference in Documentation &rarr;</a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container footer-inner">
+            <div>
+                <strong>The Nino Programming Language</strong> &middot; Built by <strong>vvictor</strong> &middot; <code>ninosec.me</code>
+            </div>
+            <div class="footer-links">
+                <a href="docs.html">Documentation</a>
+                <a href="https://github.com/jefmextra/nino-lang/releases/tag/v1.2.1" target="_blank" rel="noopener">Releases</a>
+                <a href="https://github.com/jefmextra/nino-lang/blob/main/CHALLENGE.md" target="_blank" rel="noopener">Challenge</a>
+                <a href="https://github.com/jefmextra/nino-lang/tree/main/rfcs" target="_blank" rel="noopener">RFCs</a>
+                <a href="https://github.com/jefmextra/nino-lang" target="_blank" rel="noopener">GitHub</a>
+                <a href="https://github.com/jefmextra/nino-lang/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        if (window.top !== window.self) {
+            window.top.location = window.self.location;
+        }
+
+        function applyTheme(t) {
+            if (t === 'inkwell') document.documentElement.setAttribute('data-theme', 'inkwell');
+            else document.documentElement.removeAttribute('data-theme');
+            const btn = document.getElementById('themeBtn');
+            if (btn) btn.textContent = (t === 'inkwell') ? 'Warm Stone' : 'Inkwell';
+        }
+        function toggleTheme() {
+            const cur = document.documentElement.getAttribute('data-theme') === 'inkwell' ? 'inkwell' : 'stone';
+            const nxt = cur === 'inkwell' ? 'stone' : 'inkwell';
+            try { localStorage.setItem('nino_editorial_theme', nxt); } catch (e) {}
+            applyTheme(nxt);
+        }
+        try {
+            const saved = localStorage.getItem('nino_editorial_theme');
+            if (saved === 'inkwell') applyTheme('inkwell');
+        } catch (e) {}
+
+        const tourSnippets = [
+`<pre><code><span class="kw">fn</span> <span class="fn">transfer_funds</span>(sender_id: <span class="type">i64</span>, amount: <span class="type">f64</span>) -&gt; <span class="type">bool</span> {
+    <span class="kw">require</span>(amount &gt; <span class="num">0.0</span>, <span class="str">"Transfer amount must be strictly positive"</span>)
+    <span class="kw">require</span>(sender_id &gt; <span class="num">0</span>, <span class="str">"Invalid sender identifier"</span>)
+
+    <span class="kw">let</span> updated_balance = <span class="num">5000.0</span> - amount
+    <span class="kw">ensure</span>(updated_balance &gt;= <span class="num">0.0</span>, <span class="str">"Solvency invariant breached"</span>)
+
+    <span class="kw">return</span> <span class="kw">true</span>
+}</code></pre>`,
+`<pre><code><span class="kw">fn</span> <span class="fn">process_secure_vault</span>() {
+    <span class="kw">sealed let</span> master_key = <span class="str">"NINO_KEY_MATERIAL"</span>
+
+    <span class="kw">let</span> plain = <span class="fn">unseal</span>(master_key)
+    <span class="fn">print</span>(<span class="str">"Sealed RAM access verified"</span>)
+    <span class="fn">seal_destroy</span>(master_key)
+}</code></pre>`,
+`<pre><code><span class="kw">let</span> baseline = <span class="fn">arena_used</span>()
+<span class="kw">for</span> req_id <span class="kw">in</span> <span class="num">0</span>..<span class="num">1000</span> {
+    <span class="kw">let</span> mark = <span class="fn">arena_mark</span>()
+    <span class="kw">let</span> payload = <span class="str">"request_"</span> + <span class="fn">int_to_str</span>(req_id)
+    <span class="fn">arena_rollback</span>(mark)
+}
+<span class="kw">require</span>(<span class="fn">arena_used</span>() == baseline, <span class="str">"Zero arena growth after rollback"</span>)</code></pre>`,
+`<pre><code><span class="kw">fn</span> <span class="fn">execute_sandboxed_routine</span>() {
+    <span class="kw">with capability</span> [<span class="str">"read_only"</span>, <span class="str">"!network"</span>, <span class="str">"!disk"</span>] {
+        <span class="kw">let</span> calculation = <span class="num">42</span> * <span class="num">1024</span>
+        <span class="fn">print</span>(<span class="str">"Result: "</span>, calculation)
+    }
+}</code></pre>`,
+`<pre><code><span class="kw">import</span> <span class="str">"std/json.nino"</span>
+<span class="kw">import</span> <span class="str">"std/http.nino"</span>
+<span class="kw">import</span> <span class="str">"std/uuid.nino"</span>
+
+<span class="kw">fn</span> <span class="fn">build_api_payload</span>() -&gt; <span class="type">string</span> {
+    <span class="kw">let</span> req_id = <span class="fn">uuid_v4</span>()
+    <span class="kw">let</span> body = <span class="fn">json_object2</span>(<span class="fn">json_kv_str</span>(<span class="str">"id"</span>, req_id), <span class="fn">json_kv_int</span>(<span class="str">"status"</span>, <span class="num">200</span>))
+    <span class="kw">return</span> <span class="fn">http_build_json_response</span>(<span class="num">200</span>, <span class="str">"OK"</span>, body)
+}</code></pre>`
+        ];
+
+        function switchTour(idx) {
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach((btn, i) => {
+                if (i === idx) btn.classList.add('active');
+                else btn.classList.remove('active');
+            });
+            document.getElementById('tourContent').innerHTML = tourSnippets[idx];
+        }
+
+        function setPlatform(p) {
+            const tabs = document.querySelectorAll('.install-tab');
+            const cmd = document.getElementById('installCmd');
+            if (p === 'win') {
+                tabs[0].classList.add('active');
+                tabs[1].classList.remove('active');
+                cmd.textContent = 'irm https://ninosec.me/install.ps1 | iex';
+            } else {
+                tabs[0].classList.remove('active');
+                tabs[1].classList.add('active');
+                cmd.textContent = 'curl -sSf https://ninosec.me/install.sh | sh';
+            }
+        }
+
+        function copyInstall() {
+            const cmd = document.getElementById('installCmd').textContent;
+            navigator.clipboard.writeText(cmd).then(() => {
+                const btn = document.getElementById('copyBtn');
+                btn.textContent = 'Copied';
+                setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+            });
+        }
+    </script>
+</body>
+</html>

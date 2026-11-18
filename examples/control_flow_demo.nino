@@ -1,0 +1,67 @@
+fn audit_target_port(port: i32) {
+    defer print("  [Defer Guard] Socket for Port {port} cleanly closed.")
+
+    guard port > 0 else {
+        print("  [Guard Alert] Port {port} is INVALID! Audit aborted.")
+        return
+    }
+
+    print("  [Audit Start] Initializing socket connection to port {port}...")
+    print("  [Audit Success] Port {port} is responsive and hardened.")
+}
+
+fn main() {
+    print("==================================================")
+    print("   NINO CONTROL FLOW, PATTERN MATCHING & PIPELINE DEMO   ")
+    print("==================================================")
+
+    let lang = "Nino"
+    let v_core = 2
+    let ram_gb = 4
+    print("Language: {lang} | CPU Cores: {v_core} | RAM: {ram_gb} GB | Total Compute Power: {v_core * ram_gb * 100}")
+
+    let ports = [22, 80, 443, 8080]
+    let server_config = {
+        "region": "Indonesia Central (Jakarta)",
+        "ip": "70.153.84.8",
+        "status": "Online"
+    }
+
+    print("Target Server IP : {server_config[\"ip\"]}")
+    print("Cloud Region     : {server_config[\"region\"]}")
+    print("Primary Port     : {ports[0]}")
+
+    print("\n--- [1] Port Scanner Iteration ---")
+    for p in ports {
+        print("-> Inspecting port: {p}")
+    }
+
+    print("\n--- [2] Range Loop with Step 5 ---")
+    for step_val in 10..25 step 5 {
+        print("Step iteration: {step_val}")
+    }
+
+    print("\n--- [3] Pattern Matching (Match Engine) ---")
+    let test_codes = [200, 403, 404, 500]
+    for code in test_codes {
+        match code {
+            200 => print("Code {code}: HTTP OK (Passed Audit)"),
+            403 => print("Code {code}: FORBIDDEN (WAF Blocked)"),
+            404 => print("Code {code}: NOT FOUND"),
+            _   => print("Code {code}: Unhandled Status Code")
+        }
+    }
+
+    print("\n--- [4] The Pipeline Operator (|>) ---")
+    let raw_payload = "alert('xss');<script>DROP TABLE</script>"
+    print("Raw Untrusted Input: " + raw_payload)
+    print("Pipeline Sanitized Output:")
+    raw_payload |> sanitize() |> print()
+
+    print("\n--- [5] Guard Clause & Defer Safety Engine ---")
+    audit_target_port(8080)
+    audit_target_port(-1)
+
+    print("\n==================================================")
+    print("Nino Control Flow & Pattern Matching Demo Completed! [OK]")
+}

@@ -1,0 +1,415 @@
+struct NinoToken {
+    token_type: str,
+    literal: str,
+    line: i64
+}
+
+struct NinoAstStmt {
+    stmt_kind: str,
+    target: str,
+    expr_code: str,
+    op: str,
+    lhs: str,
+    rhs: str,
+    line: i64
+}
+
+struct NinoAstNode {
+    node_kind: str,
+    identifier: str,
+    params: [str],
+    stmts: [NinoAstStmt],
+    mut children_count: i64
+}
+
+fn compiler_is_word_char(code: i64) -> bool {
+    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code == 95
+}
+
+fn compiler_tokenize_stream(source_text: str) -> [NinoToken] {
+    require(len(source_text) > 0, "Source code cannot be empty")
+    mut tokens: [NinoToken] = []
+    let slen = len(source_text)
+    mut i = 0
+    mut ln = 1
+    while i < slen {
+        let ch = char_at(source_text, i)
+        let code = char_code_at(source_text, i)
+        if ch == "\n" {
+            ln = ln + 1
+            i = i + 1
+        } else if ch == " " || ch == "\t" || ch == "\r" {
+            i = i + 1
+        } else if ch == "/" && i + 1 < slen && char_at(source_text, i + 1) == "/" {
+            i = i + 2
+            while i < slen && char_at(source_text, i) != "\n" {
+                i = i + 1
+            }
+        } else if ch == "/" && i + 1 < slen && char_at(source_text, i + 1) == "*" {
+            i = i + 2
+            while i + 1 < slen && !(char_at(source_text, i) == "*" && char_at(source_text, i + 1) == "/") {
+                if char_at(source_text, i) == "\n" { ln = ln + 1 }
+                i = i + 1
+            }
+            if i + 1 < slen {
+                i = i + 2
+            } else {
+                i = slen
+            }
+        } else if ch == "\"" {
+            let start = i
+            i = i + 1
+            while i < slen {
+                let sc = char_at(source_text, i)
+                if sc == "\\" && i + 1 < slen {
+                    i = i + 2
+                } else if sc == "\"" {
+                    i = i + 1
+                    break
+                } else {
+                    if sc == "\n" { ln = ln + 1 }
+                    i = i + 1
+                }
+            }
+            tokens = push(tokens, NinoToken { token_type: "STRING", literal: slice(source_text, start, i - start), line: ln })
+        } else if i + 1 < slen && (slice(source_text, i, 2) == "==" || slice(source_text, i, 2) == "!=" || slice(source_text, i, 2) == "<=" || slice(source_text, i, 2) == ">=" || slice(source_text, i, 2) == "&&" || slice(source_text, i, 2) == "||" || slice(source_text, i, 2) == "->" || slice(source_text, i, 2) == ".." || slice(source_text, i, 2) == "|>" || slice(source_text, i, 2) == "<<" || slice(source_text, i, 2) == ">>") {
+            tokens = push(tokens, NinoToken { token_type: "OPERATOR", literal: slice(source_text, i, 2), line: ln })
+            i = i + 2
+        } else if ch == "{" {
+            tokens = push(tokens, NinoToken { token_type: "LBRACE", literal: ch, line: ln })
+            i = i + 1
+        } else if ch == "}" {
+            tokens = push(tokens, NinoToken { token_type: "RBRACE", literal: ch, line: ln })
+            i = i + 1
+        } else if ch == "(" || ch == ")" || ch == "[" || ch == "]" || ch == "," || ch == ":" || ch == ";" || ch == "." {
+            tokens = push(tokens, NinoToken { token_type: "PUNCT", literal: ch, line: ln })
+            i = i + 1
+        } else if ch == "=" || ch == "+" || ch == "-" || ch == "*" || ch == "/" || ch == "%" || ch == "<" || ch == ">" || ch == "!" || ch == "&" || ch == "|" || ch == "^" {
+            tokens = push(tokens, NinoToken { token_type: "OPERATOR", literal: ch, line: ln })
+            i = i + 1
+        } else if code >= 48 && code <= 57 {
+            let start = i
+            while i < slen && compiler_is_word_char(char_code_at(source_text, i)) {
+                i = i + 1
+            }
+            tokens = push(tokens, NinoToken { token_type: "NUMBER", literal: slice(source_text, start, i - start), line: ln })
+        } else if compiler_is_word_char(code) {
+            let start = i
+            while i < slen && compiler_is_word_char(char_code_at(source_text, i)) {
+                i = i + 1
+            }
+            let word = slice(source_text, start, i - start)
+            mut ttype = "IDENTIFIER"
+            if word == "fn" {
+                ttype = "KEYWORD_FN"
+            } else if word == "let" || word == "mut" || word == "struct" || word == "if" || word == "else" || word == "while" || word == "for" {
+                ttype = "KEYWORD"
+            } else if word == "return" {
+                ttype = "KEYWORD_RETURN"
+            }
+            tokens = push(tokens, NinoToken { token_type: ttype, literal: word, line: ln })
+        } else {
+            tokens = push(tokens, NinoToken { token_type: "SYMBOL", literal: ch, line: ln })
+            i = i + 1
+        }
+    }
+    return tokens
+}
+
+fn compiler_toks_to_expr(tokens: [NinoToken], start_i: i64, end_i: i64) -> str {
+    mut out = ""
+    mut k = start_i
+    while k < end_i {
+        if k > start_i { out = out + " " }
+        out = out + tokens[k].literal
+        k = k + 1
+    }
+    return out
+}
+
+fn compiler_split_bin_stmt(tokens: [NinoToken], es: i64, ee: i64, kind: str, target: str, ln: i64) -> NinoAstStmt {
+    let ecode = compiler_toks_to_expr(tokens, es, ee)
+    mut op_pos = -1
+    mut depth = 0
+    mut k = es
+    while k < ee {
+        let lit = tokens[k].literal
+        if lit == "(" || lit == "[" { depth = depth + 1 }
+        else if lit == ")" || lit == "]" { if depth > 0 { depth = depth - 1 } }
+        else if depth == 0 && (lit == "+" || lit == "-" || lit == "*" || lit == "/" || lit == "%") {
+            op_pos = k
+            break
+        }
+        k = k + 1
+    }
+    if op_pos != -1 && op_pos > es && op_pos + 1 < ee {
+        return NinoAstStmt {
+            stmt_kind: kind,
+            target: target,
+            expr_code: ecode,
+            op: tokens[op_pos].literal,
+            lhs: compiler_toks_to_expr(tokens, es, op_pos),
+            rhs: compiler_toks_to_expr(tokens, op_pos + 1, ee),
+            line: ln
+        }
+    }
+    return NinoAstStmt {
+        stmt_kind: kind,
+        target: target,
+        expr_code: ecode,
+        op: "",
+        lhs: ecode,
+        rhs: "",
+        line: ln
+    }
+}
+
+fn compiler_parse_ast(tokens: [NinoToken]) -> NinoAstNode {
+    require(len(tokens) >= 1, "Insufficient tokens to form valid compilation unit")
+    mut root_id = "main_unit"
+    mut fn_cnt = 0
+    mut params_out: [str] = []
+    mut stmts_out: [NinoAstStmt] = []
+    let n = len(tokens)
+    mut i = 0
+    while i < n {
+        let tk = tokens[i]
+        if tk.token_type == "KEYWORD_FN" && i + 1 < n {
+            if fn_cnt == 0 {
+                root_id = tokens[i + 1].literal
+            }
+            fn_cnt = fn_cnt + 1
+            i = i + 2
+            if i < n && tokens[i].literal == "(" {
+                i = i + 1
+                while i < n && tokens[i].literal != ")" {
+                    if tokens[i].token_type == "IDENTIFIER" && i + 1 < n && tokens[i + 1].literal == ":" {
+                        params_out = push(params_out, tokens[i].literal)
+                    }
+                    i = i + 1
+                }
+            }
+            while i < n && tokens[i].literal != "{" {
+                i = i + 1
+            }
+            if i < n && tokens[i].literal == "{" { i = i + 1 }
+        } else if (tk.literal == "let" || tk.literal == "mut") && i + 1 < n && tokens[i + 1].token_type == "IDENTIFIER" {
+            let vname = tokens[i + 1].literal
+            let st_line = tk.line
+            mut k = i + 2
+            while k < n && tokens[k].literal != "=" && tokens[k].literal != ";" && tokens[k].literal != "}" {
+                k = k + 1
+            }
+            if k < n && tokens[k].literal == "=" {
+                let es = k + 1
+                mut ee = es
+                while ee < n && tokens[ee].literal != ";" && tokens[ee].literal != "}" && tokens[ee].line == tokens[es].line {
+                    ee = ee + 1
+                }
+                stmts_out = push(stmts_out, compiler_split_bin_stmt(tokens, es, ee, "LET", vname, st_line))
+                i = ee
+                if i < n && tokens[i].literal == ";" { i = i + 1 }
+            } else {
+                i = k + 1
+            }
+        } else if tk.token_type == "KEYWORD_RETURN" {
+            let st_line = tk.line
+            let es = i + 1
+            mut ee = es
+            while ee < n && tokens[ee].literal != ";" && tokens[ee].literal != "}" && (ee == es || tokens[ee].line == tokens[es].line) {
+                ee = ee + 1
+            }
+            stmts_out = push(stmts_out, compiler_split_bin_stmt(tokens, es, ee, "RETURN", "rax", st_line))
+            i = ee
+            if i < n && tokens[i].literal == ";" { i = i + 1 }
+        } else if tk.token_type == "IDENTIFIER" && i + 1 < n && tokens[i + 1].literal == "=" {
+            let vname = tk.literal
+            let st_line = tk.line
+            let es = i + 2
+            mut ee = es
+            while ee < n && tokens[ee].literal != ";" && tokens[ee].literal != "}" && (ee == es || tokens[ee].line == tokens[es].line) {
+                ee = ee + 1
+            }
+            stmts_out = push(stmts_out, compiler_split_bin_stmt(tokens, es, ee, "ASSIGN", vname, st_line))
+            i = ee
+            if i < n && tokens[i].literal == ";" { i = i + 1 }
+        } else if tk.literal == "if" || tk.literal == "while" {
+            let sk = tk.literal == "if" ? "IF" : "WHILE"
+            let st_line = tk.line
+            mut k = i + 1
+            while k < n && tokens[k].literal != "{" {
+                k = k + 1
+            }
+            stmts_out = push(stmts_out, compiler_split_bin_stmt(tokens, i + 1, k, sk, "", st_line))
+            i = k + 1
+        } else {
+            i = i + 1
+        }
+    }
+    if root_id == "main_unit" && n > 1 && tokens[1].token_type == "IDENTIFIER" {
+        root_id = tokens[1].literal
+    }
+    return NinoAstNode {
+        node_kind: "PROGRAM_ROOT",
+        identifier: root_id,
+        params: params_out,
+        stmts: stmts_out,
+        children_count: len(stmts_out) > 0 ? len(stmts_out) : n
+    }
+}
+
+fn compiler_is_int_lit(s: str) -> bool {
+    let n = len(s)
+    if n == 0 { return false }
+    mut i = 0
+    if char_at(s, 0) == "-" {
+        if n == 1 { return false }
+        i = 1
+    }
+    while i < n {
+        let c = char_code_at(s, i)
+        if c < 48 || c > 57 { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn compiler_parse_i64(s: str) -> i64 {
+    let n = len(s)
+    if n == 0 { return 0 }
+    mut i = 0
+    mut neg = false
+    if char_at(s, 0) == "-" {
+        neg = true
+        i = 1
+    }
+    mut acc = 0
+    while i < n {
+        let c = char_code_at(s, i)
+        if c >= 48 && c <= 57 {
+            acc = acc * 10 + (c - 48)
+        }
+        i = i + 1
+    }
+    if neg { return -acc }
+    return acc
+}
+
+fn compiler_emit_load_operand(operand: str, vars: [str], mut out: [i64]) -> [i64] {
+    if compiler_is_int_lit(operand) {
+        let v = compiler_parse_i64(operand)
+        out = push(out, 72)
+        out = push(out, 199)
+        out = push(out, 192)
+        out = push(out, v & 255)
+        out = push(out, (v >> 8) & 255)
+        out = push(out, (v >> 16) & 255)
+        out = push(out, (v >> 24) & 255)
+        return out
+    }
+    mut slot = -1
+    for vi in 0..len(vars) {
+        if vars[vi] == operand {
+            slot = vi
+            break
+        }
+    }
+    if slot >= 0 {
+        let off = 256 - (slot + 1) * 8
+        out = push(out, 72)
+        out = push(out, 139)
+        out = push(out, 69)
+        out = push(out, off & 255)
+        return out
+    }
+    out = push(out, 72)
+    out = push(out, 137)
+    out = push(out, 248)
+    return out
+}
+
+fn compiler_emit_machine_ir(root: NinoAstNode) -> [i64] {
+    require(root.children_count > 0, "Cannot emit IR for empty AST")
+    mut bytecode: [i64] = []
+    bytecode = push(bytecode, 85)
+    bytecode = push(bytecode, 72)
+    bytecode = push(bytecode, 137)
+    bytecode = push(bytecode, 229)
+    mut vars: [str] = []
+    let sc = len(root.stmts)
+    if sc == 0 {
+        bytecode = push(bytecode, 72)
+        bytecode = push(bytecode, 199)
+        bytecode = push(bytecode, 192)
+        bytecode = push(bytecode, root.children_count)
+        bytecode = push(bytecode, 93)
+        bytecode = push(bytecode, 195)
+        return bytecode
+    }
+    for si in 0..sc {
+        let st = root.stmts[si]
+        if st.stmt_kind == "LET" || st.stmt_kind == "ASSIGN" || st.stmt_kind == "RETURN" {
+            if len(st.op) > 0 {
+                bytecode = compiler_emit_load_operand(st.rhs, vars, bytecode)
+                bytecode = push(bytecode, 72)
+                bytecode = push(bytecode, 137)
+                bytecode = push(bytecode, 193)
+                bytecode = compiler_emit_load_operand(st.lhs, vars, bytecode)
+                if st.op == "+" {
+                    bytecode = push(bytecode, 72)
+                    bytecode = push(bytecode, 1)
+                    bytecode = push(bytecode, 200)
+                } else if st.op == "-" {
+                    bytecode = push(bytecode, 72)
+                    bytecode = push(bytecode, 41)
+                    bytecode = push(bytecode, 200)
+                } else if st.op == "*" {
+                    bytecode = push(bytecode, 72)
+                    bytecode = push(bytecode, 15)
+                    bytecode = push(bytecode, 175)
+                    bytecode = push(bytecode, 193)
+                }
+            } else {
+                bytecode = compiler_emit_load_operand(st.lhs, vars, bytecode)
+            }
+            if st.stmt_kind == "LET" || st.stmt_kind == "ASSIGN" {
+                mut vidx = -1
+                for vi in 0..len(vars) {
+                    if vars[vi] == st.target {
+                        vidx = vi
+                        break
+                    }
+                }
+                if vidx == -1 {
+                    vars = push(vars, st.target)
+                    vidx = len(vars) - 1
+                }
+                let off = 256 - (vidx + 1) * 8
+                bytecode = push(bytecode, 72)
+                bytecode = push(bytecode, 137)
+                bytecode = push(bytecode, 69)
+                bytecode = push(bytecode, off & 255)
+            } else if st.stmt_kind == "RETURN" {
+                bytecode = push(bytecode, 93)
+                bytecode = push(bytecode, 195)
+            }
+        } else if st.stmt_kind == "IF" || st.stmt_kind == "WHILE" {
+            bytecode = push(bytecode, 72)
+            bytecode = push(bytecode, 133)
+            bytecode = push(bytecode, 192)
+            bytecode = push(bytecode, 116)
+            bytecode = push(bytecode, 4)
+        }
+    }
+    if len(bytecode) == 4 || bytecode[len(bytecode) - 1] != 195 {
+        bytecode = push(bytecode, 93)
+        bytecode = push(bytecode, 195)
+    }
+    return bytecode
+}
+
+fn compiler_compile_source(source_text: str) -> [i64] {
+    let toks = compiler_tokenize_stream(source_text)
+    let ast = compiler_parse_ast(toks)
+    return compiler_emit_machine_ir(ast)
+}

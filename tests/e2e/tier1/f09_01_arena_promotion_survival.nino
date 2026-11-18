@@ -1,0 +1,20 @@
+fn helper_rb(m: int) {
+    arena_rollback(m)
+}
+
+fn main() -> int {
+    mut keep: [int] = [10, 20, 30]
+    let m = arena_mark()
+    for i in 0..64 {
+        keep = push(keep, i + 100)
+    }
+    let doomed: [int] = [7, 8, 9]
+    let before_k = arena_ptr_valid(keep)
+    let before_d = arena_ptr_valid(doomed)
+    helper_rb(m)
+    let after_k = arena_ptr_valid(keep)
+    let after_d = arena_ptr_valid(doomed)
+    require(before_k && before_d && after_k && !after_d && len(keep) == 67 && keep[66] == 163, "arena epoch survival failed")
+    print("T1-F09-01:PASS")
+    return 0
+}

@@ -1,0 +1,13 @@
+fn check_branch(a: int, b: int) -> int {
+    if a > 0 {
+        let z = 1
+    } else {
+        require(b == 999, "branch scoped precondition")
+    }
+    ensure(b == 999, "must not hold on then-branch")
+    return b
+}
+
+fn main() -> int {
+    return check_branch(1, 0)
+}

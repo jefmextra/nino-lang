@@ -1,0 +1,56 @@
+struct ErrorCode {
+    code: int,
+    msg: string
+}
+
+struct Point {
+    x: int,
+    y: int
+}
+
+fn parse_int_str(ok: bool) -> Result<int, string> {
+    if ok {
+        return (Result_int_string){ .is_ok = true, .ok_val = 77, .err_val = "" }
+    }
+    return (Result_int_string){ .is_ok = false, .ok_val = 0, .err_val = "parse_err" }
+}
+
+fn parse_int_code(ok: bool) -> Result<int, ErrorCode> {
+    if ok {
+        return (Result_int_ErrorCode){ .is_ok = true, .ok_val = 88, .err_val = ErrorCode { code: 0, msg: "" } }
+    }
+    return (Result_int_ErrorCode){ .is_ok = false, .ok_val = 0, .err_val = ErrorCode { code: 404, msg: "not_found" } }
+}
+
+fn parse_pt_str(ok: bool) -> Result<Point, string> {
+    if ok {
+        return (Result_Point_string){ .is_ok = true, .ok_val = Point { x: 1, y: 2 }, .err_val = "" }
+    }
+    return (Result_Point_string){ .is_ok = false, .ok_val = Point { x: 0, y: 0 }, .err_val = "pt_err" }
+}
+
+fn parse_pt_code(ok: bool) -> Result<Point, ErrorCode> {
+    if ok {
+        return (Result_Point_ErrorCode){ .is_ok = true, .ok_val = Point { x: 3, y: 4 }, .err_val = ErrorCode { code: 0, msg: "" } }
+    }
+    return (Result_Point_ErrorCode){ .is_ok = false, .ok_val = Point { x: 0, y: 0 }, .err_val = ErrorCode { code: 500, msg: "bad_pt" } }
+}
+
+fn main() -> int {
+    let r1 = parse_int_str(true)
+    let r2 = parse_int_str(false)
+    let r3 = parse_int_code(true)
+    let r4 = parse_int_code(false)
+    let p1 = parse_pt_str(true)
+    let p2 = parse_pt_code(false)
+
+    require(r1.is_ok && r1.ok_val == 77, "Result<int, string> ok")
+    require(!r2.is_ok && r2.err_val == "parse_err", "Result<int, string> err")
+    require(r3.is_ok && r3.ok_val == 88, "Result<int, ErrorCode> ok")
+    require(!r4.is_ok && r4.err_val.code == 404 && r4.err_val.msg == "not_found", "Result<int, ErrorCode> err")
+    require(p1.is_ok && p1.ok_val.y == 2, "Result<Point, string> ok")
+    require(!p2.is_ok && p2.err_val.code == 500, "Result<Point, ErrorCode> err")
+
+    print("T1-F03-03:PASS")
+    return 0
+}

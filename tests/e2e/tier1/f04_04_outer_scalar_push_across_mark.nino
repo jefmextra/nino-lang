@@ -1,0 +1,16 @@
+fn main() -> int {
+    mut outer_ints = [0]
+    for i in 0..60 {
+        let mk = arena_mark()
+        let tmp = "iter_" + int_to_str(i)
+        require(len(tmp) >= 6, "transient iter string")
+        outer_ints = push(outer_ints, i)
+        arena_rollback(mk)
+    }
+    require(len(outer_ints) == 61, "outer_ints must have 61 entries")
+    require(outer_ints[1] == 0 && outer_ints[60] == 59, "outer_ints values check")
+    arr_free(outer_ints)
+    require(heap_live_arrays() == 0, "heap_live_arrays must be 0 after arr_free")
+    print("T1-F04-04:PASS")
+    return 0
+}

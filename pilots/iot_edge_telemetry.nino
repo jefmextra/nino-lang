@@ -1,0 +1,82 @@
+import "std/str.nino"
+import "std/csv.nino"
+import "std/regex.nino"
+
+struct SensorFrame {
+    device_id: string,
+    temp_mc: int,
+    pressure_kpa: int,
+    vibration_hz: int,
+    authenticated: bool
+}
+
+fn compute_safe_valve_aperture(temp_mc: int, pressure_kpa: int) -> int {
+    require(temp_mc >= 0 && temp_mc <= 150000, "Sensor temperature must be within industrial operating range")
+    require(pressure_kpa >= 80 && pressure_kpa <= 1200, "Pressure must be within vessel rating")
+    let raw_cmd = (temp_mc / 1500) + (pressure_kpa / 12)
+    ensure(raw_cmd >= 0 && raw_cmd <= 200, "Actuator aperture command must never exceed 200 safe limit")
+    return raw_cmd
+}
+
+fn main() -> int {
+    print("================================================================================")
+    print("[Industrial Pilot 2: IoT Edge Telemetry Gateway & Actuator Controller]")
+    print("================================================================================")
+
+    trace_reset()
+    let kp = pq_generate_keypair(768)
+    let dev_pk = kp["public_key"]
+    let dev_sk = kp["private_key"]
+
+    let frame = SensorFrame {
+        device_id: "TURBINE_EDGE_07",
+        temp_mc: 84000,
+        pressure_kpa: 360,
+        vibration_hz: 48,
+        authenticated: true
+    }
+
+    require(regex_match("^TURBINE_EDGE_\\d+$", frame.device_id), "Device ID must match industrial naming regex")
+    let json_wire = frame |> SensorFrame_to_json()
+    let sig = pq_sign(json_wire, dev_sk)
+
+    let srv_fd = tcp_listen(18942)
+    require(srv_fd >= 0, "IoT Edge TCP gateway must bind port 18942")
+    let edge_cli = tcp_connect("127.0.0.1", 18942)
+    let edge_acc = tcp_accept(srv_fd)
+    require(edge_cli >= 0 && edge_acc >= 0, "Sensor node and Edge gateway TCP link must establish")
+
+    tcp_write(edge_cli, json_wire)
+    let rx_payload = tcp_read(edge_acc, 4096)
+    tcp_close(edge_acc)
+    tcp_close(edge_cli)
+    tcp_close(srv_fd)
+
+    require(pq_verify(rx_payload, sig, dev_pk), "Edge gateway must verify PQC signature on incoming telemetry")
+    let rx_frame = rx_payload |> SensorFrame_from_json()
+    require(SensorFrame_eq(frame, rx_frame), "Decoded edge telemetry struct must match transmitted sensor frame")
+    print("  [1/4] Authenticated Edge Telemetry Frame    : " + rx_payload)
+
+    let valve_cmd = compute_safe_valve_aperture(rx_frame.temp_mc, rx_frame.pressure_kpa)
+    require(valve_cmd == 86, "Formally verified actuator command must equal 86")
+    trace_record("iot_valve_aperture", valve_cmd)
+    print("  [2/4] Z3 Verified Actuator Safety Command   : Aperture = " + int_to_str(valve_cmd) + " units")
+
+    let readings = [52, 48, 61, 44, 55]
+    let sorted_vib = readings |> arr_sort()
+    let total_vib = sorted_vib |> arr_sum()
+    let max_vib = sorted_vib |> arr_max()
+    let min_vib = sorted_vib |> arr_min()
+    require(min_vib == 44 && max_vib == 61 && total_vib == 260, "Vector statistical aggregation must match")
+    print("  [3/4] High-Density Vector Window Stats      : min=" + int_to_str(min_vib) + " max=" + int_to_str(max_vib) + " sum=" + int_to_str(total_vib))
+
+    let csv_batch = "device_id,temp_mc,valve_cmd\n" + csv_build_row3(rx_frame.device_id, int_to_str(rx_frame.temp_mc), int_to_str(valve_cmd)) + "\n"
+    require(csv_row_count(csv_batch) == 2, "CSV telemetry batch must contain header + 1 data row")
+    require(csv_get_cell(csv_batch, 1, 0) == "TURBINE_EDGE_07", "CSV cell (1,0) must equal TURBINE_EDGE_07")
+    require(csv_get_cell(csv_batch, 1, 2) == "86", "CSV cell (1,2) must equal 86")
+    print("  [4/4] RFC 4180 CSV Batch & Audit Hash       : " + trace_chain_hash())
+    print("================================================================================")
+    print("SUCCESS: Industrial IoT Edge Telemetry & Actuator Pilot Verified!")
+    print("================================================================================")
+    return 0
+}

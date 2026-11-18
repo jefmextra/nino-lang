@@ -1,0 +1,11 @@
+import "std/compiler.nino"
+
+fn main() -> int {
+    let toks = compiler_tokenize_stream("fn add_two(a: i64) -> i64 { let x = 10; let y = x + 5; return y }")
+    let ast = compiler_parse_ast(toks)
+    require(ast.identifier == "add_two" && len(ast.stmts) == 3, "multi-statement AST must parse all 3 statements")
+    let ir = compiler_emit_machine_ir(ast)
+    require(len(ir) > 10 && ir[0] == 85 && ir[len(ir) - 1] == 195, "compiler must emit x86-64 prologue/body/epilogue bytecode")
+    print("T1-F15-01:PASS")
+    return 0
+}

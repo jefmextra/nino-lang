@@ -1,0 +1,723 @@
+import "std/str.nino"
+import "std/json.nino"
+import "std/http.nino"
+import "std/fs.nino"
+import "std/uuid.nino"
+import "std/env.nino"
+import "std/regex.nino"
+import "std/csv.nino"
+import "std/jwt.nino"
+
+struct CompactModel {
+    id: int,
+    label: string,
+    verified: bool
+}
+
+struct NestedEndpoint {
+    service: string,
+    model: CompactModel,
+    port: int
+}
+
+fn parallel_sum_squares(limit: int) -> int {
+    mut acc = 0
+    for i in 1..(limit + 1) {
+        acc = acc + (i * i)
+    }
+    return acc
+}
+
+fn resolve_ninoc_bin() -> string {
+    if is_windows() {
+        if file_exists("ninoc.exe") {
+            return ".\\ninoc.exe"
+        }
+        return "ninoc"
+    }
+    if file_exists("./ninoc") {
+        return "./ninoc"
+    }
+    if file_exists("./ninoc.exe") {
+        return "./ninoc.exe"
+    }
+    return "ninoc"
+}
+
+fn verify_flight_recorder() -> int {
+    print("  [1/4] Verifying Deterministic Time-Travel Flight Recorder (SHA-256 State Chain)...")
+    trace_reset()
+    require(trace_count() == 0, "Flight recorder must start at 0 transitions after reset")
+
+    trace_record("vault_init", 1000)
+    trace_record("tx_debit", 250)
+    trace_record("tx_credit", 750)
+    trace_checkpoint("epoch_committed")
+
+    require(trace_count() == 4, "Flight recorder must record 4 state transitions")
+    require(trace_entry_val(0) == 1000, "Step 1 value must equal 1000")
+    require(trace_entry_val(1) == 250, "Step 2 value must equal 250")
+    require(trace_entry_val(2) == 750, "Step 3 value must equal 750")
+    require(trace_entry_label(0) == "vault_init", "Step 1 label must match vault_init")
+
+    let hash_run1 = trace_chain_hash()
+    require(len(hash_run1) == 64, "SHA-256 chain digest must be 64 hex characters")
+    trace_dump()
+
+    trace_reset()
+    trace_record("vault_init", 1000)
+    trace_record("tx_debit", 250)
+    trace_record("tx_credit", 750)
+    trace_checkpoint("epoch_committed")
+    let hash_run2 = trace_chain_hash()
+    require(hash_run1 == hash_run2, "Identical state transitions must yield bit-identical SHA-256 chain hashes")
+
+    trace_reset()
+    trace_record("vault_init", 1000)
+    trace_record("tx_debit", 251)
+    trace_record("tx_credit", 750)
+    trace_checkpoint("epoch_committed")
+    let hash_perturbed = trace_chain_hash()
+    require(hash_run1 != hash_perturbed, "Single-unit state perturbation must alter terminal SHA-256 chain hash")
+
+    print("        -> Flight Recorder Determinism & Tamper Evidence: [OK]")
+    return 0
+}
+
+fn verify_native_bindgen(ninoc_bin: string) -> int {
+    print("  [2/4] Verifying Native C-Header Bindgen Engine (ninoc bindgen)...")
+    let lb = "{"
+    let rb = "}"
+    let h_path = "temp_telemetry_abi.h"
+    let out_nino = "temp_telemetry_bindings.nino"
+    mut h_src = "#ifndef TELEMETRY_ABI_H\n#define TELEMETRY_ABI_H\n"
+    h_src = h_src + "#define TELEMETRY_MAGIC 4242\n"
+    h_src = h_src + "#define TELEMETRY_TAG \"NINO_ABI_V2\"\n"
+    h_src = h_src + "typedef struct SensorPacket " + lb + "\n"
+    h_src = h_src + "    int64_t packet_id;\n"
+    h_src = h_src + "    int32_t status_code;\n"
+    h_src = h_src + "    const char* sensor_name;\n"
+    h_src = h_src + "    bool valid_crc;\n"
+    h_src = h_src + rb + " SensorPacket;\n"
+    h_src = h_src + "extern const char* sha256(const char* data);\n"
+    h_src = h_src + "int64_t trace_count(void);\n"
+    h_src = h_src + "#endif\n"
+    write_file(h_path, h_src)
+
+    let cmd = ninoc_bin + " bindgen " + h_path + " -o " + out_nino
+    let rc = exec_cmd(cmd)
+    require(rc == 0, "ninoc bindgen must succeed with exit code 0")
+    require(file_exists(out_nino) == true, "ninoc bindgen must emit target .nino bindings file")
+
+    let generated = read_file(out_nino)
+    require(len(generated) > 40, "Generated bindings must be non-empty")
+    file_delete(h_path)
+    file_delete(out_nino)
+    print("        -> Native C-Header Bindgen Synthesis: [OK]")
+    return 0
+}
+
+fn verify_witness_synthesizer(ninoc_bin: string) -> int {
+    print("  [3/4] Verifying Theorem-Driven Counterexample Witness Synthesizer (ninoc witness)...")
+    let w_path = "temp_pcc_fail.witness.nino"
+    file_delete(w_path)
+    let cmd_synth = ninoc_bin + " witness examples/pcc_fail_demo.nino -o " + w_path
+    let rc1 = exec_cmd(cmd_synth)
+    require(rc1 == 0, "ninoc witness synthesis must exit with code 0")
+    require(file_exists(w_path) == true, "ninoc witness must create standalone reproduction .nino file")
+
+    let cmd_run = ninoc_bin + " run " + w_path
+    let rc2 = exec_cmd(cmd_run)
+    file_delete(w_path)
+    require(rc2 == 0, "Synthesized Z3 counterexample witness test must execute and verify breach with exit code 0")
+    print("        -> Z3 Counterexample Model Extraction & Runtime Reproduction: [OK]")
+    return 0
+}
+
+fn verify_canonical_formatter(ninoc_bin: string) -> int {
+    print("  [4/4] Verifying Native Canonical Source Formatter (ninoc fmt)...")
+    let lb = "{"
+    let rb = "}"
+    let f_path = "temp_fmt_verify.nino"
+    mut raw_code = "fn compute_double(x: int) -> int " + lb + "\n"
+    raw_code = raw_code + "          let res = x * 2\n"
+    raw_code = raw_code + "   return res\n"
+    raw_code = raw_code + rb + "\n\n\n\n"
+    raw_code = raw_code + "fn main() -> int " + lb + "\n"
+    raw_code = raw_code + "        let v = compute_double(21)\n"
+    raw_code = raw_code + "  require(v == 42, \"v must be 42\")\n"
+    raw_code = raw_code + "     return 0\n"
+    raw_code = raw_code + rb + "\n"
+    write_file(f_path, raw_code)
+
+    let rc_fmt = exec_cmd(ninoc_bin + " fmt " + f_path)
+    require(rc_fmt == 0, "ninoc fmt in-place formatting must return 0")
+
+    let rc_chk = exec_cmd(ninoc_bin + " fmt " + f_path + " --check")
+    require(rc_chk == 0, "ninoc fmt --check after formatting must return 0")
+
+    let rc_exec = exec_cmd(ninoc_bin + " run " + f_path)
+    file_delete(f_path)
+    require(rc_exec == 0, "Formatted Nino program must compile and execute with exit code 0")
+    print("        -> Canonical 4-Space AST Formatting & Check Mode: [OK]")
+    return 0
+}
+
+fn verify_mobile_and_shared_lib(ninoc_bin: string) -> int {
+    print("  [5/5] Verifying Native Shared Library (--shared) & Mobile Engine (Android JNI + iOS Swift)...")
+    let lb = "{"
+    let rb = "}"
+    let src_path = "temp_mobile_vault.nino"
+    mut v_code = "fn compute_vault_interest(principal: int, bonus: int) -> int " + lb + "\n"
+    v_code = v_code + "    require(principal > 0 && principal <= 1000000000, \"principal must be within bounded positive range\")\n"
+    v_code = v_code + "    require(bonus > 0 && bonus <= 1000000000, \"bonus must be within bounded positive range\")\n"
+    v_code = v_code + "    let total = principal + bonus\n"
+    v_code = v_code + "    ensure(total > principal, \"total must exceed principal\")\n"
+    v_code = v_code + "    return total\n"
+    v_code = v_code + rb + "\n\n"
+    v_code = v_code + "fn sign_mobile_session(session_id: string) -> string " + lb + "\n"
+    v_code = v_code + "    return sha256(\"NINO_MOBILE_V1:\" + session_id)\n"
+    v_code = v_code + rb + "\n"
+    write_file(src_path, v_code)
+
+    mut sh_lib = "libtemp_vault_shared.so"
+    mut sh_open = "./libtemp_vault_shared.so"
+    if is_windows() {
+        sh_lib = "temp_vault_shared.dll"
+        sh_open = "temp_vault_shared.dll"
+    }
+    let rc_sh = exec_cmd(ninoc_bin + " build " + src_path + " --shared --proof -o " + sh_lib)
+    require(rc_sh == 0, "ninoc build --shared --proof must exit with code 0")
+    require(file_exists(sh_lib) == true, "Compiled shared library binary must exist")
+    require(file_exists(sh_lib + ".h") == true, "Auto-generated C11 header must exist")
+
+    let h_dl = dylib_open(sh_open)
+    require(h_dl != 0, "OS dynamic linker (LoadLibrary/dlopen) must load compiled shared library")
+    let fn_interest = dylib_sym(h_dl, "compute_vault_interest")
+    let fn_sign = dylib_sym(h_dl, "sign_mobile_session")
+    require(fn_interest != 0, "Exported symbol compute_vault_interest must resolve in shared library")
+    require(fn_sign != 0, "Exported symbol sign_mobile_session must resolve in shared library")
+
+    let calc_res = dylib_call_i64(fn_interest, 10000, 500)
+    require(calc_res == 10500, "Shared library machine-code execution must return 10500")
+
+    let sig_res = dylib_call_str(fn_sign, "user_99")
+    let expected_sig = sha256("NINO_MOBILE_V1:user_99")
+    require(sig_res == expected_sig, "Shared library SHA-256 signature must match expected digest")
+    dylib_close(h_dl)
+    file_delete(sh_lib)
+    file_delete(sh_lib + ".h")
+
+    let rc_mob = exec_cmd(ninoc_bin + " mobile " + src_path + " --pkg com.nino.vault --class VaultBridge -o temp_mob --proof")
+    require(rc_mob == 0, "ninoc mobile bridge synthesis & compilation must exit with code 0")
+    require(file_exists("temp_mob_temp_mobile_vault.h") == true, "iOS C11 bridging header must exist")
+    require(file_exists("temp_mob_module.modulemap") == true, "iOS Clang module.modulemap must exist")
+    require(file_exists("temp_mob_VaultBridge.swift") == true, "iOS Swift 5 wrapper must exist")
+    require(file_exists("temp_mob_VaultBridge.kt") == true, "Android Kotlin wrapper must exist")
+
+    mut jni_lib = "libtemp_mob_temp_mobile_vault_jni.so"
+    mut jni_open = "./libtemp_mob_temp_mobile_vault_jni.so"
+    if is_windows() {
+        jni_lib = "temp_mob_temp_mobile_vault_jni.dll"
+        jni_open = "temp_mob_temp_mobile_vault_jni.dll"
+    }
+    require(file_exists(jni_lib) == true, "Compiled Android JNI shared library must exist")
+
+    let h_jni = dylib_open(jni_open)
+    require(h_jni != 0, "OS dynamic linker must load compiled Android JNI library")
+    let jni_interest = dylib_sym(h_jni, "Java_com_nino_vault_VaultBridge_compute_vault_interest")
+    let jni_sign = dylib_sym(h_jni, "Java_com_nino_vault_VaultBridge_sign_mobile_session")
+    require(jni_interest != 0, "JNI symbol Java_com_nino_vault_VaultBridge_compute_vault_interest must resolve")
+    require(jni_sign != 0, "JNI symbol Java_com_nino_vault_VaultBridge_sign_mobile_session must resolve")
+
+    let jni_calc = dylib_call_jni_i64(jni_interest, 20000, 1500)
+    require(jni_calc == 21500, "JNI entrypoint execution must return 21500")
+
+    let jni_sig = dylib_call_jni_str(jni_sign, "android_ios_client")
+    let exp_jni_sig = sha256("NINO_MOBILE_V1:android_ios_client")
+    require(jni_sig == exp_jni_sig, "JNI string entrypoint execution via JNIEnv vtable must match SHA-256 digest")
+    dylib_close(h_jni)
+
+    file_delete(src_path)
+    file_delete("temp_mob_temp_mobile_vault.h")
+    file_delete("temp_mob_module.modulemap")
+    file_delete("temp_mob_VaultBridge.swift")
+    file_delete("temp_mob_VaultBridge.kt")
+    file_delete(jni_lib)
+    file_delete(jni_lib + ".h")
+    print("        -> Shared Library (LoadLibrary/dlopen) & JNI/iOS Bridge Execution: [OK]")
+    return 0
+}
+
+fn verify_dynamic_runtime_engines() -> int {
+    print("  [6/6] Verifying Zero-Stub Dynamic Runtime Engines (SQL, KV, Actors, PQC, ZKP)...")
+    let db = db_sqlite_open(":memory:")
+    db_exec(db, "CREATE TABLE orders (id INTEGER, customer TEXT, amount REAL)", [])
+    db_exec(db, "INSERT INTO orders VALUES (101, 'Diana', 9200.0)", [])
+    db_exec(db, "INSERT INTO orders VALUES (102, 'Evan', 450.0)", [])
+    db_exec(db, "INSERT INTO orders VALUES (103, 'Fiona', 6100.0)", [])
+
+    let high_orders = db_query(db, "SELECT customer, amount FROM orders WHERE amount > 5000.0", [])
+    require(len(high_orders) == 2, "Dynamic SQL WHERE > 5000.0 must return 2 matching rows")
+    let low_orders = db_query(db, "SELECT customer, amount FROM orders WHERE amount < 1000.0", [])
+    require(len(low_orders) == 1, "Dynamic SQL WHERE < 1000.0 must return 1 matching row")
+
+    let rconn = db_redis_connect(":memory:", 0)
+    db_redis_cmd(rconn, "SET", ["auth_user_77", "jwt_dynamic_xyz"])
+    db_redis_cmd(rconn, "SET", ["node_ip", "10.20.30.40"])
+    require(db_redis_cmd(rconn, "GET", ["auth_user_77"]) == "jwt_dynamic_xyz", "Dynamic KV must return exact stored value for auth_user_77")
+    require(db_redis_cmd(rconn, "GET", ["node_ip"]) == "10.20.30.40", "Dynamic KV must return exact stored value for node_ip")
+    require(db_redis_cmd(rconn, "GET", ["nonexistent_key"]) == "", "Dynamic KV must return empty string for missing key")
+
+    let apid = spawn_actor("OrderEngineV1")
+    actor_send(apid, "TX_881")
+    require(actor_receive(apid) == "OrderEngineV1_ACK:TX_881", "Actor mailbox must process dynamic message TX_881")
+    actor_patch(apid, "OrderEngineV2")
+    actor_send(apid, "TX_882")
+    require(actor_receive(apid) == "OrderEngineV2_ACK:TX_882", "Hot-patched actor must process dynamic message TX_882")
+
+    let sid = spawn_supervisor(apid, "one_for_one")
+    let f1 = supervisor_dispatch(sid, "SIMULATE_FAULT")
+    require(f1["restart_count"] == "1", "First supervisor fault recovery must record restart_count 1")
+    let f2 = supervisor_dispatch(sid, "SIMULATE_FAULT")
+    require(f2["restart_count"] == "2", "Second supervisor fault recovery must record restart_count 2")
+
+    let kp = pq_generate_keypair(768)
+    let pk = kp["public_key"]
+    let sk = kp["private_key"]
+    let sig = pq_sign("PAYLOAD_ALPHA", sk)
+    require(pq_verify("PAYLOAD_ALPHA", sig, pk) == true, "Valid signature must verify true")
+    require(pq_verify("PAYLOAD_TAMPERED", sig, pk) == false, "Tampered message must fail signature verification")
+
+    let zk_ok = zk_prove_condition(900, ">", 500)
+    require(zk_verify_proof(zk_ok) == true, "Satisfied ZK range condition must verify true")
+    let zk_bad = zk_prove_condition(200, ">", 500)
+    require(zk_verify_proof(zk_bad) == false, "Violated ZK range condition must verify false")
+
+    let zk_mem_ok = zk_prove_membership(77, [11, 77, 33])
+    require(zk_verify_membership(zk_mem_ok, [11, 77, 33]) == true, "Present element must pass Merkle membership verification")
+    let zk_mem_bad = zk_prove_membership(999, [11, 77, 33])
+    require(zk_verify_membership(zk_mem_bad, [11, 77, 33]) == false, "Absent element must fail Merkle membership verification")
+
+    print("        -> Dynamic SQL, KV, Actor Mailbox, PQC & ZKP Engines: [OK]")
+    return 0
+}
+
+fn verify_batteries_included_stdlib() -> int {
+    print("  [7/7] Verifying Batteries-Included Standard Library (JSON, HTTP, FS, Str, UUID, Env)...")
+    require(str_to_upper("nino lang") == "NINO LANG", "str_to_upper must convert ASCII lowercase")
+    require(str_to_lower("SOVEREIGN") == "sovereign", "str_to_lower must convert ASCII uppercase")
+    require(str_replace("v1.0-alpha", "alpha", "release") == "v1.0-release", "str_replace must substitute substring")
+    require(str_pad_left("42", 5, "0") == "00042", "str_pad_left must left-pad string")
+    require(str_contains("nino_lang", "lang") == true, "str_contains must locate substring")
+
+    let j_obj = json_object3(json_kv_str("service", "nino_api"), json_kv_int("port", 8080), json_kv_bool("verified", true))
+    require(json_get_string(j_obj, "service") == "nino_api", "json_get_string must parse string field")
+    require(json_get_number(j_obj, "port") == 8080, "json_get_number must parse integer field")
+    require(json_get_bool(j_obj, "verified") == true, "json_get_bool must parse boolean field")
+    require(json_has_key(j_obj, "missing") == false, "json_has_key must return false for absent key")
+
+    let http_raw = http_build_json_response(201, "Created", j_obj)
+    require(http_extract_status_code(http_raw) == 201, "http_extract_status_code must parse 201")
+    require(http_extract_body(http_raw) == j_obj, "http_extract_body must extract HTTP payload")
+
+    require(path_join("pkg\\core", "module.nino") == "pkg/core/module.nino", "path_join must normalize separators")
+    require(path_basename("pkg/core/module.nino") == "module.nino", "path_basename must extract filename")
+    require(path_dirname("pkg/core/module.nino") == "pkg/core", "path_dirname must extract directory")
+    require(path_ext("module.nino") == ".nino", "path_ext must extract extension")
+
+    let u1 = uuid_v4_from_seed("req_1")
+    let u2 = uuid_v4_from_seed("req_2")
+    require(len(u1) == 36, "UUID v4 must be 36 characters")
+    require(char_at(u1, 14) == "4", "UUID v4 version nibble at index 14 must be 4")
+    require(u1 != u2, "Distinct seeds must produce distinct UUIDs")
+    require(hex_decode(hex_encode("NinoLang2026")) == "NinoLang2026", "Hex codec roundtrip must match")
+    require(base64_encode("Nino") == "Tmlubw==", "Base64 encoding of Nino must equal Tmlubw==")
+
+    let env_file = "temp_app.env"
+    fs_write_text(env_file, "DB_HOST = \"10.0.0.55\"\nAPI_SECRET = 'nino_prod_key_88'\n")
+    require(dotenv_get_from_file(env_file, "DB_HOST", "localhost") == "10.0.0.55", "dotenv must parse double-quoted value")
+    require(dotenv_get_from_file(env_file, "API_SECRET", "") == "nino_prod_key_88", "dotenv must parse single-quoted value")
+    require(dotenv_get_from_file(env_file, "UNSET_VAR", "fallback_val") == "fallback_val", "dotenv must return default for unset key")
+    fs_remove(env_file)
+
+    print("        -> JSON, HTTP, FS/Path, String, UUID/Base64/Hex & Dotenv Stdlib: [OK]")
+    return 0
+}
+
+fn verify_high_density_and_equiv_sbom(ninoc_bin: string) -> int {
+    print("  [8/8] Verifying High-Density Primitives, Equivalence Prover (equiv) & SBOM Generator...")
+    let cm = CompactModel { id: 901, label: "HighDensity", verified: true }
+    let cm_json = cm |> CompactModel_to_json()
+    let cm_back = cm_json |> CompactModel_from_json()
+    require(CompactModel_eq(cm, cm_back), "Compile-time struct JSON roundtrip must match")
+
+    let piped_str = "  nino_future_v1  " |> str_trim() |> str_to_upper() |> str_replace("FUTURE", "CORE")
+    require(piped_str == "NINO_CORE_V1", "Universal expression pipe must chain multi-argument transformations")
+
+    let parts = "alpha,beta,gamma" |> str_split(",")
+    require(len(parts) == 3, "str_split must split string into 3 elements")
+    let joined = parts |> str_join("|")
+    require(joined == "alpha|beta|gamma", "str_join must join string array with separator")
+
+    let nums = [40, 10, 30, 20] |> arr_sort()
+    require(nums[0] == 10 && nums[3] == 40, "arr_sort must sort integer array ascending")
+    require((nums |> arr_sum()) == 100, "arr_sum must sum sorted elements to 100")
+    require(arr_contains(nums, 30) == true && arr_contains(nums, 99) == false, "arr_contains must check membership")
+
+    require(regex_match("^NINO_\\w+_\\d+$", "NINO_CORE_2026") == true, "regex_match must validate pattern")
+    let csv_txt = "id,name,score\n1,\"Alice, PhD\",95\n"
+    require(csv_row_count(csv_txt) == 2 && csv_get_cell(csv_txt, 1, 1) == "Alice, PhD", "CSV parser must handle quoted commas")
+
+    let eq_v1 = "temp_eq_v1.nino"
+    let eq_v2 = "temp_eq_v2.nino"
+    let eq_bad = "temp_eq_bad.nino"
+    write_file(eq_v1, "fn calc_fee(x: int, y: int) -> int {\n    require(x > 0 && y > 0, \"pos\")\n    let res = (x + y) * 2\n    return res\n}\n")
+    write_file(eq_v2, "fn calc_fee(x: int, y: int) -> int {\n    require(x > 0 && y > 0, \"pos\")\n    let res = x * 2 + y * 2\n    return res\n}\n")
+    write_file(eq_bad, "fn calc_fee(x: int, y: int) -> int {\n    require(x > 0 && y > 0, \"pos\")\n    let res = x * 2 + y\n    return res\n}\n")
+
+    let eq_ok_rc = exec_cmd(ninoc_bin + " equiv " + eq_v1 + " " + eq_v2)
+    require(eq_ok_rc == 0, "ninoc equiv must return 0 (UNSAT) for algebraically equivalent functions")
+    let eq_bad_rc = exec_cmd(ninoc_bin + " equiv " + eq_v1 + " " + eq_bad)
+    require(eq_bad_rc != 0, "ninoc equiv must return non-zero (SAT) when functions diverge")
+
+    let sbom_out = "temp_eq.sbom.json"
+    let sbom_rc = exec_cmd(ninoc_bin + " sbom " + eq_v1 + " -o " + sbom_out)
+    require(sbom_rc == 0 && file_exists(sbom_out), "ninoc sbom must emit CycloneDX SBOM file")
+    let sbom_body = read_file(sbom_out)
+    require(str_contains(sbom_body, "CycloneDX") && str_contains(sbom_body, "SHA-256"), "SBOM must contain CycloneDX and SHA-256")
+
+    file_delete(eq_v1)
+    file_delete(eq_v2)
+    file_delete(eq_bad)
+    file_delete(sbom_out)
+    print("        -> Auto Struct JSON, Expression Pipe, Vector/Regex/CSV, Z3 Equiv & SBOM: [OK]")
+    return 0
+}
+
+fn verify_lambdas_threads_and_ffi() -> int {
+    print("  [9/9] Verifying Higher-Order Lambdas, Nested Structs, OS Threads & Cryptographic FFI...")
+
+    let evens = [1, 2, 3, 4, 5, 6] |> arr_filter(|x| x % 2 == 0)
+    let scaled = evens |> arr_map(|x| x * 10)
+    let total_sum = scaled |> arr_reduce(0, |acc, x| acc + x)
+    require(len(evens) == 3 && total_sum == 120, "Inline lambda filter/map/reduce pipeline must yield 120")
+
+    let inner_m = CompactModel { id: 77, label: "NestedCore", verified: true }
+    let ep = NestedEndpoint { service: "gateway_v1", model: inner_m, port: 8443 }
+    let ep_json = ep |> NestedEndpoint_to_json()
+    let ep_decoded = ep_json |> NestedEndpoint_from_json()
+    require(NestedEndpoint_eq(ep, ep_decoded), "Nested struct JSON serialization/deserialization must be lossless")
+    require(ep_decoded.model.id == 77 && ep_decoded.model.label == "NestedCore", "Nested struct fields must roundtrip accurately")
+
+    require(cpu_core_count() >= 1, "Hardware CPU core count must be at least 1")
+    let main_tid = current_thread_id()
+    let th1 = thread_spawn(parallel_sum_squares, 100)
+    let th2 = thread_spawn(parallel_sum_squares, 200)
+    let res1 = thread_join(th1)
+    let res2 = thread_join(th2)
+    require(res1 == 338350 && res2 == 2686700, "Parallel OS kernel threads must compute exact sum of squares")
+    let worker_tid = thread_os_id(th1)
+    require(worker_tid != 0 && worker_tid != main_tid, "Worker thread must execute on a distinct OS kernel thread")
+
+    let rfc4231_hmac = hmac_sha256("Jefe", "what do ya want for nothing?")
+    require(rfc4231_hmac == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", "hmac_sha256 must match IETF RFC 4231 Test Vector 2")
+
+    let jwt_tok = jwt_sign_hs256("{\"sub\":\"user_101\",\"role\":\"admin\"}", "nino_hs256_secret")
+    require(jwt_verify_hs256(jwt_tok, "nino_hs256_secret") == true, "Valid JWT HS256 token must verify true")
+    require(jwt_verify_hs256(jwt_tok, "wrong_secret") == false, "JWT HS256 token with wrong secret must fail verification")
+
+    let libc_h = ffi_open_system_lib("libc")
+    require(libc_h != 0, "ffi_open_system_lib must open host C standard library")
+    let strlen_sym = dylib_sym(libc_h, "strlen")
+    require(strlen_sym != 0, "dylib_sym must resolve strlen from host C library")
+    require(dylib_call_c_strlen(strlen_sym, "NinoSystemFFI_2026") == 18, "Host C library strlen must return 18")
+
+    let lint_ok = exec_cmd(resolve_ninoc_bin() + " lint --strict examples/pcc_sound_demo.nino")
+    require(lint_ok == 0, "ninoc lint --strict must pass on sound non-recursive source")
+
+    print("        -> Inline Lambdas, Nested Struct JSON, Multi-Core OS Threads, Linter & RFC 4231/7519 FFI: [OK]")
+    return 0
+}
+
+struct CustomAuditCounter {
+    mut count: int,
+    label: string
+}
+
+fn mutate_custom_counter(mut c: CustomAuditCounter, delta: int) {
+    c.count = c.count + delta
+}
+
+fn audit_scoped_string_fn() -> string {
+    mut out = "SCOPED_STRING_A"
+    return out + "_OK"
+}
+
+fn audit_scoped_int_fn(out: int) -> int {
+    mut local_v = out + 10
+    if local_v == 25 {
+        return local_v + 5
+    }
+    return 0
+}
+
+struct CheckedCounterBox {
+    mut c: int,
+    tag: string
+}
+
+fn scoped_str_binding_sample() -> string {
+    let k = "str_k"
+    let x = "str_x"
+    return k + "_" + x
+}
+
+fn scoped_int_loop_sample() -> int {
+    mut tot = 0
+    for k in 0..5 {
+        if k == 3 {
+            tot = tot + k + 1
+        }
+    }
+    let mapped = [1, 2, 3] |> arr_map(|x| x + 1)
+    return tot + mapped[2]
+}
+
+fn mut_second_param_writeback(bump: int, mut ctr: CheckedCounterBox) -> int {
+    ctr.c = ctr.c + bump
+    if bump > 100 { return 777 }
+    return ctr.c
+}
+
+fn single_eval_collection_probe(mut state: [int]) -> [int] {
+    state[0] = state[0] + 1
+    return [10, 20, 30]
+}
+
+fn audit_escaped_quote_arg(payload: string, key: string) -> int {
+    return len(payload) + len(key)
+}
+
+fn verify_security_and_compiler_invariants(ninoc_bin: string) -> int {
+    print("  [10/10] Verifying Scoped Symbols, Arena Promotion, Ring-LWE/ZKP & Compiler Guards...")
+    require(audit_scoped_string_fn() == "SCOPED_STRING_A_OK", "Function string return type scope must remain intact")
+    require(audit_scoped_int_fn(15) == 30, "Integer parameter with matching name must not collide with string symbol table")
+
+    let kp = pq_generate_keypair(768)
+    let kp2 = pq_generate_keypair(768)
+    let pk = kp["public_key"]
+    let sk = kp["private_key"]
+    let sk2 = kp2["private_key"]
+    require(str_starts_with(pk, "RLWE64_PK:") && str_starts_with(sk, "RLWE64_SK:"), "Keypair must use RLWE64 format")
+    let enc1 = pq_encapsulate(pk)
+    let enc2 = pq_encapsulate(pk)
+    let ct1 = enc1["ciphertext"]
+    let ss1 = enc1["shared_secret"]
+    let ss2 = enc2["shared_secret"]
+    require(str_starts_with(ct1, "RLWE64_CT:") && len(ss1) == 64 && ss1 != ss2, "Ring-LWE64 KEM encapsulation must generate randomized shared secrets")
+    require(pq_decapsulate(ct1, sk) == ss1, "Ring-LWE64 KEM decapsulation with matching secret key must recover exact shared secret")
+    require(pq_decapsulate(ct1, sk2) != ss1, "Ring-LWE64 KEM decapsulation with mismatched secret key must not recover secret")
+    require(pq_decapsulate(ct1, pk) == "", "KEM decapsulation using public key instead of secret key must be rejected")
+
+    let forged_sig = pq_sign("VERIFIED_MSG", pk)
+    require(forged_sig == "", "Signing with public key instead of secret key must be rejected")
+    let real_sig = pq_sign("VERIFIED_MSG", sk)
+    require(str_starts_with(real_sig, "SP_SCHNORR_SIG:"), "Signature must use 61-bit safe-prime SP_SCHNORR_SIG format")
+    require(pq_verify("VERIFIED_MSG", real_sig, pk) == true, "Valid safe-prime Schnorr signature must verify true")
+    require(pq_verify("TAMPERED_MSG", real_sig, pk) == false, "Schnorr verification must reject altered message")
+    require(pq_verify("VERIFIED_MSG", real_sig + "tamper", pk) == false, "Schnorr verification must reject trailing tamper bytes")
+    let last_nib = char_at(real_sig, len(real_sig) - 1)
+    let flipped_sig = slice(real_sig, 0, len(real_sig) - 1) + (last_nib == "0" ? "1" : "0")
+    require(pq_verify("VERIFIED_MSG", flipped_sig, pk) == false, "Schnorr verification must reject modified hex nibble")
+    require(pq_verify("VERIFIED_MSG", forged_sig, pk) == false, "Empty signature must verify false")
+
+    let zk_p = zk_prove_condition(85000, ">", 50000)
+    require(str_starts_with(zk_p["commitment"], "PEDERSEN_GQ_"), "ZK range proof must use PEDERSEN_GQ_ commitment")
+    require(str_starts_with(zk_p["proof_tag"], "ZKR48:") && zk_verify_proof(zk_p) == true, "Valid 48-bit CDS OR-Sigma proof must verify true")
+    let zk_lt = zk_prove_condition(123, "<", 500)
+    require(zk_verify_proof(zk_lt) == true, "48-bit CDS OR-Sigma < proof must verify true")
+    let zk_eq = zk_prove_condition(4200, "==", 4200)
+    require(str_starts_with(zk_eq["proof_tag"], "ZKEQ:") && zk_verify_proof(zk_eq) == true, "ZKEQ Pedersen Schnorr == proof must verify true")
+    let zk_ne = zk_prove_condition(700, "!=", 500)
+    require(zk_verify_proof(zk_ne) == true, "48-bit CDS OR-Sigma != proof must verify true")
+    let zk_false = zk_prove_condition(10, ">", 50000)
+    require(zk_verify_proof(zk_false) == false, "Unsatisfied predicate proof must verify false")
+    mut zk_tamper = zk_prove_condition(85000, ">", 50000)
+    zk_tamper["threshold"] = "50001"
+    require(zk_verify_proof(zk_tamper) == false, "ZK verification must reject tampered threshold")
+
+    let m_arena = arena_mark()
+    let long_s = "A_VERY_LONG_ARENA_STRING_BUFFER_" + int_to_str(123456)
+    require(len(long_s) > 20, "Long arena string must be allocated")
+    arena_rollback(m_arena)
+    let short_s = "SHORT_" + int_to_str(1)
+    require(len(short_s) == 7, "String length after arena_rollback must match exact 7 characters")
+
+    sealed let sec_enclave = "SEALED_SURVIVES_ROLLBACK"
+    mut outer_log = [0]
+    for iter_i in 0..200 {
+        let mk_r2 = arena_mark()
+        let inner_txt = "INNER_TRANSIENT_" + int_to_str(iter_i)
+        let inner_arr = [iter_i, iter_i + 1, len(inner_txt)]
+        require(len(inner_arr) == 3, "Inner array must be usable before rollback")
+        outer_log = push(outer_log, iter_i)
+        arena_rollback(mk_r2)
+    }
+    require(len(outer_log) == 201 && outer_log[1] == 0 && outer_log[200] == 199, "Outer growing array must promote cleanly across 200 arena_mark/rollback cycles")
+    require(heap_live_arrays() >= 1, "Heap-promoted array must register in live array tracker")
+    let local_arena_arr = [7, 8, 9]
+    arr_free(local_arena_arr)
+    require(heap_live_arrays() >= 1, "arr_free on arena-owned array must be a safe no-op")
+    arr_free(outer_log)
+    arr_free(outer_log)
+    require(heap_live_arrays() == 0, "arr_free must release heap-promoted arrays cleanly without double-free")
+    require(unseal(sec_enclave) == "SEALED_SURVIVES_ROLLBACK", "Heap-isolated sealed value must survive 200 arena rollbacks")
+
+    let mlk = pq_generate_keypair(512)
+    let mlk2 = pq_generate_keypair(512)
+    let mpk = mlk["public_key"]
+    let msk = mlk["private_key"]
+    require(len(mpk) == 1582 && str_starts_with(mpk, "MLKEM512_PK:"), "Category-1 keygen must emit 1582-char MLKEM512_PK")
+    require(len(msk) == 319 && str_starts_with(msk, "MLKEM512_SK:"), "Category-1 keygen must emit 319-char MLKEM512_SK")
+    let menc = pq_encapsulate(mpk)
+    let mct = menc["ciphertext"]
+    let mss = menc["shared_secret"]
+    require(len(mct) == 2316 && str_starts_with(mct, "MLKEM512_CT:") && len(mss) == 64, "Category-1 ML-KEM-512 ciphertext must be 2316 chars with 256-bit SHA-256 secret")
+    require(pq_decapsulate(mct, msk) == mss, "Category-1 ML-KEM-512 decapsulation must recover exact shared secret")
+    require(pq_decapsulate(mct, mlk2["private_key"]) != mss, "Category-1 ML-KEM-512 decapsulation with mismatched secret key must fail")
+    let msig = pq_sign("CAT1_MSG", msk)
+    require(pq_verify("CAT1_MSG", msig, mpk) == true, "Schnorr signature under MLKEM512 keypair must verify true")
+    require(pq_verify("CAT1_ALT", msig, mpk) == false, "Schnorr verification must reject altered message on MLKEM512 keypair")
+
+    mut cfg_dict = { "host": "127.0.0.1" }
+    cfg_dict["port"] = 8080
+    require(cfg_dict["port"] == "8080", "Dictionary integer indexed assignment must auto-convert cleanly")
+
+    mut ctr = CustomAuditCounter { count: 100, label: "counter" }
+    mutate_custom_counter(ctr, 55)
+    require(ctr.count == 155, "User struct mut parameter must mutate caller struct in place")
+
+    require(scoped_str_binding_sample() == "str_k_str_x" && scoped_int_loop_sample() == 8, "String variables in one function must not collide with loop or lambda identifiers in another")
+    mut cbox = CheckedCounterBox { c: 10, tag: "init" }
+    let wb_ret = mut_second_param_writeback(200, cbox)
+    require(wb_ret == 777 && cbox.c == 210, "Second-position mut struct parameter with .c field must write back on single-line return")
+
+    mut se_state = [0]
+    mut se_sum = 0
+    for se_item in single_eval_collection_probe(se_state) {
+        se_sum = se_sum + se_item
+    }
+    require(se_state[0] == 1 && se_sum == 60, "Collection for-loop expression must evaluate exactly once")
+
+    let esc_len = audit_escaped_quote_arg("{\"a\":1, \"b\":2}", "b")
+    require(esc_len == 15, "Argument parser must ignore commas inside escaped quotes")
+
+    let shift_val = 16 >> 1 << 2
+    let bit_val = (len("abc") & 1) | 4
+    require(shift_val == 32 && bit_val == 5, "Shift precedence and bitwise operators must evaluate left-to-right")
+
+    let m_arr = arena_mark()
+    let parts = str_split("alpha,beta,gamma,delta", ",")
+    let mapped_a = [10, 20, 30, 40] |> arr_map(|x| x + 1)
+    require(len(parts) == 4 && len(mapped_a) == 4, "Arena arrays must allocate cleanly")
+    arena_rollback(m_arr)
+    require(arena_used() == m_arr, "arena_rollback must reclaim transient dynamic array allocations cleanly")
+
+    mut run_pfx = "./"
+    if is_windows() {
+        run_pfx = ".\\"
+    }
+    let cmt_prefix = "/" + "/ don't panic (unbalanced\n"
+    let cmt_src = cmt_prefix + "fn main() -> int {\n    let ok_v = 42\n    return 0\n}\n"
+    let cmt_file = "temp_r2_cmt.nino"
+    let cmt_exe = "temp_r2_cmt.exe"
+    write_file(cmt_file, cmt_src)
+    require(exec_cmd(ninoc_bin + " build " + cmt_file + " -o " + cmt_exe) == 0, "Compiler must ignore // comments containing apostrophes or unbalanced parens")
+    require(exec_cmd(run_pfx + cmt_exe + " --verify-proof") != 0, "Uncertified binary --verify-proof must exit non-zero")
+
+    let qm = "\""
+    let bs_n = "\\n"
+    let j_txt = "/" + "/ don't panic (unbalanced" + bs_n + "fn main() -> int {" + bs_n + "    let v = 42" + bs_n + "    return 0" + bs_n + "}" + bs_n
+    let f1 = "{" + qm + "jsonrpc" + qm + ":" + qm + "2.0" + qm + "," + qm + "id" + qm + ":1," + qm + "method" + qm + ":" + qm + "initialize" + qm + "," + qm + "params" + qm + ":{}}"
+    let f2 = "{" + qm + "jsonrpc" + qm + ":" + qm + "2.0" + qm + "," + qm + "method" + qm + ":" + qm + "textDocument/didOpen" + qm + "," + qm + "params" + qm + ":{" + qm + "textDocument" + qm + ":{" + qm + "uri" + qm + ":" + qm + "file:///check.nino" + qm + "," + qm + "text" + qm + ":" + qm + j_txt + qm + "}}}"
+    let f3 = "{" + qm + "jsonrpc" + qm + ":" + qm + "2.0" + qm + "," + qm + "id" + qm + ":2," + qm + "method" + qm + ":" + qm + "shutdown" + qm + "}"
+    let f4 = "{" + qm + "jsonrpc" + qm + ":" + qm + "2.0" + qm + "," + qm + "method" + qm + ":" + qm + "exit" + qm + "}"
+    let lsp_stream = "Content-Length: " + int_to_str(len(f1)) + "\r\n\r\n" + f1 + "Content-Length: " + int_to_str(len(f2)) + "\r\n\r\n" + f2 + "Content-Length: " + int_to_str(len(f3)) + "\r\n\r\n" + f3 + "Content-Length: " + int_to_str(len(f4)) + "\r\n\r\n" + f4
+    let lsp_in = "temp_r2_lsp.in"
+    let lsp_out = "temp_r2_lsp.out"
+    write_file(lsp_in, lsp_stream)
+    let lsp_rc = exec_cmd(ninoc_bin + " lsp < " + lsp_in + " > " + lsp_out)
+    let lsp_resp = read_file(lsp_out)
+    require(lsp_rc == 0 && str_contains(lsp_resp, qm + "diagnostics" + qm + ":[]"), "LSP must report empty diagnostics for // comments with apostrophes and unbalanced parens")
+
+    let sh_bad_rc = exec_cmd(ninoc_bin + " build " + cmt_file + " --shared -o " + qm + "bad;pwn.dll" + qm)
+    require(sh_bad_rc != 0, "Shared library builder must reject shell metacharacters in -o path")
+
+    file_delete(cmt_file)
+    file_delete(cmt_exe)
+    file_delete("temp_r2_cmt.nino.c")
+    file_delete(lsp_in)
+    file_delete(lsp_out)
+
+    let rel_src = "temp_rel_pqc.nino"
+    let rel_exe = "temp_rel_pqc.exe"
+    let rel_out = "temp_rel_pqc.out"
+    write_file(rel_src, "fn main() -> int {\n    let k = pq_generate_keypair(768)\n    print(k[\"public_key\"])\n    return 0\n}\n")
+    require(exec_cmd(ninoc_bin + " build " + rel_src + " -o " + rel_exe + " --release-pqc") == 0, "--release-pqc build must succeed")
+    require(exec_cmd(run_pfx + rel_exe + " > " + rel_out) == 0 && str_starts_with(str_trim(read_file(rel_out)), "MLKEM512_PK:"), "--release-pqc must upgrade default keygen to MLKEM512_PK")
+    file_delete(rel_src)
+    file_delete(rel_exe)
+    file_delete("temp_rel_pqc.nino.c")
+    file_delete(rel_out)
+
+    let ind_ok_src = "temp_ind_ok.nino"
+    let ind_ok_exe = "temp_ind_ok.exe"
+    let ind_ok_code = "fn sum_pos(n: int) -> int {\n    require(n >= 0 && n <= 1000, \"nonneg bounded\")\n    mut i = 0\n    mut acc = 0\n    while i <= n {\n        invariant(i >= 0 && i <= n + 1 && acc >= 0 && acc <= i * 1000, \"loop safety\")\n        acc = acc + i\n        i = i + 1\n    }\n    ensure(acc >= 0 && i > n, \"exit proved\")\n    return acc\n}\nfn abs_path(x: int) -> int {\n    require(x > -9223372036854775807, \"avoid INT64_MIN negation overflow\")\n    if x >= 0 {\n        ensure(x >= 0, \"pos branch\")\n        return x\n    } else {\n        ensure(0 - x > 0, \"neg branch\")\n        return 0 - x\n    }\n}\nfn count_to(m: int) -> int {\n    require(m >= 0 && m <= 1000000, \"nonneg bounded\")\n    mut s_cnt = 0\n    for k in 0..m {\n        invariant(k >= 0 && k <= m && s_cnt >= 0 && s_cnt <= k, \"for inv\")\n        s_cnt = s_cnt + 1\n    }\n    ensure(s_cnt >= 0, \"for exit proved\")\n    return s_cnt\n}\nfn main() -> int {\n    print(sum_pos(5) + abs_path(-4) + count_to(3))\n    return 0\n}\n"
+    write_file(ind_ok_src, ind_ok_code)
+    require(exec_cmd(ninoc_bin + " build " + ind_ok_src + " -o " + ind_ok_exe + " --proof") == 0, "Z3 must formally prove path-sensitive and inductive while/for loop invariants")
+    require(exec_cmd(run_pfx + ind_ok_exe) == 0 && exec_cmd(run_pfx + ind_ok_exe + " --verify-proof") == 0, "Inductively certified binary must execute and self-verify with exit code 0")
+
+    let ind_bad_src = "temp_ind_bad.nino"
+    let ind_bad_exe = "temp_ind_bad.exe"
+    write_file(ind_bad_src, "fn bad_loop(n: int) -> int {\n    require(n >= 0, \"nonneg\")\n    mut i = 0\n    while i <= n {\n        invariant(i >= 0 && i < n, \"broken inv\")\n        i = i + 1\n    }\n    return i\n}\nfn main() -> int { return 0 }\n")
+    require(exec_cmd(ninoc_bin + " build " + ind_bad_src + " -o " + ind_bad_exe + " --proof") != 0, "Z3 must reject unsound inductive loop invariant")
+    file_delete(ind_ok_src)
+    file_delete(ind_ok_exe)
+    file_delete("temp_ind_ok.nino.c")
+    file_delete(ind_bad_src)
+    file_delete(ind_bad_exe)
+
+    let ll_src = "temp_ssa_ir.nino"
+    let ll_out = "temp_ssa_ir.ll"
+    write_file(ll_src, "fn add_sq(a: int, b: int) -> int {\n    require(a >= 0, \"ok\")\n    let s = a + b\n    return s\n}\nfn main() -> int {\n    let r = add_sq(3, 4)\n    print(r)\n    return 0\n}\n")
+    require(exec_cmd(ninoc_bin + " llvm " + ll_src + " -o " + ll_out) == 0, "ninoc llvm must succeed natively via direct SSA lowering")
+    let ll_txt = read_file(ll_out)
+    require(str_contains(ll_txt, "define i64 @add_sq(") && str_contains(ll_txt, "add nsw i64") && str_contains(ll_txt, "icmp sge i64") && str_contains(ll_txt, "\\00\"") && str_contains(ll_txt, "@nino_require"), "Generated LLVM IR must contain native SSA function, add nsw, icmp sge, NUL string, and require call")
+    file_delete(ll_src)
+    file_delete(ll_out)
+
+    print("        -> Scoped Symbols, Arena Promotion/Release, ML-KEM-512, Inductive Z3 & LLVM IR: [OK]")
+    return 0
+}
+
+fn main() -> int {
+    print("================================================================================")
+    print("[Nino Toolchain, Mobile FFI & Standard Library Verification Suite]")
+    print("================================================================================")
+    let ninoc_bin = resolve_ninoc_bin()
+    verify_flight_recorder()
+    verify_native_bindgen(ninoc_bin)
+    verify_witness_synthesizer(ninoc_bin)
+    verify_canonical_formatter(ninoc_bin)
+    verify_mobile_and_shared_lib(ninoc_bin)
+    verify_dynamic_runtime_engines()
+    verify_batteries_included_stdlib()
+    verify_high_density_and_equiv_sbom(ninoc_bin)
+    verify_lambdas_threads_and_ffi()
+    verify_security_and_compiler_invariants(ninoc_bin)
+    print("================================================================================")
+    print("SUCCESS: All 10 Toolchain, Multi-Core Runtime & Compiler Invariant Checks Passed!")
+    print("================================================================================")
+    return 0
+}

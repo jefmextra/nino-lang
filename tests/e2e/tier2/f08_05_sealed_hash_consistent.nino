@@ -1,0 +1,6 @@
+fn main() -> int {
+    sealed key = "MY_PRIVATE_KEY"
+    let d = sha256(key)
+    print(d)
+    return 0
+}

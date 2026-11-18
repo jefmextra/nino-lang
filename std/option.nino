@@ -1,0 +1,65 @@
+struct OptionI64 {
+    is_some: bool,
+    val: i64
+}
+
+fn some_i64(v: i64) -> OptionI64 {
+    return (OptionI64){ .is_some = true, .val = v }
+}
+
+fn none_i64() -> OptionI64 {
+    return (OptionI64){ .is_some = false, .val = 0 }
+}
+
+fn option_i64_is_some(opt: OptionI64) -> bool {
+    return opt.is_some
+}
+
+fn option_i64_is_none(opt: OptionI64) -> bool {
+    return !opt.is_some
+}
+
+fn option_i64_unwrap(opt: OptionI64) -> i64 {
+    require(opt.is_some, "Called option_unwrap on a None value")
+    return opt.val
+}
+
+fn option_i64_unwrap_or(opt: OptionI64, default_val: i64) -> i64 {
+    if opt.is_some {
+        return opt.val
+    }
+    return default_val
+}
+
+struct OptionStr {
+    is_some: bool,
+    val: str
+}
+
+fn some_str(v: str) -> OptionStr {
+    return (OptionStr){ .is_some = true, .val = v }
+}
+
+fn none_str() -> OptionStr {
+    return (OptionStr){ .is_some = false, .val = "" }
+}
+
+fn option_str_is_some(opt: OptionStr) -> bool {
+    return opt.is_some
+}
+
+fn option_str_is_none(opt: OptionStr) -> bool {
+    return !opt.is_some
+}
+
+fn option_str_unwrap(opt: OptionStr) -> str {
+    require(opt.is_some, "Called option_unwrap on a None value")
+    return opt.val
+}
+
+fn option_str_unwrap_or(opt: OptionStr, default_val: str) -> str {
+    if opt.is_some {
+        return opt.val
+    }
+    return default_val
+}

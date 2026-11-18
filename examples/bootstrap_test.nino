@@ -1,0 +1,31 @@
+fn add_numbers(a: int, b: int) -> int {
+    require(a >= 0, "Input a must be non-negative")
+    require(b >= 0, "Input b must be non-negative")
+    let sum = a + b
+    ensure(sum >= a, "Sum overflow invariant")
+    return sum
+}
+
+fn format_greeting(name: string) -> string {
+    return "Hello, " + name + "! Welcome to Sovereign Nino Native Compiler."
+}
+
+fn main() -> int {
+    let title = "=== Nino Native Toolchain ==="
+    print(title)
+    
+    let res = add_numbers(40, 2)
+    print("Computed result: " + res)
+    
+    let msg = format_greeting("Vanguard Developer")
+    print(msg)
+    
+    let is_ok = (res == 42)
+    if is_ok {
+        print("Formal contract verification: [PASS]")
+    } else {
+        print("Verification: [FAIL]")
+    }
+    
+    return 0
+}

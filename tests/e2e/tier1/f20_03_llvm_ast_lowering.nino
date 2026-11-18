@@ -1,0 +1,23 @@
+fn helper(v: int) -> int { return v + 10 }
+
+fn compute(a: int, b: int) -> int {
+    require(b != 0, "divisor nonzero")
+    mut x = (a + b) * 3
+    x = helper(x)
+    mut r = 0
+    if x > 100 {
+        r = a / b + 1
+    } else if x > 20 {
+        r = a / b + 2
+    } else {
+        r = 7
+    }
+    ensure(r >= 0 || r < 0, "valid integer")
+    return r
+}
+
+fn main() -> int {
+    let ans = compute(20, 4)
+    print(ans)
+    return 0
+}

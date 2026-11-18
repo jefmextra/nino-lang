@@ -1,0 +1,74 @@
+struct DatabaseConnection {
+    driver: str,
+    conn_id: str,
+    host: str,
+    port: i64,
+    mut is_active: bool
+}
+
+struct QueryResult {
+    columns: [str],
+    mut rows: [any],
+    affected_rows: i64
+}
+
+fn db_sqlite_open_conn(filepath: str) -> DatabaseConnection {
+    require(len(filepath) > 0, "Database path cannot be empty")
+    let cid = db_sqlite_open(filepath)
+    return DatabaseConnection {
+        driver: "sqlite",
+        conn_id: cid,
+        host: "local",
+        port: 0,
+        is_active: len(cid) > 0
+    }
+}
+
+fn db_postgres_connect_conn(host: str, port: i64, user: str, dbname: str) -> DatabaseConnection {
+    require(len(host) > 0, "PostgreSQL host cannot be empty")
+    require(port > 0, "PostgreSQL port must be positive")
+    let cid = db_postgres_connect(host, port, user, dbname)
+    return DatabaseConnection {
+        driver: "postgres",
+        conn_id: cid,
+        host: host,
+        port: port,
+        is_active: len(cid) > 0
+    }
+}
+
+fn db_redis_connect_conn(host: str, port: i64) -> DatabaseConnection {
+    require(len(host) > 0, "Redis host cannot be empty")
+    require(host == ":memory:" || port > 0, "Redis port must be positive")
+    let cid = db_redis_connect(host, port)
+    return DatabaseConnection {
+        driver: "redis",
+        conn_id: cid,
+        host: host,
+        port: port,
+        is_active: len(cid) > 0
+    }
+}
+
+fn db_execute_query(conn: DatabaseConnection, sql_str: str, params: [any]) -> [any] {
+    require(conn.is_active, "Cannot query an inactive database connection")
+    return db_query(conn.conn_id, sql_str, params)
+}
+
+fn db_execute_update(conn: DatabaseConnection, sql_str: str, params: [any]) -> i64 {
+    require(conn.is_active, "Cannot update an inactive database connection")
+    return db_exec(conn.conn_id, sql_str, params)
+}
+
+fn db_redis_command(conn: DatabaseConnection, cmd: str, args: [str]) -> str {
+    require(conn.is_active, "Cannot execute command on inactive Redis connection")
+    return db_redis_cmd(conn.conn_id, cmd, args)
+}
+
+fn db_disconnect(mut conn: DatabaseConnection) -> bool {
+    if !conn.is_active {
+        return false
+    }
+    conn.is_active = false
+    return db_close(conn.conn_id)
+}

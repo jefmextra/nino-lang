@@ -1,0 +1,56 @@
+fn allocate_hardened_buffer(requested_size: i32) -> i32 {
+    require(requested_size > 0, "Buffer size must be strictly positive")
+    require(requested_size % 16 == 0, "Buffer size must adhere to 16-byte alignment")
+
+    let allocated = requested_size + 32
+    ensure(allocated > requested_size, "Allocated buffer must exceed requested payload")
+
+    return allocated
+}
+
+fn main() {
+    print("==================================================")
+    print("   NINO TRANSACTIONS, CONTRACTS & ENCLAVE DEMO    ")
+    print("==================================================")
+
+    print("\n--- [1] Morphic Dynamic Memory Masking ---")
+    morphic mut root_balance = 50000
+    print("Morphic Variable Read (Initial): {root_balance}")
+    root_balance = root_balance + 25000
+    print("Morphic Variable Read (Mutated): {root_balance}")
+    print("-> Status: Physical memory address & XOR masks dynamically shift on every read!")
+
+    print("\n--- [2] Atomic Software Transaction & State Rollback ---")
+    mut vault_balance = 1000
+    print("Vault Balance BEFORE Transaction: {vault_balance}")
+
+    transact {
+        print("  [Transact Scope] Attempting risky fund withdrawal...")
+        vault_balance = vault_balance - 900
+        print("  [Transact Scope] Uncommitted intermediate balance: {vault_balance}")
+
+        let security_check_passed = false
+        guard security_check_passed else {
+            print("  [Transact Scope] Security check failed! Triggering abort...")
+            abort "Untrusted signature detected during transaction"
+        }
+    } compensate {
+        print("  [Compensate Handler] Transaction aborted! Memory snapshot fully restored.")
+        vault_balance = 1000
+    }
+
+    print("Vault Balance AFTER Rollback: {vault_balance} (Zero corruption!)")
+
+    print("\n--- [3] Formal Invariant Contract Verification ---")
+    let verified_buffer = allocate_hardened_buffer(128)
+    print("Allocated Hardened Buffer: {verified_buffer} bytes [CONTRACT SATISFIED]")
+
+    print("\n--- [4] Sealed Cryptographic Memory Protection ---")
+    sealed let master_private_key = "RSA_PRIVATE_KEY_SECURE_987654321"
+    print("Sealed Secret initialized safely in protected vault memory.")
+    print("Authorized Explicit Unseal Output: " + unseal(master_private_key))
+    print("-> Note: Attempting raw 'print(master_private_key)' without unseal() is blocked by compiler guard!")
+
+    print("\n==================================================")
+    print("All Transaction, Contract & Enclave Checks Passed! [SUCCESS]")
+}

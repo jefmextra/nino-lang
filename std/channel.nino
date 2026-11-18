@@ -1,0 +1,55 @@
+struct Channel {
+    capacity: i64,
+    mut buffer: [str],
+    mut is_closed: bool
+}
+
+fn channel_create(capacity: i64) -> Channel {
+    require(capacity > 0, "Channel capacity must be positive")
+    return Channel {
+        capacity: capacity,
+        buffer: [],
+        is_closed: false
+    }
+}
+
+fn channel_send(mut ch: Channel, val: str) -> bool {
+    require(!ch.is_closed, "Cannot send on closed channel")
+    if len(ch.buffer) >= ch.capacity {
+        return false
+    }
+    ch.buffer = push(ch.buffer, val)
+    return true
+}
+
+fn channel_recv(mut ch: Channel) -> str {
+    let total = len(ch.buffer)
+    if total == 0 {
+        return ""
+    }
+    let val = ch.buffer[0]
+    if total > 1 {
+        for i in 1..total {
+            ch.buffer[i - 1] = ch.buffer[i]
+        }
+    }
+    ch.buffer = pop(ch.buffer)
+    return val
+}
+
+fn channel_is_full(ch: Channel) -> bool {
+    return len(ch.buffer) >= ch.capacity
+}
+
+fn channel_is_empty(ch: Channel) -> bool {
+    return len(ch.buffer) == 0
+}
+
+fn channel_len(ch: Channel) -> i64 {
+    return len(ch.buffer)
+}
+
+fn channel_close(mut ch: Channel) -> bool {
+    ch.is_closed = true
+    return true
+}

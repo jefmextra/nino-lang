@@ -1,0 +1,13 @@
+fn leak_helper() -> string {
+    mut outer_s: string = "init"
+    let m = arena_mark()
+    let inner_s = "ephemeral_" + int_to_str(99)
+    outer_s = inner_s
+    arena_rollback(m)
+    return outer_s
+}
+
+fn main() -> int {
+    print(leak_helper())
+    return 0
+}

@@ -1,0 +1,9 @@
+fn ok(x: int) -> int {
+    require(x > 0, "pos")
+    ensure(x > 0, "pos")
+    return x
+}
+
+fn main() -> int {
+    return ok(1)
+}

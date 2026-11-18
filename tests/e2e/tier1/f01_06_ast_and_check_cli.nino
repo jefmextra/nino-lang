@@ -1,0 +1,17 @@
+struct SampleRec {
+    id: int,
+    tag: string
+}
+
+fn calc(a: int, b: int) -> int {
+    let sum = a + b * 2
+    return sum
+}
+
+fn main() -> int {
+    let r = SampleRec { id: 1, tag: "ast" }
+    let v = calc(r.id, 5)
+    require(v == 11, "calc result must be 11")
+    print("T1-F01-06:PASS")
+    return 0
+}

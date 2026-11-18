@@ -1,0 +1,153 @@
+struct RaftNode {
+    node_id: str,
+    mut current_term: i64,
+    mut role: str,
+    mut voted_for: str,
+    mut log: [str],
+    mut commit_index: i64
+}
+
+struct RaftCluster {
+    mut leader_id: str,
+    mut nodes: [RaftNode],
+    quorum_size: i64
+}
+
+fn raft_create_node(id: str) -> RaftNode {
+    require(len(id) > 0, "Node ID cannot be empty")
+    return RaftNode {
+        node_id: id,
+        current_term: 0,
+        role: "FOLLOWER",
+        voted_for: "",
+        log: [],
+        commit_index: 0
+    }
+}
+
+fn raft_create_cluster(node_ids: [str], quorum: i64) -> RaftCluster {
+    require(len(node_ids) >= quorum, "Total nodes must satisfy quorum")
+    require(quorum > 0, "Quorum size must be positive")
+    mut nodes_buf = []
+    let total = len(node_ids)
+    for i in 0..total {
+        let nid = node_ids[i]
+        let n = raft_create_node(nid)
+        nodes_buf = push(nodes_buf, n)
+    }
+    return RaftCluster {
+        leader_id: "",
+        nodes: nodes_buf,
+        quorum_size: quorum
+    }
+}
+
+fn raft_elect_leader(mut cluster: RaftCluster, candidate_id: str, term: i64) -> bool {
+    require(len(candidate_id) > 0, "Candidate ID cannot be empty")
+    require(term > 0, "Term must be strictly positive")
+    let total = len(cluster.nodes)
+    mut cand_idx = -1
+    for i in 0..total {
+        if cluster.nodes[i].node_id == candidate_id {
+            cand_idx = i
+            break
+        }
+    }
+    if cand_idx == -1 {
+        return false
+    }
+    let cand_log_len = len(cluster.nodes[cand_idx].log)
+    let cand_commit = cluster.nodes[cand_idx].commit_index
+    mut votes_granted = 0
+    for i in 0..total {
+        mut node = cluster.nodes[i]
+        let term_ok = (node.current_term < term) || (node.current_term == term && (len(node.voted_for) == 0 || node.voted_for == candidate_id))
+        let log_ok = (cand_log_len >= len(node.log)) && (cand_commit >= node.commit_index)
+        if term_ok && log_ok {
+            node.current_term = term
+            node.voted_for = candidate_id
+            cluster.nodes[i] = node
+            votes_granted = votes_granted + 1
+        }
+    }
+    if votes_granted >= cluster.quorum_size {
+        cluster.leader_id = candidate_id
+        for i in 0..total {
+            mut node = cluster.nodes[i]
+            if node.node_id == candidate_id {
+                node.role = "LEADER"
+            } else {
+                node.role = "FOLLOWER"
+            }
+            cluster.nodes[i] = node
+        }
+        return true
+    }
+    return false
+}
+
+fn raft_propose_entry(mut cluster: RaftCluster, entry: str) -> bool {
+    require(len(cluster.leader_id) > 0, "Cannot propose entry without an elected leader")
+    require(len(entry) > 0, "Log entry cannot be empty")
+    let total = len(cluster.nodes)
+    mut leader_idx = -1
+    for i in 0..total {
+        if cluster.nodes[i].node_id == cluster.leader_id && cluster.nodes[i].role == "LEADER" {
+            leader_idx = i
+            break
+        }
+    }
+    if leader_idx == -1 {
+        return false
+    }
+    mut leader_node = cluster.nodes[leader_idx]
+    leader_node.log = push(leader_node.log, entry)
+    let target_len = len(leader_node.log)
+    cluster.nodes[leader_idx] = leader_node
+    mut acks = 1
+    for i in 0..total {
+        if i != leader_idx {
+            mut fnode = cluster.nodes[i]
+            if fnode.current_term <= leader_node.current_term {
+                fnode.log = leader_node.log
+                cluster.nodes[i] = fnode
+                acks = acks + 1
+            }
+        }
+    }
+    if acks >= cluster.quorum_size {
+        for i in 0..total {
+            mut u = cluster.nodes[i]
+            if len(u.log) == target_len {
+                u.commit_index = target_len
+                cluster.nodes[i] = u
+            }
+        }
+        return true
+    }
+    return false
+}
+
+fn raft_get_committed_entries(cluster: RaftCluster) -> [str] {
+    let total = len(cluster.nodes)
+    if total == 0 {
+        return []
+    }
+    mut best_idx = 0
+    for i in 0..total {
+        if cluster.nodes[i].node_id == cluster.leader_id {
+            best_idx = i
+            break
+        }
+    }
+    let n = cluster.nodes[best_idx]
+    mut out: [str] = []
+    mut limit = n.commit_index
+    if limit > len(n.log) {
+        limit = len(n.log)
+    }
+    for ci in 0..limit {
+        out = push(out, n.log[ci])
+    }
+    return out
+}

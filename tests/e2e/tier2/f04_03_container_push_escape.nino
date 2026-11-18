@@ -1,0 +1,9 @@
+fn main() -> int {
+    mut outer_arr: [string] = ["seed"]
+    let m = arena_mark()
+    let inner_str = "escaped_elem_" + int_to_str(12)
+    outer_arr = push(outer_arr, inner_str)
+    arena_rollback(m)
+    print(outer_arr[1])
+    return 0
+}

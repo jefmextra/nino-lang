@@ -1,0 +1,19 @@
+extern fn Beep(dwFreq: i32, dwDuration: i32) -> i32 from "kernel32.dll"
+extern fn GetTickCount() -> i32 from "kernel32.dll"
+
+fn main() {
+    print("==================================================")
+    print("      NINO FFI - FOREIGN FUNCTION INTERFACE       ")
+    print("==================================================")
+
+    let uptime = GetTickCount()
+    print("Windows System Uptime (milliseconds): {uptime}")
+
+    print("Triggering Hardware Speaker Beep via kernel32.dll...")
+    Beep(750, 150)
+    print("Beep Executed Successfully!")
+
+    print("==================================================")
+    print("SUCCESS: FFI Dynamic Win32 Integration OPERATIONAL!")
+    print("==================================================")
+}

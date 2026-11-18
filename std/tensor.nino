@@ -1,0 +1,131 @@
+struct Tensor {
+    shape_rows: i64,
+    shape_cols: i64,
+    mut data: [f64]
+}
+
+struct QuantizedTensor {
+    shape_rows: i64,
+    shape_cols: i64,
+    scale: f64,
+    mut qdata: [i64]
+}
+
+fn tensor_create(rows: i64, cols: i64, initial_val: f64) -> Tensor {
+    require(rows > 0, "Tensor rows must be positive")
+    require(cols > 0, "Tensor cols must be positive")
+    let total_elements = rows * cols
+    mut buffer = []
+    for i in 0..total_elements {
+        buffer = push(buffer, initial_val)
+    }
+    return Tensor {
+        shape_rows: rows,
+        shape_cols: cols,
+        data: buffer
+    }
+}
+
+fn tensor_from_array(rows: i64, cols: i64, array_data: [f64]) -> Tensor {
+    require(rows > 0, "Tensor rows must be positive")
+    require(cols > 0, "Tensor cols must be positive")
+    require(len(array_data) == (rows * cols), "Array length must match dimensions")
+    return Tensor {
+        shape_rows: rows,
+        shape_cols: cols,
+        data: array_data
+    }
+}
+
+fn tensor_get(t: Tensor, r: i64, c: i64) -> f64 {
+    require(r >= 0, "Row index cannot be negative")
+    require(r < t.shape_rows, "Row index out of bounds")
+    require(c >= 0, "Col index cannot be negative")
+    require(c < t.shape_cols, "Col index out of bounds")
+    let idx = r * t.shape_cols + c
+    return t.data[idx]
+}
+
+fn tensor_matmul(a: Tensor, b: Tensor) -> Tensor {
+    require(a.shape_cols == b.shape_rows, "Matrix dimension mismatch for multiplication")
+    let m = a.shape_rows
+    let k_dim = a.shape_cols
+    let n = b.shape_cols
+
+    mut out_data = []
+    for i in 0..m {
+        for j in 0..n {
+            mut dot = 0.0
+            for k in 0..k_dim {
+                let a_val = a.data[i * k_dim + k]
+                let b_val = b.data[k * n + j]
+                dot = dot + (a_val * b_val)
+            }
+            out_data = push(out_data, dot)
+        }
+    }
+
+    return Tensor {
+        shape_rows: m,
+        shape_cols: n,
+        data: out_data
+    }
+}
+
+fn tensor_relu(t: Tensor) -> Tensor {
+    let count = len(t.data)
+    mut out = []
+    for i in 0..count {
+        let v = t.data[i]
+        mut act = 0.0
+        if v > 0.0 {
+            act = v
+        }
+        out = push(out, act)
+    }
+    return Tensor {
+        shape_rows: t.shape_rows,
+        shape_cols: t.shape_cols,
+        data: out
+    }
+}
+
+fn tensor_argmax(t: Tensor) -> i64 {
+    let count = len(t.data)
+    require(count > 0, "Cannot argmax empty tensor")
+    mut max_val = t.data[0]
+    mut max_idx = 0
+    if count > 1 {
+        for i in 1..count {
+            let v = t.data[i]
+            if v > max_val {
+                max_val = v
+                max_idx = i
+            }
+        }
+    }
+    return max_idx
+}
+
+fn tensor_quantize_int8(t: Tensor) -> QuantizedTensor {
+    let count = len(t.data)
+    mut max_abs = 0.00001
+    for i in 0..count {
+        let v = fabs(t.data[i])
+        if v > max_abs {
+            max_abs = v
+        }
+    }
+    let scale = max_abs / 127.0
+    mut q_bytes = []
+    for i in 0..count {
+        let q = round(t.data[i] / scale)
+        q_bytes = push(q_bytes, q)
+    }
+    return QuantizedTensor {
+        shape_rows: t.shape_rows,
+        shape_cols: t.shape_cols,
+        scale: scale,
+        qdata: q_bytes
+    }
+}

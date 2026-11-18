@@ -1,0 +1,17 @@
+fn sum_bounded(n: int) -> int {
+    require(n >= 0 && n <= 1000, "bounded n")
+    mut i = 0
+    mut acc = 0
+    while i < n {
+        invariant(i >= 0 && i <= n && acc >= 0 && acc <= i * 1000, "loop bound invariant")
+        acc = acc + i
+        i = i + 1
+    }
+    ensure(acc >= 0 && acc <= 1000000, "total bounded")
+    return acc
+}
+
+fn main() -> int {
+    print("T4-F06-01:" + int_to_str(sum_bounded(10)))
+    return 0
+}

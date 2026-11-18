@@ -1,0 +1,11 @@
+fn bounded_add(a: int, b: int) -> int {
+    require(a >= 0 && a <= 1000000000 && b >= 0 && b <= 1000000000, "bounded inputs")
+    let res = a + b
+    ensure(res >= 0 && res <= 2000000000, "bounded sum without overflow")
+    return res
+}
+
+fn main() -> int {
+    print("T1-F06-01:" + int_to_str(bounded_add(123, 456)))
+    return 0
+}

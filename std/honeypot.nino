@@ -1,0 +1,57 @@
+struct HoneyDecoy {
+    canary_id: str,
+    buf_addr: i64,
+    buf_len: i64,
+    expected_hash: str,
+    mut is_tripped: bool,
+    mut is_freed: bool
+}
+
+fn alloc_honey_buffer(canary_id: str, fake_payload: str) -> HoneyDecoy {
+    let plen = len(fake_payload)
+    require(plen > 0, "Decoy payload cannot be empty")
+    let h = sha256(fake_payload)
+    let addr = foreign_alloc(plen, "honeypot_decoy")
+    for i in 0..plen {
+        write_byte(addr, i, char_code_at(fake_payload, i))
+    }
+    return HoneyDecoy {
+        canary_id: canary_id,
+        buf_addr: addr,
+        buf_len: plen,
+        expected_hash: h,
+        is_tripped: false,
+        is_freed: false
+    }
+}
+
+fn honey_verify_integrity(decoy: HoneyDecoy) -> bool {
+    if decoy.is_tripped || decoy.is_freed || decoy.buf_addr == 0 {
+        return false
+    }
+    mut cur_payload = ""
+    for i in 0..decoy.buf_len {
+        cur_payload = cur_payload + char_from_code(read_byte(decoy.buf_addr, i))
+    }
+    let current_h = sha256(cur_payload)
+    return current_h == decoy.expected_hash
+}
+
+fn honey_shred_memory(mut decoy: HoneyDecoy) -> bool {
+    if decoy.is_freed == false && decoy.buf_addr != 0 {
+        for i in 0..decoy.buf_len {
+            write_byte(decoy.buf_addr, i, 0)
+        }
+        free_memory(decoy.buf_addr)
+        decoy.is_freed = true
+    }
+    decoy.is_tripped = true
+    return true
+}
+
+fn honey_trigger_alarm(mut decoy: HoneyDecoy, threat_origin: str) -> bool {
+    honey_shred_memory(decoy)
+    print("[ACTIVE DEFENSE ALERT] Honey-Decoy Breached by " + threat_origin)
+    print("[ACTIVE DEFENSE ALERT] Physical memory zeroed & unmapped cleanly.")
+    return true
+}

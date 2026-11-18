@@ -1,0 +1,63 @@
+struct ResultI64 {
+    is_ok: bool,
+    ok_val: i64,
+    err_val: str
+}
+
+fn ok_i64(v: i64) -> ResultI64 {
+    return (ResultI64){ .is_ok = true, .ok_val = v, .err_val = "" }
+}
+
+fn err_i64(e: str) -> ResultI64 {
+    return (ResultI64){ .is_ok = false, .ok_val = 0, .err_val = e }
+}
+
+fn result_i64_is_ok(res: ResultI64) -> bool {
+    return res.is_ok
+}
+
+fn result_i64_is_err(res: ResultI64) -> bool {
+    return !res.is_ok
+}
+
+fn result_i64_unwrap(res: ResultI64) -> i64 {
+    require(res.is_ok, res.err_val)
+    return res.ok_val
+}
+
+fn result_i64_unwrap_err(res: ResultI64) -> str {
+    require(!res.is_ok, "Called unwrap_err on Ok result")
+    return res.err_val
+}
+
+struct ResultStr {
+    is_ok: bool,
+    ok_val: str,
+    err_val: str
+}
+
+fn ok_str(v: str) -> ResultStr {
+    return (ResultStr){ .is_ok = true, .ok_val = v, .err_val = "" }
+}
+
+fn err_str(e: str) -> ResultStr {
+    return (ResultStr){ .is_ok = false, .ok_val = "", .err_val = e }
+}
+
+fn result_str_is_ok(res: ResultStr) -> bool {
+    return res.is_ok
+}
+
+fn result_str_is_err(res: ResultStr) -> bool {
+    return !res.is_ok
+}
+
+fn result_str_unwrap(res: ResultStr) -> str {
+    require(res.is_ok, res.err_val)
+    return res.ok_val
+}
+
+fn result_str_unwrap_err(res: ResultStr) -> str {
+    require(!res.is_ok, "Called unwrap_err on Ok result")
+    return res.err_val
+}

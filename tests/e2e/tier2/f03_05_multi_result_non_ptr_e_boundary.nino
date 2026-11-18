@@ -1,0 +1,49 @@
+struct Payload {
+    id: int,
+    tag: string
+}
+
+struct ErrCode {
+    code: int,
+    detail: string
+}
+
+fn res_with_int_err(ok: bool) -> Result<Payload, int> {
+    if ok {
+        return (Result_Payload_int){ .is_ok = true, .ok_val = Payload { id: 1, tag: "a" }, .err_val = 0 }
+    }
+    return (Result_Payload_int){ .is_ok = false, .ok_val = Payload { id: 0, tag: "" }, .err_val = 501 }
+}
+
+fn res_with_struct_err(ok: bool) -> Result<Payload, ErrCode> {
+    if ok {
+        return (Result_Payload_ErrCode){ .is_ok = true, .ok_val = Payload { id: 2, tag: "b" }, .err_val = ErrCode { code: 0, detail: "" } }
+    }
+    return (Result_Payload_ErrCode){ .is_ok = false, .ok_val = Payload { id: 0, tag: "" }, .err_val = ErrCode { code: 403, detail: "denied" } }
+}
+
+fn res_with_str_err(ok: bool) -> Result<Payload, string> {
+    if ok {
+        return (Result_Payload_string){ .is_ok = true, .ok_val = Payload { id: 3, tag: "c" }, .err_val = "" }
+    }
+    return (Result_Payload_string){ .is_ok = false, .ok_val = Payload { id: 0, tag: "" }, .err_val = "failed" }
+}
+
+fn main() -> int {
+    let a_ok = res_with_int_err(true)
+    let a_er = res_with_int_err(false)
+    let b_ok = res_with_struct_err(true)
+    let b_er = res_with_struct_err(false)
+    let c_ok = res_with_str_err(true)
+    let c_er = res_with_str_err(false)
+
+    require(a_ok.is_ok && a_ok.ok_val.id == 1, "Result<Payload, int> ok")
+    require(!a_er.is_ok && a_er.err_val == 501, "Result<Payload, int> err")
+    require(b_ok.is_ok && b_ok.ok_val.id == 2, "Result<Payload, ErrCode> ok")
+    require(!b_er.is_ok && b_er.err_val.code == 403, "Result<Payload, ErrCode> err")
+    require(c_ok.is_ok && c_ok.ok_val.id == 3, "Result<Payload, string> ok")
+    require(!c_er.is_ok && c_er.err_val == "failed", "Result<Payload, string> err")
+
+    print("T2-F03-05:PASS")
+    return 0
+}

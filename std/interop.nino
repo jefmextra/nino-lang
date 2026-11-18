@@ -1,0 +1,42 @@
+struct ForeignPtr {
+    address: i64,
+    size: i64,
+    abi: str,
+    mut is_active: bool
+}
+
+fn foreign_ptr_borrow(size: i64, abi: str) -> ForeignPtr {
+    require(size > 0, "Foreign memory size must be positive")
+    require(len(abi) > 0, "Foreign ABI descriptor must not be empty")
+    let ptr = foreign_alloc(size, abi)
+    return ForeignPtr {
+        address: ptr,
+        size: size,
+        abi: abi,
+        is_active: true
+    }
+}
+
+fn foreign_ptr_read_u8(ptr: ForeignPtr, offset: i64) -> i64 {
+    require(ptr.is_active, "Cannot read from invalidated foreign pointer")
+    require(offset >= 0, "Offset cannot be negative")
+    require(offset < ptr.size, "Foreign pointer bounds violation")
+    return read_byte(ptr.address, offset)
+}
+
+fn foreign_ptr_write_u8(ptr: ForeignPtr, offset: i64, val: i64) -> bool {
+    require(ptr.is_active, "Cannot write to invalidated foreign pointer")
+    require(offset >= 0, "Offset cannot be negative")
+    require(offset < ptr.size, "Foreign pointer bounds violation")
+    write_byte(ptr.address, offset, val)
+    return true
+}
+
+fn foreign_ptr_release(mut ptr: ForeignPtr) -> bool {
+    if !ptr.is_active {
+        return false
+    }
+    ptr.is_active = false
+    free_memory(ptr.address)
+    return true
+}

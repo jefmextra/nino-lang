@@ -1,0 +1,32 @@
+import "std/result.nino"
+import "std/str.nino"
+
+fn main() -> int {
+    sealed let key = "E2E_MATRIX_SECRET_KEY_2026"
+    let mac = hmac_sha256(unseal(key), "msg_payload")
+    seal_destroy(key)
+
+    let xs = [1, 2, 3, 4]
+    let ys = arr_map(xs, |v| v * 3)
+    let tot = arr_reduce(ys, 0, |acc, v| acc + v)
+
+    mut state = 10
+    transact {
+        state = 99
+        abort "rollback_state"
+    } compensate {
+        state = 42
+    }
+
+    let ok_res = ok_i64(tot)
+    let rval = result_i64_unwrap(ok_res)
+    mut s_outer = "init"
+    let m = arena_mark()
+    let s_inner = region_pin("mac=" + slice(mac, 0, 8))
+    s_outer = s_inner
+    arena_rollback(m)
+
+    require(len(mac) == 64 && rval == 30 && state == 42 && str_starts_with(s_outer, "mac="), "matrix check failed")
+    print("T4-F16-02:PASS")
+    return 0
+}

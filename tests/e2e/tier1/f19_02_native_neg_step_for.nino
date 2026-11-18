@@ -1,0 +1,11 @@
+fn main() -> int {
+    mut s = 0
+    for i in 5..0 step -1 {
+        s = s + i
+    }
+    if s != 15 {
+        return 1
+    }
+    print("T1-F19-02:PASS")
+    return 0
+}

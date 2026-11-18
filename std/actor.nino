@@ -1,0 +1,29 @@
+fn spawn(actor_name: string) -> i32 {
+    let pid = spawn_actor(actor_name)
+    return pid
+}
+
+fn send_message(pid: i32, msg: any) -> bool {
+    let ok = actor_send(pid, msg)
+    return ok
+}
+
+fn receive_message(pid: i32) -> str {
+    let res = actor_receive(pid)
+    return res
+}
+
+fn supervise(pid: i32, policy: string) -> i32 {
+    let sup_id = spawn_supervisor(pid, policy)
+    return sup_id
+}
+
+fn supervise_dispatch(sup_id: i32, msg: any) -> dict {
+    let res = supervisor_dispatch(sup_id, msg)
+    return res
+}
+
+fn actor_hot_patch(pid: i32, new_actor_name: string) -> bool {
+    let ok = actor_patch(pid, new_actor_name)
+    return ok
+}

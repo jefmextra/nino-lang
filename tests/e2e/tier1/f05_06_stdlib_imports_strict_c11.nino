@@ -1,0 +1,20 @@
+import "std/str.nino"
+import "std/json.nino"
+import "std/math.nino"
+import "std/option.nino"
+import "std/result.nino"
+
+fn main() -> int {
+    let upper = str_to_upper(str_trim("  nino  "))
+    let payload = json_object2(json_kv_str("lang", upper), json_kv_int("ver", 1))
+    let ver = json_get_number(payload, "ver")
+    let lang = json_get_string(payload, "lang")
+    let cl = clamp(15, 0, 10)
+    let sq = square(5)
+    let oi = some_i64(cl + sq)
+    let rs = ok_str(lang)
+    require(ver == 1 && lang == "NINO", "std/str & std/json check failed")
+    require(option_i64_unwrap(oi) == 35 && result_str_unwrap(rs) == "NINO", "std/math, option, result check failed")
+    print("T1-F05-06:PASS")
+    return 0
+}

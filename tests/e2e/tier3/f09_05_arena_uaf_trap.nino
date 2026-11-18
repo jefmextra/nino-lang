@@ -1,0 +1,11 @@
+fn main() -> int {
+    mut a = [1, 2]
+    let m = arena_mark()
+    for i in 0..40 {
+        a = push(a, i)
+    }
+    arena_rollback(m)
+    arr_free(a)
+    print(len(a))
+    return 0
+}

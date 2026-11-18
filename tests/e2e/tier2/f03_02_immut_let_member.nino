@@ -1,0 +1,9 @@
+struct S {
+    mut val: int
+}
+
+fn main() -> int {
+    let s = S { val: 2 }
+    s.val = 99
+    return s.val
+}

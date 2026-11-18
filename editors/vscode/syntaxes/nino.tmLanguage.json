@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Nino",
+  "patterns": [
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#enclaves"
+    },
+    {
+      "include": "#functions"
+    }
+  ],
+  "repository": {
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.nino",
+          "match": "\\b(fn|let|mut|sealed|morphic|actor|struct|require|ensure|with|capability|comptime|defer|transact|compensate|guard|match|if|else|for|while|return|break|continue|import|extern|from)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.nino",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.nino",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.nino",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "entity.name.type.nino",
+          "match": "\\b(i32|i64|f64|bool|str|string|any|nil)\\b"
+        }
+      ]
+    },
+    "enclaves": {
+      "patterns": [
+        {
+          "name": "keyword.other.enclave.nino",
+          "match": "\\b(sealed let|morphic mut|hardware_enclave)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.nino",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()"
+        }
+      ]
+    }
+  },
+  "scopeName": "source.nino"
+}

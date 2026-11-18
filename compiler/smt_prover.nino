@@ -1,0 +1,2986 @@
+// compiler/smt_prover.nino: AST-driven SMT-LIB2 / BV64 / IEEE-754 Float64 + Phi-Join prover & PCC signing
+fn synthesize_program_nir(source: string) -> string {
+    let clean = normalize_and_join_lines(replace_str(source, "\r\n", "\n"))
+    let slen = len(clean)
+    mut nir = "; ==============================================================================\n"
+    nir = nir + "; NINO SOVEREIGN INTERMEDIATE REPRESENTATION (NIR v1.1 SSA)\n"
+    nir = nir + "; Target Architecture: x86_64-pc-windows-gnu (Three-Address Code Form)\n"
+    nir = nir + "; Optimization Pipeline: Passes: SSA Lowering + DCE + Constant-Folding + BCE + Loop-Vectorize\n"
+    nir = nir + "; ==============================================================================\n\n"
+    nir = nir + "target triple = \"x86_64-pc-windows-gnu\"\n\n"
+    mut pos = 0
+    mut in_fn = false
+    mut fn_depth = 0
+    mut dead_top = false
+    mut cur_fn_name = ""
+    mut ssa_idx = 0
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            let ch = char_at(clean, line_end)
+            if ch == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let line = trim(slice(clean, pos, line_end - pos))
+        if starts_with(line, "fn ") && ends_with(line, "{") {
+            in_fn = true
+            fn_depth = 1
+            dead_top = false
+            ssa_idx = 0
+            let open_p = find_char(line, "(", 3)
+            let close_p = find_char(line, ")", open_p)
+            cur_fn_name = trim(slice(line, 3, open_p - 3))
+            mut ret_t = "void"
+            let arrow = find_str(line, "->", close_p)
+            if arrow != -1 {
+                let brace = find_char(line, "{", arrow)
+                ret_t = trim(slice(line, arrow + 2, brace - arrow - 2))
+            }
+            nir = nir + "define " + map_type(ret_t) + " @" + cur_fn_name + "() {\n"
+            nir = nir + "entry:\n"
+        } else if in_fn {
+            let dlt = count_braces_outside_str(line)
+            if line == "}" && fn_depth + dlt <= 0 {
+                in_fn = false
+                fn_depth = 0
+                dead_top = false
+                nir = nir + "  ret void\n"
+                nir = nir + "}\n\n"
+            } else if dead_top && fn_depth == 1 {
+                if starts_with(line, "}") || starts_with(line, "else") {
+                    dead_top = false
+                } else {
+                    nir = nir + "  ; @dce_pruned: " + line + "\n"
+                }
+            } else if starts_with(line, "let ") || starts_with(line, "mut ") {
+                let vpart = trim(slice(line, 4, len(line) - 4))
+                let eq_pos = find_first_top_op(vpart, "=")
+                if eq_pos != -1 {
+                    let vname = trim(slice(vpart, 0, eq_pos))
+                    let rhs = trim(slice(vpart, eq_pos + 1, len(vpart) - eq_pos - 1))
+                    let folded = nir_fold_const_int(rhs, 0)
+                    nir = nir + "  %" + vname + " = alloca " + map_type("int") + "\n"
+                    if len(folded) > 0 && folded != rhs && nir_is_small_int(rhs) == false {
+                        nir = nir + "  %t" + ssa_idx + " = const.i64 " + folded + " ; @const_folded(" + rhs + " -> " + folded + ")\n"
+                    } else {
+                        nir = nir + "  %t" + ssa_idx + " = eval.ast " + rhs + "\n"
+                    }
+                    nir = nir + "  store %t" + ssa_idx + ", %" + vname + "\n"
+                    ssa_idx = ssa_idx + 1
+                }
+            } else if line == "return" || starts_with(line, "return ") {
+                let rval = trim(slice(line, 6, len(line) - 6))
+                if len(rval) > 0 {
+                    nir = nir + "  %t" + ssa_idx + " = eval.ast " + rval + "\n"
+                    nir = nir + "  ret %t" + ssa_idx + "\n"
+                    ssa_idx = ssa_idx + 1
+                } else {
+                    nir = nir + "  ret void\n"
+                }
+                if fn_depth == 1 {
+                    dead_top = true
+                }
+            } else if starts_with(line, "print(") && ends_with(line, ")") {
+                let pval = slice(line, 6, len(line) - 7)
+                nir = nir + "  call void @nino_print(" + pval + ")\n"
+            } else if starts_with(line, "for ") && ends_with(line, "{") {
+                let fin = find_str(line, " in ", 4)
+                let fdot = find_str(line, "..", fin)
+                let fbr = find_char(line, "{", fin)
+                if fin != -1 && fdot != -1 && fbr != -1 {
+                    let fiv = trim(slice(line, 4, fin - 4))
+                    let flo = trim(slice(line, fin + 4, fdot - fin - 4))
+                    let fhi = trim(slice(line, fdot + 2, fbr - fdot - 2))
+                    if flo == "0" && starts_with(fhi, "len(") && ends_with(fhi, ")") {
+                        let b_arr = trim(slice(fhi, 4, len(fhi) - 5))
+                        if is_valid_identifier(b_arr) && nir_loop_mutates_arr(clean, pos, b_arr) == false {
+                            nir = nir + "  ; @bce_proven(" + b_arr + "[" + fiv + "] in 0..len(" + b_arr + "))\n"
+                        }
+                    }
+                    if flo == "0" && nir_loop_mutates_arr(clean, pos, fiv) == false {
+                        mut b_scan = pos + 1
+                        mut l_dep = 1
+                        mut vec_hits = 0
+                        mut vec_bad = false
+                        while b_scan < slen && l_dep > 0 {
+                            let b_nl = find_char(clean, "\n", b_scan)
+                            mut b_end = slen
+                            if b_nl != -1 { b_end = b_nl }
+                            let bline = trim(slice(clean, b_scan, b_end - b_scan))
+                            l_dep = l_dep + count_braces_outside_str(bline)
+                            if l_dep > 0 && len(bline) > 0 {
+                                if starts_with(bline, "if ") || starts_with(bline, "while ") || starts_with(bline, "for ") || find_char(bline, "(", 0) != -1 || find_str(bline, "/", 0) != -1 {
+                                    vec_bad = true
+                                } else if find_str(bline, "[" + fiv + "]", 0) != -1 && find_str(bline, "=", 0) != -1 {
+                                    vec_hits = vec_hits + 1
+                                }
+                            }
+                            b_scan = b_end + 1
+                        }
+                        if vec_bad == false && vec_hits > 0 {
+                            nir = nir + "  ; @nir_vec_loop(width=4, iv=" + fiv + ", upper=" + fhi + ", simd=4x64_RESTRICT)\n"
+                        }
+                    }
+                }
+                nir = nir + "  %op" + ssa_idx + " = loop.for " + line + "\n"
+                ssa_idx = ssa_idx + 1
+            } else if starts_with(line, "if ") && ends_with(line, "{") {
+                let cond = trim(slice(line, 3, len(line) - 4))
+                nir = nir + "  %c" + ssa_idx + " = eval.cond " + cond + "\n"
+                nir = nir + "  br i1 %c" + ssa_idx + ", label %bb_then" + ssa_idx + ", label %bb_else" + ssa_idx + "\n"
+                nir = nir + "bb_then" + ssa_idx + ":\n"
+                ssa_idx = ssa_idx + 1
+            } else if len(line) > 0 && starts_with(line, "import ") == false && starts_with(line, "struct ") == false {
+                nir = nir + "  %op" + ssa_idx + " = 3ac " + line + "\n"
+                ssa_idx = ssa_idx + 1
+            }
+            if in_fn {
+                fn_depth = fn_depth + dlt
+            }
+        }
+        pos = line_end + 1
+    }
+    return nir
+}
+
+fn smt_is_float_literal(tok: string) -> bool {
+    let t = trim(tok)
+    let tlen = len(t)
+    let dot = find_char(t, ".", 0)
+    if dot <= 0 || dot >= tlen - 1 {
+        return false
+    }
+    if find_char(t, ".", dot + 1) != -1 {
+        return false
+    }
+    let lhs = slice(t, 0, dot)
+    let rhs = slice(t, dot + 1, tlen - dot - 1)
+    return is_digits(lhs) && is_digits(rhs)
+}
+
+fn smt_is_fp_call_name(tok: string) -> bool {
+    return tok == "is_nan" || tok == "is_inf" || tok == "is_finite" || tok == "fp_abs" || tok == "fabs" || tok == "fp_sqrt" || tok == "to_float"
+}
+
+fn smt_contains_fp(expr: string, fp_syms: string, bv_mode: bool) -> bool {
+    let _u = bv_mode
+    let ex = trim(expr)
+    let elen = len(ex)
+    if elen == 0 {
+        return false
+    }
+    mut i = 0
+    while i < elen {
+        let ch = char_at(ex, i)
+        if is_alpha_num(ch) {
+            let start = i
+            while i < elen && is_alpha_num(char_at(ex, i)) {
+                i = i + 1
+            }
+            let tok = slice(ex, start, i - start)
+            if i < elen && char_at(ex, i) == "." {
+                mut j = i + 1
+                while j < elen && is_alpha_num(char_at(ex, j)) {
+                    j = j + 1
+                }
+                let ftok = slice(ex, start, j - start)
+                if smt_is_float_literal(ftok) {
+                    return true
+                }
+                i = j
+            } else if smt_is_fp_call_name(tok) {
+                return true
+            } else if len(fp_syms) > 1 && find_str(fp_syms, "|" + tok + "|", 0) != -1 {
+                return true
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return false
+}
+
+fn smt_expr_supported_ex(expr: string, sym_table: string, bv_mode: bool) -> bool {
+    let ex = trim(expr)
+    let elen = len(ex)
+    if elen == 0 {
+        return false
+    }
+    if find_char(ex, "\"", 0) != -1 || find_char(ex, "{", 0) != -1 || find_char(ex, "}", 0) != -1 || find_char(ex, ";", 0) != -1 || find_char(ex, ":", 0) != -1 {
+        return false
+    }
+    mut dp = find_char(ex, ".", 0)
+    while dp != -1 {
+        if dp <= 0 || dp + 1 >= elen {
+            return false
+        }
+        let pc = char_code(char_at(ex, dp - 1))
+        let nc = char_code(char_at(ex, dp + 1))
+        if (pc >= 48 && pc <= 57) == false || (nc >= 48 && nc <= 57) == false {
+            return false
+        }
+        dp = find_char(ex, ".", dp + 1)
+    }
+    mut i = 0
+    while i < elen {
+        let ch = char_at(ex, i)
+        if is_alpha_num(ch) {
+            let start = i
+            while i < elen && is_alpha_num(char_at(ex, i)) {
+                i = i + 1
+            }
+            let tok = slice(ex, start, i - start)
+            mut j = i
+            while j < elen && char_at(ex, j) == " " {
+                j = j + 1
+            }
+            if j < elen && char_at(ex, j) == "(" {
+                if tok != "not" && tok != "and" && tok != "or" && tok != "len" && smt_is_fp_call_name(tok) == false {
+                    return false
+                }
+            }
+            let first_c = char_at(tok, 0)
+            if find_char("0123456789", first_c, 0) != -1 {
+                if (starts_with(tok, "0x") || starts_with(tok, "0X")) && len(tok) > 2 && len(tok) <= 18 {
+                    for hi in 2..len(tok) {
+                        let hc = char_at(tok, hi)
+                        if find_char("0123456789abcdefABCDEF", hc, 0) == -1 {
+                            return false
+                        }
+                    }
+                } else {
+                    for di in 1..len(tok) {
+                        let dc = char_at(tok, di)
+                        if find_char("0123456789", dc, 0) == -1 {
+                            return false
+                        }
+                    }
+                }
+            } else if tok != "true" && tok != "false" && tok != "not" && tok != "and" && tok != "or" && tok != "len" && smt_is_fp_call_name(tok) == false {
+                if find_str(sym_table, "|" + tok + "|", 0) == -1 {
+                    return false
+                }
+            }
+        } else {
+            if ch == "&" {
+                if i + 1 < elen && char_at(ex, i + 1) == "&" {
+                    i = i + 2
+                } else if bv_mode {
+                    i = i + 1
+                } else {
+                    return false
+                }
+            } else if ch == "|" {
+                if i + 1 < elen && char_at(ex, i + 1) == "|" {
+                    i = i + 2
+                } else if bv_mode {
+                    i = i + 1
+                } else {
+                    return false
+                }
+            } else if (ch == "^" || ch == "~") && bv_mode == false {
+                return false
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return true
+}
+
+fn smt_expr_supported(expr: string, sym_table: string) -> bool {
+    return smt_expr_supported_ex(expr, sym_table, false)
+}
+
+fn smt_is_bool_expr(expr: string, bool_syms: string) -> bool {
+    let ex = trim(expr)
+    if ex == "true" || ex == "false" {
+        return true
+    }
+    if find_str(bool_syms, "|" + ex + "|", 0) != -1 {
+        return true
+    }
+    if starts_with(ex, "!") || starts_with(ex, "not ") {
+        return true
+    }
+    if find_top_binary_op(ex, "||") != -1 || find_top_binary_op(ex, " or ") != -1 || find_top_binary_op(ex, "&&") != -1 || find_top_binary_op(ex, " and ") != -1 {
+        return true
+    }
+    if find_top_binary_op(ex, "==") != -1 || find_top_binary_op(ex, "!=") != -1 || find_top_binary_op(ex, "<=") != -1 || find_top_binary_op(ex, ">=") != -1 || find_top_binary_op(ex, "<") != -1 || find_top_binary_op(ex, ">") != -1 {
+        return true
+    }
+    return false
+}
+
+fn smt_find_top_bracket_open(ex: string) -> int {
+    let elen = len(ex)
+    if ends_with(ex, "]") == false {
+        return -1
+    }
+    mut brd = 0
+    mut i = elen - 1
+    while i >= 0 {
+        let ch = char_at(ex, i)
+        if ch == "]" {
+            brd = brd + 1
+        } else if ch == "[" {
+            brd = brd - 1
+            if brd == 0 {
+                return i
+            }
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+fn expr_to_smt_mode(expr: string, bv_mode: bool, fp_syms: string, want_fp: bool) -> string {
+    mut ex = trim(expr)
+    let elen = len(ex)
+    if elen == 0 {
+        if want_fp { return "((_ to_fp 11 53) RNE 0.0)" }
+        return ""
+    }
+    if starts_with(ex, "(") && ends_with(ex, ")") {
+        mut depth = 0
+        mut can_strip = true
+        for i in 0..(elen - 1) {
+            let ch = char_at(ex, i)
+            if ch == "(" { depth = depth + 1 }
+            else if ch == ")" { depth = depth - 1; if depth == 0 { can_strip = false } }
+        }
+        if can_strip {
+            return expr_to_smt_mode(slice(ex, 1, elen - 2), bv_mode, fp_syms, want_fp)
+        }
+    }
+    let or_p = find_top_binary_op(ex, "||")
+    if or_p != -1 {
+        return "(or " + expr_to_smt_mode(slice(ex, 0, or_p), bv_mode, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, or_p + 2, elen - or_p - 2), bv_mode, fp_syms, false) + ")"
+    }
+    let or_kw = find_top_binary_op(ex, " or ")
+    if or_kw != -1 {
+        return "(or " + expr_to_smt_mode(slice(ex, 0, or_kw), bv_mode, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, or_kw + 4, elen - or_kw - 4), bv_mode, fp_syms, false) + ")"
+    }
+    let and_p = find_top_binary_op(ex, "&&")
+    if and_p != -1 {
+        return "(and " + expr_to_smt_mode(slice(ex, 0, and_p), bv_mode, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, and_p + 2, elen - and_p - 2), bv_mode, fp_syms, false) + ")"
+    }
+    let and_kw = find_top_binary_op(ex, " and ")
+    if and_kw != -1 {
+        return "(and " + expr_to_smt_mode(slice(ex, 0, and_kw), bv_mode, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, and_kw + 5, elen - and_kw - 5), bv_mode, fp_syms, false) + ")"
+    }
+    if bv_mode && want_fp == false {
+        let bor_p = find_top_binary_op(ex, "|")
+        if bor_p != -1 {
+            return "(bvor " + expr_to_smt_mode(slice(ex, 0, bor_p), true, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, bor_p + 1, elen - bor_p - 1), true, fp_syms, false) + ")"
+        }
+        let bxor_p = find_top_binary_op(ex, "^")
+        if bxor_p != -1 {
+            return "(bvxor " + expr_to_smt_mode(slice(ex, 0, bxor_p), true, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, bxor_p + 1, elen - bxor_p - 1), true, fp_syms, false) + ")"
+        }
+        let band_p = find_top_binary_op(ex, "&")
+        if band_p != -1 {
+            return "(bvand " + expr_to_smt_mode(slice(ex, 0, band_p), true, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, band_p + 1, elen - band_p - 1), true, fp_syms, false) + ")"
+        }
+    }
+    let eq_p = find_top_binary_op(ex, "==")
+    let neq_p = find_top_binary_op(ex, "!=")
+    if eq_p != -1 || neq_p != -1 {
+        mut op_idx = eq_p
+        mut is_eq = true
+        if neq_p > eq_p { op_idx = neq_p; is_eq = false }
+        let l_raw = slice(ex, 0, op_idx)
+        let r_raw = slice(ex, op_idx + 2, elen - op_idx - 2)
+        if smt_contains_fp(l_raw, fp_syms, bv_mode) || smt_contains_fp(r_raw, fp_syms, bv_mode) {
+            let l_fp = expr_to_smt_mode(l_raw, bv_mode, fp_syms, true)
+            let r_fp = expr_to_smt_mode(r_raw, bv_mode, fp_syms, true)
+            if is_eq { return "(fp.eq " + l_fp + " " + r_fp + ")" }
+            return "(not (fp.eq " + l_fp + " " + r_fp + "))"
+        }
+        let l = expr_to_smt_mode(l_raw, bv_mode, fp_syms, false)
+        let r = expr_to_smt_mode(r_raw, bv_mode, fp_syms, false)
+        if is_eq { return "(= " + l + " " + r + ")" }
+        return "(not (= " + l + " " + r + "))"
+    }
+    let lte_p = find_top_binary_op(ex, "<=")
+    let gte_p = find_top_binary_op(ex, ">=")
+    let lt_p = find_top_binary_op(ex, "<")
+    let gt_p = find_top_binary_op(ex, ">")
+    if lte_p != -1 || gte_p != -1 || lt_p != -1 || gt_p != -1 {
+        mut max_c = lte_p
+        mut op_c = "<="
+        mut op_len = 2
+        if gte_p > max_c { max_c = gte_p; op_c = ">="; op_len = 2 }
+        if lt_p > max_c { max_c = lt_p; op_c = "<"; op_len = 1 }
+        if gt_p > max_c { max_c = gt_p; op_c = ">"; op_len = 1 }
+        let l_raw = slice(ex, 0, max_c)
+        let r_raw = slice(ex, max_c + op_len, elen - max_c - op_len)
+        if smt_contains_fp(l_raw, fp_syms, bv_mode) || smt_contains_fp(r_raw, fp_syms, bv_mode) {
+            mut fcmp = "fp.leq"
+            if op_c == ">=" { fcmp = "fp.geq" }
+            else if op_c == "<" { fcmp = "fp.lt" }
+            else if op_c == ">" { fcmp = "fp.gt" }
+            return "(" + fcmp + " " + expr_to_smt_mode(l_raw, bv_mode, fp_syms, true) + " " + expr_to_smt_mode(r_raw, bv_mode, fp_syms, true) + ")"
+        }
+        mut smt_c = op_c
+        if bv_mode {
+            if op_c == "<=" { smt_c = "bvsle" }
+            else if op_c == ">=" { smt_c = "bvsge" }
+            else if op_c == "<" { smt_c = "bvslt" }
+            else { smt_c = "bvsgt" }
+        }
+        return "(" + smt_c + " " + expr_to_smt_mode(l_raw, bv_mode, fp_syms, false) + " " + expr_to_smt_mode(r_raw, bv_mode, fp_syms, false) + ")"
+    }
+    if bv_mode && want_fp == false {
+        let shl_p = find_top_binary_op(ex, "<<")
+        let shr_p = find_top_binary_op(ex, ">>")
+        if shl_p != -1 || shr_p != -1 {
+            if shl_p > shr_p {
+                return "(bvshl " + expr_to_smt_mode(slice(ex, 0, shl_p), true, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, shl_p + 2, elen - shl_p - 2), true, fp_syms, false) + ")"
+            }
+            return "(bvashr " + expr_to_smt_mode(slice(ex, 0, shr_p), true, fp_syms, false) + " " + expr_to_smt_mode(slice(ex, shr_p + 2, elen - shr_p - 2), true, fp_syms, false) + ")"
+        }
+    }
+    let plus_p = find_top_binary_op(ex, "+")
+    let minus_p = find_top_binary_op(ex, "-")
+    if plus_p != -1 || minus_p != -1 {
+        mut op_idx = plus_p
+        mut is_add = true
+        if minus_p > plus_p { op_idx = minus_p; is_add = false }
+        let l_raw = slice(ex, 0, op_idx)
+        let r_raw = slice(ex, op_idx + 1, elen - op_idx - 1)
+        if want_fp || smt_contains_fp(l_raw, fp_syms, bv_mode) || smt_contains_fp(r_raw, fp_syms, bv_mode) {
+            mut fop = "fp.sub"
+            if is_add { fop = "fp.add" }
+            return "(" + fop + " RNE " + expr_to_smt_mode(l_raw, bv_mode, fp_syms, true) + " " + expr_to_smt_mode(r_raw, bv_mode, fp_syms, true) + ")"
+        }
+        let l = expr_to_smt_mode(l_raw, bv_mode, fp_syms, false)
+        let r = expr_to_smt_mode(r_raw, bv_mode, fp_syms, false)
+        if is_add {
+            if bv_mode { return "(bvadd " + l + " " + r + ")" }
+            return "(+ " + l + " " + r + ")"
+        }
+        if bv_mode { return "(bvsub " + l + " " + r + ")" }
+        return "(- " + l + " " + r + ")"
+    }
+    let mul_p = find_top_binary_op(ex, "*")
+    let div_p = find_top_binary_op(ex, "/")
+    let mod_p = find_top_binary_op(ex, "%")
+    if mul_p != -1 || div_p != -1 || mod_p != -1 {
+        mut max_m = mul_p
+        mut kind_m = 0
+        if div_p > max_m { max_m = div_p; kind_m = 1 }
+        if mod_p > max_m { max_m = mod_p; kind_m = 2 }
+        let l_raw = slice(ex, 0, max_m)
+        let r_raw = slice(ex, max_m + 1, elen - max_m - 1)
+        if kind_m < 2 && (want_fp || smt_contains_fp(l_raw, fp_syms, bv_mode) || smt_contains_fp(r_raw, fp_syms, bv_mode)) {
+            mut fop = "fp.mul"
+            if kind_m == 1 { fop = "fp.div" }
+            return "(" + fop + " RNE " + expr_to_smt_mode(l_raw, bv_mode, fp_syms, true) + " " + expr_to_smt_mode(r_raw, bv_mode, fp_syms, true) + ")"
+        }
+        mut smt_m = "*"
+        if kind_m == 0 {
+            if bv_mode { smt_m = "bvmul" }
+        } else if kind_m == 1 {
+            if bv_mode { smt_m = "bvsdiv" } else { smt_m = "div" }
+        } else {
+            if bv_mode { smt_m = "bvsrem" } else { smt_m = "mod" }
+        }
+        let core_i = "(" + smt_m + " " + expr_to_smt_mode(l_raw, bv_mode, fp_syms, false) + " " + expr_to_smt_mode(r_raw, bv_mode, fp_syms, false) + ")"
+        if want_fp { return "((_ to_fp 11 53) RNE " + core_i + ")" }
+        return core_i
+    }
+    if starts_with(ex, "not ") {
+        return "(not " + expr_to_smt_mode(slice(ex, 4, elen - 4), bv_mode, fp_syms, false) + ")"
+    }
+    if starts_with(ex, "!") {
+        return "(not " + expr_to_smt_mode(slice(ex, 1, elen - 1), bv_mode, fp_syms, false) + ")"
+    }
+    if starts_with(ex, "-") {
+        let rest = trim(slice(ex, 1, elen - 1))
+        if want_fp || smt_contains_fp(rest, fp_syms, bv_mode) {
+            return "(fp.neg " + expr_to_smt_mode(rest, bv_mode, fp_syms, true) + ")"
+        }
+        if bv_mode { return "(bvneg " + expr_to_smt_mode(rest, true, fp_syms, false) + ")" }
+        return "(- " + expr_to_smt_mode(rest, false, fp_syms, false) + ")"
+    }
+    if starts_with(ex, "~") && bv_mode {
+        return "(bvnot " + expr_to_smt_mode(trim(slice(ex, 1, elen - 1)), true, fp_syms, false) + ")"
+    }
+    if starts_with(ex, "+") {
+        return expr_to_smt_mode(slice(ex, 1, elen - 1), bv_mode, fp_syms, want_fp)
+    }
+    if starts_with(ex, "is_nan(") && ends_with(ex, ")") {
+        return "(fp.isNaN " + expr_to_smt_mode(slice(ex, 7, elen - 8), bv_mode, fp_syms, true) + ")"
+    }
+    if starts_with(ex, "is_inf(") && ends_with(ex, ")") {
+        return "(fp.isInfinite " + expr_to_smt_mode(slice(ex, 7, elen - 8), bv_mode, fp_syms, true) + ")"
+    }
+    if starts_with(ex, "is_finite(") && ends_with(ex, ")") {
+        let v = expr_to_smt_mode(slice(ex, 10, elen - 11), bv_mode, fp_syms, true)
+        return "(not (or (fp.isNaN " + v + ") (fp.isInfinite " + v + ")))"
+    }
+    if starts_with(ex, "fp_abs(") && ends_with(ex, ")") {
+        return "(fp.abs " + expr_to_smt_mode(slice(ex, 7, elen - 8), bv_mode, fp_syms, true) + ")"
+    }
+    if starts_with(ex, "fabs(") && ends_with(ex, ")") {
+        return "(fp.abs " + expr_to_smt_mode(slice(ex, 5, elen - 6), bv_mode, fp_syms, true) + ")"
+    }
+    if starts_with(ex, "fp_sqrt(") && ends_with(ex, ")") {
+        return "(fp.sqrt RNE " + expr_to_smt_mode(slice(ex, 8, elen - 9), bv_mode, fp_syms, true) + ")"
+    }
+    if starts_with(ex, "to_float(") && ends_with(ex, ")") {
+        return expr_to_smt_mode(slice(ex, 9, elen - 10), bv_mode, fp_syms, true)
+    }
+    if starts_with(ex, "len(") && ends_with(ex, ")") {
+        let inn = trim(slice(ex, 4, elen - 5))
+        if is_valid_identifier(inn) {
+            if want_fp { return "((_ to_fp 11 53) RNE " + inn + "_len)" }
+            return inn + "_len"
+        }
+    }
+    let brk_p = smt_find_top_bracket_open(ex)
+    if brk_p > 0 && ends_with(ex, "]") {
+        let arr_id = trim(slice(ex, 0, brk_p))
+        let arr_ix = trim(slice(ex, brk_p + 1, elen - brk_p - 2))
+        if is_valid_identifier(arr_id) {
+            let sel = "(select " + arr_id + "_arr " + expr_to_smt_mode(arr_ix, bv_mode, fp_syms, false) + ")"
+            if want_fp { return "((_ to_fp 11 53) RNE " + sel + ")" }
+            return sel
+        }
+    }
+    if smt_is_float_literal(ex) {
+        return "((_ to_fp 11 53) RNE " + ex + ")"
+    }
+    if (starts_with(ex, "0x") || starts_with(ex, "0X")) && elen > 2 {
+        mut hex_body = ""
+        mut hok = true
+        for hi in 2..elen {
+            let hc = char_at(ex, hi)
+            let hcc = char_code(hc)
+            if (hcc >= 48 && hcc <= 57) || (hcc >= 97 && hcc <= 102) || (hcc >= 65 && hcc <= 70) {
+                hex_body = hex_body + f1_ascii_lower(hc)
+            } else {
+                hok = false
+            }
+        }
+        if hok && len(hex_body) <= 16 {
+            mut bv_lit = ""
+            if bv_mode {
+                mut pad = hex_body
+                while len(pad) < 16 { pad = "0" + pad }
+                bv_lit = "#x" + pad
+            } else {
+                mut hv = 0
+                for pi in 0..len(hex_body) {
+                    let pc = char_code(char_at(hex_body, pi))
+                    mut nib = pc - 48
+                    if pc >= 97 { nib = pc - 87 }
+                    hv = hv * 16 + nib
+                }
+                bv_lit = int_to_str(hv)
+            }
+            if want_fp { return "((_ to_fp 11 53) RNE " + bv_lit + ")" }
+            return bv_lit
+        }
+    }
+    if is_digits(ex) {
+        if want_fp { return "((_ to_fp 11 53) RNE " + ex + ".0)" }
+        if bv_mode { return "(_ bv" + ex + " 64)" }
+        return ex
+    }
+    if want_fp && smt_contains_fp(ex, fp_syms, bv_mode) == false {
+        return "((_ to_fp 11 53) RNE " + ex + ")"
+    }
+    return ex
+}
+
+fn expr_to_smt_fp(expr: string, bv_mode: bool, fp_syms: string) -> string {
+    return expr_to_smt_mode(expr, bv_mode, fp_syms, false)
+}
+
+fn smt_as_fp_term(expr: string, bv_mode: bool, fp_syms: string) -> string {
+    return expr_to_smt_mode(expr, bv_mode, fp_syms, true)
+}
+
+fn expr_to_smt_ex(expr: string, bv_mode: bool) -> string {
+    return expr_to_smt_fp(expr, bv_mode, "|")
+}
+
+fn expr_to_smt(expr: string) -> string {
+    return expr_to_smt_ex(expr, false)
+}
+
+fn smt_ssa_get(ssa_map: string, vname: string) -> string {
+    let key = "|" + vname + "="
+    let kpos = find_str(ssa_map, key, 0)
+    if kpos == -1 {
+        return vname
+    }
+    let val_start = kpos + len(key)
+    let bar = find_char(ssa_map, "|", val_start)
+    if bar == -1 {
+        return vname
+    }
+    return slice(ssa_map, val_start, bar - val_start)
+}
+
+fn smt_ssa_set(ssa_map: string, vname: string, mapped: string) -> string {
+    let key = "|" + vname + "="
+    let kpos = find_str(ssa_map, key, 0)
+    if kpos == -1 {
+        return ssa_map + vname + "=" + mapped + "|"
+    }
+    let bar = find_char(ssa_map, "|", kpos + 1)
+    if bar == -1 {
+        return ssa_map
+    }
+    return slice(ssa_map, 0, kpos) + "|" + vname + "=" + mapped + slice(ssa_map, bar, len(ssa_map) - bar)
+}
+
+fn smt_subst_vars(smt_expr: string, ssa_map: string) -> string {
+    if len(ssa_map) <= 1 || len(smt_expr) == 0 {
+        return smt_expr
+    }
+    mut res = ""
+    let slen = len(smt_expr)
+    mut i = 0
+    while i < slen {
+        let ch = char_at(smt_expr, i)
+        let cc = char_code(ch)
+        let is_id_start = (cc >= 65 && cc <= 90) || (cc >= 97 && cc <= 122) || cc == 95
+        mut prev_ok = (i == 0)
+        if !prev_ok {
+            let pcc = char_code(char_at(smt_expr, i - 1))
+            prev_ok = (pcc == 32 || pcc == 40)
+        }
+        if is_id_start && prev_ok {
+            mut j = i + 1
+            mut scan_more = true
+            while j < slen && scan_more {
+                let jc = char_code(char_at(smt_expr, j))
+                let is_idc = (jc >= 65 && jc <= 90) || (jc >= 97 && jc <= 122) || (jc >= 48 && jc <= 57) || jc == 95
+                if is_idc {
+                    j = j + 1
+                } else {
+                    scan_more = false
+                }
+            }
+            let tok = slice(smt_expr, i, j - i)
+            mut next_ok = (j == slen)
+            if !next_ok {
+                let ncc = char_code(char_at(smt_expr, j))
+                next_ok = (ncc == 32 || ncc == 41)
+            }
+            if next_ok {
+                res = res + smt_ssa_get(ssa_map, tok)
+            } else {
+                res = res + tok
+            }
+            i = j
+        } else {
+            res = res + ch
+            i = i + 1
+        }
+    }
+    return res
+}
+
+fn smt_type_bounds_assert_ex(sym: string, ptype: string, bv_mode: bool) -> string {
+    if bv_mode {
+        if ptype == "byte" || ptype == "u8" {
+            return "(assert (and (bvsge " + sym + " (_ bv0 64)) (bvsle " + sym + " (_ bv255 64))))\n"
+        } else if ptype == "u32" {
+            return "(assert (and (bvsge " + sym + " (_ bv0 64)) (bvsle " + sym + " (_ bv4294967295 64))))\n"
+        } else if ptype == "i32" {
+            return "(assert (and (bvsge " + sym + " (bvneg (_ bv2147483648 64))) (bvsle " + sym + " (_ bv2147483647 64))))\n"
+        }
+        return ""
+    }
+    if ptype == "byte" || ptype == "u8" {
+        return "(assert (and (>= " + sym + " 0) (<= " + sym + " 255)))\n"
+    } else if ptype == "u32" {
+        return "(assert (and (>= " + sym + " 0) (<= " + sym + " 4294967295)))\n"
+    } else if ptype == "i32" {
+        return "(assert (and (>= " + sym + " (- 2147483648)) (<= " + sym + " 2147483647)))\n"
+    }
+    return "(assert (and (>= " + sym + " (- 9223372036854775808)) (<= " + sym + " 9223372036854775807)))\n"
+}
+
+fn smt_type_bounds_assert(sym: string, ptype: string) -> string {
+    return smt_type_bounds_assert_ex(sym, ptype, false)
+}
+
+fn smt_fp_collect_safety(expr_raw: string, ssa_map: string, pg: string, depth: int, bv_mode: bool, fp_syms: string) -> string {
+    if depth > 16 {
+        return ""
+    }
+    mut ex = trim(expr_raw)
+    let elen = len(ex)
+    if elen < 2 {
+        return ""
+    }
+    if starts_with(ex, "(") && ends_with(ex, ")") {
+        mut pd = 0
+        mut strip_p = true
+        for i in 0..(elen - 1) {
+            let ch = char_at(ex, i)
+            if ch == "(" { pd = pd + 1 }
+            else if ch == ")" { pd = pd - 1; if pd == 0 { strip_p = false } }
+        }
+        if strip_p {
+            return smt_fp_collect_safety(slice(ex, 1, elen - 2), ssa_map, pg, depth + 1, bv_mode, fp_syms)
+        }
+    }
+    let or_p = find_top_binary_op(ex, "||")
+    if or_p != -1 {
+        let l_s = slice(ex, 0, or_p)
+        let r_s = slice(ex, or_p + 2, elen - or_p - 2)
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, bv_mode, fp_syms), ssa_map)
+        return m1_scat(smt_fp_collect_safety(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_fp_collect_safety(r_s, ssa_map, pg + "(assert (not " + l_g + "))\n", depth + 1, bv_mode, fp_syms))
+    }
+    let and_p = find_top_binary_op(ex, "&&")
+    if and_p != -1 {
+        let l_s = slice(ex, 0, and_p)
+        let r_s = slice(ex, and_p + 2, elen - and_p - 2)
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, bv_mode, fp_syms), ssa_map)
+        return m1_scat(smt_fp_collect_safety(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_fp_collect_safety(r_s, ssa_map, pg + "(assert " + l_g + ")\n", depth + 1, bv_mode, fp_syms))
+    }
+    let eq_p = find_top_binary_op(ex, "==")
+    let neq_p = find_top_binary_op(ex, "!=")
+    if eq_p != -1 || neq_p != -1 {
+        let cp = (neq_p > eq_p) ? neq_p : eq_p
+        return m1_scat(smt_fp_collect_safety(slice(ex, 0, cp), ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_fp_collect_safety(slice(ex, cp + 2, elen - cp - 2), ssa_map, pg, depth + 1, bv_mode, fp_syms))
+    }
+    let lte_p = find_top_binary_op(ex, "<=")
+    let gte_p = find_top_binary_op(ex, ">=")
+    let lt_p = find_top_binary_op(ex, "<")
+    let gt_p = find_top_binary_op(ex, ">")
+    if lte_p != -1 || gte_p != -1 || lt_p != -1 || gt_p != -1 {
+        mut mc = lte_p
+        mut ol = 2
+        if gte_p > mc { mc = gte_p; ol = 2 }
+        if lt_p > mc { mc = lt_p; ol = 1 }
+        if gt_p > mc { mc = gt_p; ol = 1 }
+        return m1_scat(smt_fp_collect_safety(slice(ex, 0, mc), ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_fp_collect_safety(slice(ex, mc + ol, elen - mc - ol), ssa_map, pg, depth + 1, bv_mode, fp_syms))
+    }
+    let plus_p = find_top_binary_op(ex, "+")
+    let minus_p = find_top_binary_op(ex, "-")
+    if plus_p > 0 || minus_p > 0 {
+        mut op_p = plus_p
+        if minus_p > op_p { op_p = minus_p }
+        return m1_scat(smt_fp_collect_safety(slice(ex, 0, op_p), ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_fp_collect_safety(slice(ex, op_p + 1, elen - op_p - 1), ssa_map, pg, depth + 1, bv_mode, fp_syms))
+    }
+    let mul_p = find_top_binary_op(ex, "*")
+    let div_p = find_top_binary_op(ex, "/")
+    if mul_p > 0 || div_p > 0 {
+        mut op_p = mul_p
+        mut is_div = false
+        if div_p > op_p { op_p = div_p; is_div = true }
+        let l_s = trim(slice(ex, 0, op_p))
+        let r_s = trim(slice(ex, op_p + 1, elen - op_p - 1))
+        mut res = m1_scat(smt_fp_collect_safety(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_fp_collect_safety(r_s, ssa_map, pg, depth + 1, bv_mode, fp_syms))
+        if is_div && (smt_contains_fp(l_s, fp_syms, bv_mode) || smt_contains_fp(r_s, fp_syms, bv_mode)) {
+            let r_fp = smt_subst_vars(smt_as_fp_term(r_s, bv_mode, fp_syms), ssa_map)
+            let div_nz = "(and (not (fp.isNaN " + r_fp + ")) (not (fp.eq " + r_fp + " (_ +zero 11 53))))"
+            res = res + "(push)\n" + pg + "(assert (not " + div_nz + "))\n(check-sat)\n(pop)\n"
+        }
+        return res
+    }
+    return ""
+}
+
+fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: int, fp_syms: string) -> string {
+    if depth > 16 {
+        return ""
+    }
+    mut ex = trim(expr_raw)
+    let elen = len(ex)
+    if elen < 2 {
+        return ""
+    }
+    if starts_with(ex, "(") && ends_with(ex, ")") {
+        mut pd = 0
+        mut strip_p = true
+        for i in 0..(elen - 1) {
+            let ch = char_at(ex, i)
+            if ch == "(" {
+                pd = pd + 1
+            } else if ch == ")" {
+                pd = pd - 1
+                if pd == 0 {
+                    strip_p = false
+                }
+            }
+        }
+        if strip_p {
+            return smt_bv_collect_ovf_fp(slice(ex, 1, elen - 2), ssa_map, pg, depth + 1, fp_syms)
+        }
+    }
+    let or_p = find_top_binary_op(ex, "||")
+    if or_p != -1 {
+        let l_s = slice(ex, 0, or_p)
+        let r_s = slice(ex, or_p + 2, elen - or_p - 2)
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
+        return m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg + "(assert (not " + l_g + "))\n", depth + 1, fp_syms))
+    }
+    let or_kw = find_top_binary_op(ex, " or ")
+    if or_kw != -1 {
+        let l_s = slice(ex, 0, or_kw)
+        let r_s = slice(ex, or_kw + 4, elen - or_kw - 4)
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
+        return m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg + "(assert (not " + l_g + "))\n", depth + 1, fp_syms))
+    }
+    let and_p = find_top_binary_op(ex, "&&")
+    if and_p != -1 {
+        let l_s = slice(ex, 0, and_p)
+        let r_s = slice(ex, and_p + 2, elen - and_p - 2)
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
+        return m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg + "(assert " + l_g + ")\n", depth + 1, fp_syms))
+    }
+    let and_kw = find_top_binary_op(ex, " and ")
+    if and_kw != -1 {
+        let l_s = slice(ex, 0, and_kw)
+        let r_s = slice(ex, and_kw + 5, elen - and_kw - 5)
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
+        return m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg + "(assert " + l_g + ")\n", depth + 1, fp_syms))
+    }
+    let bor_p = find_top_binary_op(ex, "|")
+    if bor_p != -1 {
+        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, bor_p), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, bor_p + 1, elen - bor_p - 1), ssa_map, pg, depth + 1, fp_syms))
+    }
+    let bxor_p = find_top_binary_op(ex, "^")
+    if bxor_p != -1 {
+        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, bxor_p), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, bxor_p + 1, elen - bxor_p - 1), ssa_map, pg, depth + 1, fp_syms))
+    }
+    let band_p = find_top_binary_op(ex, "&")
+    if band_p != -1 {
+        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, band_p), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, band_p + 1, elen - band_p - 1), ssa_map, pg, depth + 1, fp_syms))
+    }
+    let eq_p = find_top_binary_op(ex, "==")
+    let neq_p = find_top_binary_op(ex, "!=")
+    if eq_p != -1 || neq_p != -1 {
+        mut cmp_p = eq_p
+        if neq_p > cmp_p {
+            cmp_p = neq_p
+        }
+        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, cmp_p), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, cmp_p + 2, elen - cmp_p - 2), ssa_map, pg, depth + 1, fp_syms))
+    }
+    let lte_p = find_top_binary_op(ex, "<=")
+    let gte_p = find_top_binary_op(ex, ">=")
+    let lt_p = find_top_binary_op(ex, "<")
+    let gt_p = find_top_binary_op(ex, ">")
+    if lte_p != -1 || gte_p != -1 || lt_p != -1 || gt_p != -1 {
+        mut max_c = lte_p
+        mut op_len = 2
+        if gte_p > max_c {
+            max_c = gte_p
+            op_len = 2
+        }
+        if lt_p > max_c {
+            max_c = lt_p
+            op_len = 1
+        }
+        if gt_p > max_c {
+            max_c = gt_p
+            op_len = 1
+        }
+        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, max_c), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, max_c + op_len, elen - max_c - op_len), ssa_map, pg, depth + 1, fp_syms))
+    }
+    let shl_p = find_top_binary_op(ex, "<<")
+    let shr_p = find_top_binary_op(ex, ">>")
+    if shl_p != -1 || shr_p != -1 {
+        mut sp_idx = shl_p
+        if shr_p > sp_idx {
+            sp_idx = shr_p
+        }
+        let l_s = trim(slice(ex, 0, sp_idx))
+        let r_s = trim(slice(ex, sp_idx + 2, elen - sp_idx - 2))
+        mut res = m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg, depth + 1, fp_syms))
+        let r_bv = smt_subst_vars(expr_to_smt_fp(r_s, true, fp_syms), ssa_map)
+        let sh_ok = "(and (bvsge " + r_bv + " (_ bv0 64)) (bvslt " + r_bv + " (_ bv64 64)))"
+        res = res + "(push)\n" + pg + "(assert (not " + sh_ok + "))\n(check-sat)\n(pop)\n"
+        return res
+    }
+    let plus_p = find_top_binary_op(ex, "+")
+    let minus_p = find_top_binary_op(ex, "-")
+    if plus_p > 0 || minus_p > 0 {
+        mut op_p = plus_p
+        mut bvop = "bvadd"
+        if minus_p > op_p {
+            op_p = minus_p
+            bvop = "bvsub"
+        }
+        let l_s = trim(slice(ex, 0, op_p))
+        let r_s = trim(slice(ex, op_p + 1, elen - op_p - 1))
+        mut res = m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg, depth + 1, fp_syms))
+        if smt_contains_fp(l_s, fp_syms, true) || smt_contains_fp(r_s, fp_syms, true) {
+            return res
+        }
+        let w_l = "((_ sign_extend 64) " + smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map) + ")"
+        let w_r = "((_ sign_extend 64) " + smt_subst_vars(expr_to_smt_fp(r_s, true, fp_syms), ssa_map) + ")"
+        let r128 = "(" + bvop + " " + w_l + " " + w_r + ")"
+        let ok128 = "(and (bvsge " + r128 + " (bvneg (_ bv9223372036854775808 128))) (bvsle " + r128 + " (_ bv9223372036854775807 128)))"
+        res = res + "(push)\n" + pg + "(assert (not " + ok128 + "))\n(check-sat)\n(pop)\n"
+        return res
+    }
+    let mul_p = find_top_binary_op(ex, "*")
+    let div_p = find_top_binary_op(ex, "/")
+    let mod_p = find_top_binary_op(ex, "%")
+    if mul_p > 0 || div_p > 0 || mod_p > 0 {
+        mut op_p = mul_p
+        mut kind = 0
+        if div_p > op_p {
+            op_p = div_p
+            kind = 1
+        }
+        if mod_p > op_p {
+            op_p = mod_p
+            kind = 2
+        }
+        let l_s = trim(slice(ex, 0, op_p))
+        let r_s = trim(slice(ex, op_p + 1, elen - op_p - 1))
+        mut res = m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg, depth + 1, fp_syms))
+        if smt_contains_fp(l_s, fp_syms, true) || smt_contains_fp(r_s, fp_syms, true) {
+            return res
+        }
+        if kind == 0 {
+            let w_l = "((_ sign_extend 64) " + smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map) + ")"
+            let w_r = "((_ sign_extend 64) " + smt_subst_vars(expr_to_smt_fp(r_s, true, fp_syms), ssa_map) + ")"
+            let r128 = "(bvmul " + w_l + " " + w_r + ")"
+            let ok128 = "(and (bvsge " + r128 + " (bvneg (_ bv9223372036854775808 128))) (bvsle " + r128 + " (_ bv9223372036854775807 128)))"
+            res = res + "(push)\n" + pg + "(assert (not " + ok128 + "))\n(check-sat)\n(pop)\n"
+            return res
+        }
+        let l_bv = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
+        let r_bv = smt_subst_vars(expr_to_smt_fp(r_s, true, fp_syms), ssa_map)
+        let div_ok = "(and (not (= " + r_bv + " (_ bv0 64))) (not (and (= " + l_bv + " (bvneg (_ bv9223372036854775808 64))) (= " + r_bv + " (bvneg (_ bv1 64))))))"
+        res = res + "(push)\n" + pg + "(assert (not " + div_ok + "))\n(check-sat)\n(pop)\n"
+        return res
+    }
+    if starts_with(ex, "not ") {
+        return smt_bv_collect_ovf_fp(slice(ex, 4, elen - 4), ssa_map, pg, depth + 1, fp_syms)
+    }
+    if starts_with(ex, "!") || starts_with(ex, "~") || starts_with(ex, "+") {
+        return smt_bv_collect_ovf_fp(slice(ex, 1, elen - 1), ssa_map, pg, depth + 1, fp_syms)
+    }
+    if starts_with(ex, "-") {
+        let rest = trim(slice(ex, 1, elen - 1))
+        if smt_contains_fp(rest, fp_syms, true) {
+            return ""
+        }
+        if is_digits(rest) == false && starts_with(rest, "0x") == false && starts_with(rest, "0X") == false {
+            let r_bv = smt_subst_vars(expr_to_smt_fp(rest, true, fp_syms), ssa_map)
+            let neg_ok = "(not (= " + r_bv + " (bvneg (_ bv9223372036854775808 64))))"
+            return smt_bv_collect_ovf_fp(rest, ssa_map, pg, depth + 1, fp_syms) + "(push)\n" + pg + "(assert (not " + neg_ok + "))\n(check-sat)\n(pop)\n"
+        }
+        return ""
+    }
+    let brk_p = smt_find_top_bracket_open(ex)
+    if brk_p > 0 && ends_with(ex, "]") {
+        return smt_bv_collect_ovf_fp(slice(ex, brk_p + 1, elen - brk_p - 2), ssa_map, pg, depth + 1, fp_syms)
+    }
+    return ""
+}
+
+fn smt_bv_collect_ovf(expr_raw: string, ssa_map: string, pg: string, depth: int) -> string {
+    return smt_bv_collect_ovf_fp(expr_raw, ssa_map, pg, depth, "|")
+}
+
+fn smt_arr_collect_bounds(expr_raw: string, arr_syms: string, ssa_map: string, pg: string, bv_mode: bool) -> string {
+    if len(arr_syms) <= 1 || find_char(expr_raw, "[", 0) == -1 {
+        return ""
+    }
+    mut out = ""
+    let elen = len(expr_raw)
+    mut i = 0
+    while i < elen {
+        let ch = char_at(expr_raw, i)
+        if is_alpha_num(ch) || ch == "_" {
+            let start = i
+            while i < elen && (is_alpha_num(char_at(expr_raw, i)) || char_at(expr_raw, i) == "_") {
+                i = i + 1
+            }
+            let tok = slice(expr_raw, start, i - start)
+            if i < elen && char_at(expr_raw, i) == "[" && find_str(arr_syms, "|" + tok + "|", 0) != -1 {
+                mut brd = 1
+                mut j = i + 1
+                while j < elen && brd > 0 {
+                    let jc = char_at(expr_raw, j)
+                    if jc == "[" {
+                        brd = brd + 1
+                    } else if jc == "]" {
+                        brd = brd - 1
+                    }
+                    if brd > 0 {
+                        j = j + 1
+                    }
+                }
+                if brd == 0 {
+                    let idx_s = trim(slice(expr_raw, i + 1, j - i - 1))
+                    let idx_smt = smt_subst_vars(expr_to_smt_ex(idx_s, bv_mode), ssa_map)
+                    let len_smt = smt_ssa_get(ssa_map, tok + "_len")
+                    mut cond_ok = "(and (>= " + idx_smt + " 0) (< " + idx_smt + " " + len_smt + "))"
+                    if bv_mode {
+                        cond_ok = "(and (bvsge " + idx_smt + " (_ bv0 64)) (bvslt " + idx_smt + " " + len_smt + "))"
+                    }
+                    out = out + "(push)\n" + pg + "(assert (not " + cond_ok + "))\n(check-sat)\n(pop)\n"
+                }
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn smt_path_guards_str(path_stack: string) -> string {
+    let plen = len(path_stack)
+    if plen <= 1 {
+        return ""
+    }
+    mut out = ""
+    mut pos = 1
+    while pos < plen {
+        let nl = find_char(path_stack, "\n", pos)
+        mut entry = ""
+        if nl != -1 {
+            entry = slice(path_stack, pos, nl - pos)
+            pos = nl + 1
+        } else {
+            entry = slice(path_stack, pos, plen - pos)
+            pos = plen
+        }
+        let at_p = find_char(entry, "@", 0)
+        if at_p != -1 {
+            let kind = slice(entry, 0, at_p)
+            let cond = slice(entry, at_p + 1, len(entry) - at_p - 1)
+            if (kind == "IF" || kind == "ELSE") && len(cond) > 0 {
+                out = out + "(assert " + cond + ")\n"
+            }
+        }
+    }
+    return out
+}
+
+fn smt_pop_path_frame(path_stack: string) -> string {
+    let plen = len(path_stack)
+    if plen <= 1 {
+        return path_stack
+    }
+    mut trim_end = plen - 1
+    while trim_end > 0 && char_at(path_stack, trim_end - 1) != "\n" {
+        trim_end = trim_end - 1
+    }
+    if trim_end <= 1 {
+        return "\n"
+    }
+    return slice(path_stack, 0, trim_end)
+}
+
+fn smt_last_path_cond(path_stack: string) -> string {
+    let plen = len(path_stack)
+    if plen <= 1 {
+        return ""
+    }
+    mut start = plen - 1
+    while start > 0 && char_at(path_stack, start - 1) != "\n" {
+        start = start - 1
+    }
+    let entry = trim(slice(path_stack, start, plen - start))
+    let at_p = find_char(entry, "@", 0)
+    if at_p == -1 {
+        return ""
+    }
+    let kind = slice(entry, 0, at_p)
+    if kind == "IF" || kind == "ELSE" {
+        return slice(entry, at_p + 1, len(entry) - at_p - 1)
+    }
+    return ""
+}
+
+fn smt_var_sort(vname: string, fp_syms: string, int_sort: string) -> string {
+    if find_str(fp_syms, "|" + vname + "|", 0) != -1 {
+        return "Float64"
+    }
+    return int_sort
+}
+
+fn smt_path_conj_str(path_stack: string) -> string {
+    let plen = len(path_stack)
+    mut pos = 0
+    mut out = ""
+    mut cnt = 0
+    while pos < plen {
+        let nl = find_char(path_stack, "\n", pos)
+        mut lend = plen
+        if nl != -1 {
+            lend = nl
+        }
+        let item = slice(path_stack, pos, lend - pos)
+        if starts_with(item, "IF@") {
+            let g = trim(slice(item, 3, len(item) - 3))
+            if len(g) > 0 {
+                if cnt > 0 {
+                    out = out + " "
+                }
+                out = out + g
+                cnt = cnt + 1
+            }
+        } else if starts_with(item, "ELSE@") {
+            let g = trim(slice(item, 5, len(item) - 5))
+            if len(g) > 0 {
+                if cnt > 0 {
+                    out = out + " "
+                }
+                out = out + g
+                cnt = cnt + 1
+            }
+        }
+        pos = lend + 1
+    }
+    if cnt == 0 {
+        return ""
+    }
+    if cnt == 1 {
+        return out
+    }
+    return "(and " + out + ")"
+}
+
+fn smt_process_fn_block_fp(fn_body: string, init_decls: string, init_assumes: string, init_int_syms: string, init_bool_syms: string, init_mut_syms: string, init_arr_syms: string, init_fp_syms: string, init_types: string, bv_mode: bool) -> string {
+    let slen = len(fn_body)
+    mut int_sort = "Int"
+    mut arr_sort = "(Array Int Int)"
+    if bv_mode {
+        int_sort = "(_ BitVec 64)"
+        arr_sort = "(Array (_ BitVec 64) (_ BitVec 64))"
+    }
+    mut fn_stream = init_decls + init_assumes
+    mut fn_int_syms = init_int_syms
+    mut fn_bool_syms = init_bool_syms
+    mut fn_mut_syms = init_mut_syms
+    mut fn_arr_syms = init_arr_syms
+    mut fn_fp_syms = init_fp_syms
+    mut bv_ovf_stream = ""
+    mut arr_bnd_stream = ""
+    mut ssa_map = "|"
+    mut ssa_seq = 0
+    mut path_stack = "\n"
+    mut fn_ensure_cnt = 0
+    mut pos = 0
+    while pos < slen {
+        let nl = find_char(fn_body, "\n", pos)
+        mut line_end = slen
+        if nl != -1 {
+            line_end = nl
+        }
+        let line = trim(slice(fn_body, pos, line_end - pos))
+        if len(line) > 0 {
+            let all_s = fn_int_syms + fn_bool_syms + fn_arr_syms + fn_fp_syms
+            if (starts_with(line, "} else if ") || starts_with(line, "else if ")) && ends_with(line, "{") {
+                let prev_c = smt_last_path_cond(path_stack)
+                path_stack = smt_pop_path_frame(path_stack)
+                let epos = find_str(line, "else if ", 0)
+                let raw_c = trim(slice(line, epos + 8, len(line) - epos - 9))
+                mut guard_smt = ""
+                if smt_expr_supported_ex(raw_c, all_s, bv_mode) {
+                    let cs = smt_subst_vars(expr_to_smt_fp(raw_c, bv_mode, fn_fp_syms), ssa_map)
+                    if len(prev_c) > 0 {
+                        guard_smt = "(and (not " + prev_c + ") " + cs + ")"
+                    } else {
+                        guard_smt = cs
+                    }
+                    path_stack = path_stack + "IF@" + guard_smt + "\n"
+                } else if len(prev_c) > 0 {
+                    path_stack = path_stack + "IF@(not " + prev_c + ")\n"
+                } else {
+                    path_stack = path_stack + "PLAIN@\n"
+                }
+            } else if starts_with(line, "} else {") || line == "} else {" || line == "else {" {
+                let prev_c = smt_last_path_cond(path_stack)
+                path_stack = smt_pop_path_frame(path_stack)
+                if len(prev_c) > 0 {
+                    path_stack = path_stack + "ELSE@(not " + prev_c + ")\n"
+                } else {
+                    path_stack = path_stack + "PLAIN@\n"
+                }
+            } else if starts_with(line, "if ") && ends_with(line, "{") {
+                let raw_c = trim(slice(line, 3, len(line) - 4))
+                if smt_expr_supported_ex(raw_c, all_s, bv_mode) {
+                    path_stack = path_stack + "IF@" + smt_subst_vars(expr_to_smt_fp(raw_c, bv_mode, fn_fp_syms), ssa_map) + "\n"
+                } else {
+                    path_stack = path_stack + "PLAIN@\n"
+                }
+            } else if line == "}" {
+                path_stack = smt_pop_path_frame(path_stack)
+            } else if line == "return" || starts_with(line, "return ") {
+                let pc_ret = smt_path_conj_str(path_stack)
+                if len(pc_ret) > 0 {
+                    fn_stream = fn_stream + "(assert (not " + pc_ret + "))\n"
+                }
+            } else if starts_with(line, "require(") && ends_with(line, ")") {
+                let inner = slice(line, 8, len(line) - 9)
+                let comma = find_top_comma(inner, 0)
+                mut cond = trim(inner)
+                if comma != -1 {
+                    cond = trim(slice(inner, 0, comma))
+                }
+                if smt_expr_supported_ex(cond, all_s, bv_mode) {
+                    let pc_req = smt_path_conj_str(path_stack)
+                    let req_s = smt_subst_vars(expr_to_smt_fp(cond, bv_mode, fn_fp_syms), ssa_map)
+                    if len(pc_req) > 0 {
+                        fn_stream = fn_stream + "(assert (=> " + pc_req + " " + req_s + "))\n"
+                    } else {
+                        fn_stream = fn_stream + "(assert " + req_s + ")\n"
+                    }
+                }
+            } else if starts_with(line, "ensure(") && ends_with(line, ")") {
+                let inner = slice(line, 7, len(line) - 8)
+                let comma = find_top_comma(inner, 0)
+                mut cond = trim(inner)
+                if comma != -1 {
+                    cond = trim(slice(inner, 0, comma))
+                }
+                fn_ensure_cnt = fn_ensure_cnt + 1
+                let pg = smt_path_guards_str(path_stack)
+                if smt_expr_supported_ex(cond, all_s, bv_mode) {
+                    if bv_mode {
+                        bv_ovf_stream = bv_ovf_stream + smt_bv_collect_ovf_fp(cond, ssa_map, pg, 0, fn_fp_syms)
+                    }
+                    bv_ovf_stream = bv_ovf_stream + smt_fp_collect_safety(cond, ssa_map, pg, 0, bv_mode, fn_fp_syms)
+                    arr_bnd_stream = arr_bnd_stream + smt_arr_collect_bounds(cond, fn_arr_syms, ssa_map, pg, bv_mode)
+                    let mapped_c = smt_subst_vars(expr_to_smt_fp(cond, bv_mode, fn_fp_syms), ssa_map)
+                    fn_stream = fn_stream + "(push)\n" + pg + "(assert (not " + mapped_c + "))\n(check-sat)\n(pop)\n"
+                } else {
+                    fn_stream = fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: " + cond + "\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+                }
+            } else if (starts_with(line, "while ") || starts_with(line, "for ")) && ends_with(line, "{") {
+                mut loop_body = ""
+                mut inv_lines = "|"
+                mut has_inv = false
+                mut mut_in_loop = "|"
+                mut ldepth = 1
+                mut scan_p = line_end + 1
+                mut loop_end_p = slen
+                mut has_inner_branch_mut = false
+                while scan_p < slen && ldepth > 0 {
+                    let snl = find_char(fn_body, "\n", scan_p)
+                    mut send = slen
+                    if snl != -1 {
+                        send = snl
+                    }
+                    let lln = trim(slice(fn_body, scan_p, send - scan_p))
+                    let bd = count_braces_outside_str(lln)
+                    if ldepth == 1 && starts_with(lln, "invariant(") && ends_with(lln, ")") {
+                        has_inv = true
+                        let i_in = slice(lln, 10, len(lln) - 11)
+                        let icm = find_top_comma(i_in, 0)
+                        mut icond = trim(i_in)
+                        if icm != -1 {
+                            icond = trim(slice(i_in, 0, icm))
+                        }
+                        inv_lines = inv_lines + icond + "|"
+                    }
+                    if ldepth >= 1 {
+                        let is_decl = starts_with(lln, "let ") || starts_with(lln, "mut ")
+                        let eq_p = find_first_top_op(lln, "=")
+                        if is_decl == false && eq_p != -1 && starts_with(lln, "if ") == false && starts_with(lln, "while ") == false && starts_with(lln, "for ") == false && starts_with(lln, "require(") == false && starts_with(lln, "ensure(") == false && starts_with(lln, "invariant(") == false {
+                            mut lhs = trim(slice(lln, 0, eq_p))
+                            if ends_with(lhs, "+") || ends_with(lhs, "-") || ends_with(lhs, "*") || ends_with(lhs, "/") || ends_with(lhs, "%") {
+                                lhs = trim(slice(lhs, 0, len(lhs) - 1))
+                            }
+                            let idx_br = find_char(lhs, "[", 0)
+                            if idx_br != -1 {
+                                let base_arr = trim(slice(lhs, 0, idx_br))
+                                if is_valid_identifier(base_arr) {
+                                    if find_str(mut_in_loop, "|" + base_arr + "|", 0) == -1 {
+                                        mut_in_loop = mut_in_loop + base_arr + "|"
+                                    }
+                                    if ldepth > 1 || find_str(inv_lines, base_arr, 0) != -1 {
+                                        has_inner_branch_mut = true
+                                    }
+                                }
+                            } else if is_valid_identifier(lhs) {
+                                if find_str(mut_in_loop, "|" + lhs + "|", 0) == -1 {
+                                    mut_in_loop = mut_in_loop + lhs + "|"
+                                }
+                                if ldepth > 1 {
+                                    has_inner_branch_mut = true
+                                }
+                            }
+                        } else if starts_with(lln, "pop(") || starts_with(lln, "push(") || starts_with(lln, "arr_free(") {
+                            let lp_a = find_char(lln, "(", 0)
+                            let rp_a = find_char(lln, ")", lp_a + 1)
+                            let cm_a = find_char(lln, ",", lp_a + 1)
+                            mut a_end = rp_a
+                            if cm_a != -1 && (a_end == -1 || cm_a < a_end) {
+                                a_end = cm_a
+                            }
+                            if lp_a != -1 && a_end > lp_a + 1 {
+                                let anm = trim(slice(lln, lp_a + 1, a_end - lp_a - 1))
+                                if is_valid_identifier(anm) {
+                                    if find_str(mut_in_loop, "|" + anm + "|", 0) == -1 {
+                                        mut_in_loop = mut_in_loop + anm + "|"
+                                    }
+                                    has_inner_branch_mut = true
+                                }
+                            }
+                        }
+                    }
+                    ldepth = ldepth + bd
+                    if ldepth > 0 {
+                        loop_body = loop_body + lln + "\n"
+                    } else {
+                        loop_end_p = send
+                    }
+                    scan_p = send + 1
+                }
+                mut for_iv = ""
+                mut for_lo = ""
+                mut for_hi = ""
+                mut guard_cond = ""
+                if starts_with(line, "while ") {
+                    guard_cond = trim(slice(line, 6, len(line) - 7))
+                } else {
+                    let in_p = find_str(line, " in ", 4)
+                    let dot_p = find_str(line, "..", in_p)
+                    if in_p != -1 && dot_p != -1 {
+                        for_iv = trim(slice(line, 4, in_p - 4))
+                        for_lo = trim(slice(line, in_p + 4, dot_p - in_p - 4))
+                        for_hi = trim(slice(line, dot_p + 2, len(line) - dot_p - 3))
+                        guard_cond = for_iv + " < " + for_hi
+                        if is_valid_identifier(for_iv) {
+                            if find_str(fn_int_syms, "|" + for_iv + "|", 0) == -1 {
+                                fn_int_syms = fn_int_syms + for_iv + "|"
+                            }
+                            if find_str(mut_in_loop, "|" + for_iv + "|", 0) == -1 {
+                                mut_in_loop = mut_in_loop + for_iv + "|"
+                            }
+                        }
+                    }
+                }
+                if has_inv && len(guard_cond) > 0 && has_inner_branch_mut == false {
+                    let all_l = fn_int_syms + fn_bool_syms + fn_arr_syms + fn_fp_syms
+                    let pg = smt_path_guards_str(path_stack)
+                    mut base_ssa = ssa_map
+                    mut base_extra = ""
+                    if len(for_iv) > 0 && smt_expr_supported_ex(for_lo, all_l, bv_mode) {
+                        ssa_seq = ssa_seq + 1
+                        let iv0 = for_iv + "_b" + ssa_seq
+                        fn_stream = fn_stream + "(declare-const " + iv0 + " " + int_sort + ")\n"
+                        base_extra = "(assert (= " + iv0 + " " + smt_subst_vars(expr_to_smt_fp(for_lo, bv_mode, fn_fp_syms), ssa_map) + "))\n"
+                        base_ssa = smt_ssa_set(base_ssa, for_iv, iv0)
+                    }
+                    mut ip = 1
+                    let ilen_p = len(inv_lines)
+                    while ip < ilen_p {
+                        let nb = find_char(inv_lines, "|", ip)
+                        if nb == -1 {
+                            ip = ilen_p
+                        } else {
+                            let ic = slice(inv_lines, ip, nb - ip)
+                            ip = nb + 1
+                            fn_ensure_cnt = fn_ensure_cnt + 1
+                            if smt_expr_supported_ex(ic, all_l, bv_mode) {
+                                if bv_mode {
+                                    bv_ovf_stream = bv_ovf_stream + smt_bv_collect_ovf_fp(ic, base_ssa, pg + base_extra, 0, fn_fp_syms)
+                                }
+                                let ibase = smt_subst_vars(expr_to_smt_fp(ic, bv_mode, fn_fp_syms), base_ssa)
+                                fn_stream = fn_stream + "(push)\n" + pg + base_extra + "(assert (not " + ibase + "))\n(check-sat)\n(pop)\n"
+                            } else {
+                                fn_stream = fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: " + ic + "\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+                            }
+                        }
+                    }
+                    mut step_decls = ""
+                    mut step_assumes = ""
+                    mut step_ssa = ssa_map
+                    mut mp = 1
+                    let mlen = len(mut_in_loop)
+                    while mp < mlen {
+                        let nb = find_char(mut_in_loop, "|", mp)
+                        if nb == -1 {
+                            mp = mlen
+                        } else {
+                            let mv = slice(mut_in_loop, mp, nb - mp)
+                            mp = nb + 1
+                            ssa_seq = ssa_seq + 1
+                            let mk = mv + "_k" + ssa_seq
+                            let msort = smt_var_sort(mv, fn_fp_syms, int_sort)
+                            step_decls = step_decls + "(declare-const " + mk + " " + msort + ")\n"
+                            if msort != "Float64" {
+                                step_decls = step_decls + smt_type_bounds_assert_ex(mk, "i64", bv_mode)
+                            }
+                            step_ssa = smt_ssa_set(step_ssa, mv, mk)
+                        }
+                    }
+                    mut ip2 = 1
+                    while ip2 < ilen_p {
+                        let nb = find_char(inv_lines, "|", ip2)
+                        if nb == -1 {
+                            ip2 = ilen_p
+                        } else {
+                            let ic = slice(inv_lines, ip2, nb - ip2)
+                            ip2 = nb + 1
+                            if smt_expr_supported_ex(ic, all_l, bv_mode) {
+                                step_assumes = step_assumes + "(assert " + smt_subst_vars(expr_to_smt_fp(ic, bv_mode, fn_fp_syms), step_ssa) + ")\n"
+                            }
+                        }
+                    }
+                    if smt_expr_supported_ex(guard_cond, all_l, bv_mode) {
+                        step_assumes = step_assumes + "(assert " + smt_subst_vars(expr_to_smt_fp(guard_cond, bv_mode, fn_fp_syms), step_ssa) + ")\n"
+                    }
+                    mut step_sym_tbl = all_l
+                    mut step_fp_tbl = fn_fp_syms
+                    mut lb_pos = 0
+                    let lb_len = len(loop_body)
+                    while lb_pos < lb_len {
+                        let lnl = find_char(loop_body, "\n", lb_pos)
+                        mut lend = lb_len
+                        if lnl != -1 {
+                            lend = lnl
+                        }
+                        let st_line = trim(slice(loop_body, lb_pos, lend - lb_pos))
+                        if starts_with(st_line, "let ") || starts_with(st_line, "mut ") {
+                            let rest = trim(slice(st_line, 4, len(st_line) - 4))
+                            let eq_l = find_first_top_op(rest, "=")
+                            if eq_l != -1 {
+                                mut vn = trim(slice(rest, 0, eq_l))
+                                let cl = find_char(vn, ":", 0)
+                                mut vt = ""
+                                if cl != -1 {
+                                    vt = trim(slice(vn, cl + 1, len(vn) - cl - 1))
+                                    vn = trim(slice(vn, 0, cl))
+                                }
+                                let rhs_l = trim(slice(rest, eq_l + 1, len(rest) - eq_l - 1))
+                                if is_valid_identifier(vn) && smt_expr_supported_ex(rhs_l, step_sym_tbl, bv_mode) {
+                                    if bv_mode {
+                                        bv_ovf_stream = bv_ovf_stream + smt_bv_collect_ovf_fp(rhs_l, step_ssa, pg + step_decls + step_assumes, 0, step_fp_tbl)
+                                    }
+                                    bv_ovf_stream = bv_ovf_stream + smt_fp_collect_safety(rhs_l, step_ssa, pg + step_decls + step_assumes, 0, bv_mode, step_fp_tbl)
+                                    step_sym_tbl = step_sym_tbl + vn + "|"
+                                    mut lsort = int_sort
+                                    if vt == "float" || vt == "f64" || vt == "f32" || vt == "double" || smt_contains_fp(rhs_l, step_fp_tbl, bv_mode) {
+                                        lsort = "Float64"
+                                        step_fp_tbl = step_fp_tbl + vn + "|"
+                                    }
+                                    ssa_seq = ssa_seq + 1
+                                    let vs = vn + "_s" + ssa_seq
+                                    step_decls = step_decls + "(declare-const " + vs + " " + lsort + ")\n"
+                                    mut rhs_smt_l = smt_subst_vars(expr_to_smt_fp(rhs_l, bv_mode, step_fp_tbl), step_ssa)
+                                    if lsort == "Float64" {
+                                        rhs_smt_l = smt_subst_vars(smt_as_fp_term(rhs_l, bv_mode, step_fp_tbl), step_ssa)
+                                    }
+                                    step_assumes = step_assumes + "(assert (= " + vs + " " + rhs_smt_l + "))\n"
+                                    step_ssa = smt_ssa_set(step_ssa, vn, vs)
+                                }
+                            }
+                        } else if starts_with(st_line, "invariant(") == false && starts_with(st_line, "require(") == false && starts_with(st_line, "ensure(") == false {
+                            let eq_l = find_first_top_op(st_line, "=")
+                            if eq_l != -1 {
+                                mut lhs_l = trim(slice(st_line, 0, eq_l))
+                                mut rhs_l = trim(slice(st_line, eq_l + 1, len(st_line) - eq_l - 1))
+                                if ends_with(lhs_l, "+") || ends_with(lhs_l, "-") || ends_with(lhs_l, "*") || ends_with(lhs_l, "/") || ends_with(lhs_l, "%") {
+                                    let cop = slice(lhs_l, len(lhs_l) - 1, 1)
+                                    lhs_l = trim(slice(lhs_l, 0, len(lhs_l) - 1))
+                                    rhs_l = lhs_l + " " + cop + " (" + rhs_l + ")"
+                                }
+                                if is_valid_identifier(lhs_l) && smt_expr_supported_ex(rhs_l, step_sym_tbl, bv_mode) {
+                                    if bv_mode {
+                                        bv_ovf_stream = bv_ovf_stream + smt_bv_collect_ovf_fp(rhs_l, step_ssa, pg + step_decls + step_assumes, 0, step_fp_tbl)
+                                    }
+                                    bv_ovf_stream = bv_ovf_stream + smt_fp_collect_safety(rhs_l, step_ssa, pg + step_decls + step_assumes, 0, bv_mode, step_fp_tbl)
+                                    let lsort = smt_var_sort(lhs_l, step_fp_tbl, int_sort)
+                                    ssa_seq = ssa_seq + 1
+                                    let vs = lhs_l + "_s" + ssa_seq
+                                    step_decls = step_decls + "(declare-const " + vs + " " + lsort + ")\n"
+                                    mut rhs_smt_l = smt_subst_vars(expr_to_smt_fp(rhs_l, bv_mode, step_fp_tbl), step_ssa)
+                                    if lsort == "Float64" {
+                                        rhs_smt_l = smt_subst_vars(smt_as_fp_term(rhs_l, bv_mode, step_fp_tbl), step_ssa)
+                                    }
+                                    step_assumes = step_assumes + "(assert (= " + vs + " " + rhs_smt_l + "))\n"
+                                    step_ssa = smt_ssa_set(step_ssa, lhs_l, vs)
+                                }
+                            }
+                        }
+                        lb_pos = lend + 1
+                    }
+                    if len(for_iv) > 0 {
+                        ssa_seq = ssa_seq + 1
+                        let iv_n = for_iv + "_s" + ssa_seq
+                        let iv_prev = smt_ssa_get(step_ssa, for_iv)
+                        step_decls = step_decls + "(declare-const " + iv_n + " " + int_sort + ")\n"
+                        if bv_mode {
+                            step_assumes = step_assumes + "(assert (= " + iv_n + " (bvadd " + iv_prev + " (_ bv1 64))))\n"
+                        } else {
+                            step_assumes = step_assumes + "(assert (= " + iv_n + " (+ " + iv_prev + " 1)))\n"
+                        }
+                        step_ssa = smt_ssa_set(step_ssa, for_iv, iv_n)
+                    }
+                    mut ip3 = 1
+                    while ip3 < ilen_p {
+                        let nb = find_char(inv_lines, "|", ip3)
+                        if nb == -1 {
+                            ip3 = ilen_p
+                        } else {
+                            let ic = slice(inv_lines, ip3, nb - ip3)
+                            ip3 = nb + 1
+                            fn_ensure_cnt = fn_ensure_cnt + 1
+                            if smt_expr_supported_ex(ic, all_l, bv_mode) {
+                                let istep = smt_subst_vars(expr_to_smt_fp(ic, bv_mode, fn_fp_syms), step_ssa)
+                                fn_stream = fn_stream + "(push)\n" + pg + step_decls + step_assumes + "(assert (not " + istep + "))\n(check-sat)\n(pop)\n"
+                            } else {
+                                fn_stream = fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: " + ic + "\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+                            }
+                        }
+                    }
+                    mp = 1
+                    while mp < mlen {
+                        let nb = find_char(mut_in_loop, "|", mp)
+                        if nb == -1 {
+                            mp = mlen
+                        } else {
+                            let mv = slice(mut_in_loop, mp, nb - mp)
+                            mp = nb + 1
+                            ssa_seq = ssa_seq + 1
+                            let mp_sym = mv + "_p" + ssa_seq
+                            let msort = smt_var_sort(mv, fn_fp_syms, int_sort)
+                            fn_stream = fn_stream + "(declare-const " + mp_sym + " " + msort + ")\n"
+                            if msort != "Float64" {
+                                fn_stream = fn_stream + smt_type_bounds_assert_ex(mp_sym, "i64", bv_mode)
+                            }
+                            ssa_map = smt_ssa_set(ssa_map, mv, mp_sym)
+                        }
+                    }
+                    mut ip4 = 1
+                    while ip4 < ilen_p {
+                        let nb = find_char(inv_lines, "|", ip4)
+                        if nb == -1 {
+                            ip4 = ilen_p
+                        } else {
+                            let ic = slice(inv_lines, ip4, nb - ip4)
+                            ip4 = nb + 1
+                            if smt_expr_supported_ex(ic, all_l, bv_mode) {
+                                fn_stream = fn_stream + "(assert " + smt_subst_vars(expr_to_smt_fp(ic, bv_mode, fn_fp_syms), ssa_map) + ")\n"
+                            }
+                        }
+                    }
+                    if smt_expr_supported_ex(guard_cond, all_l, bv_mode) {
+                        fn_stream = fn_stream + "(assert (not " + smt_subst_vars(expr_to_smt_fp(guard_cond, bv_mode, fn_fp_syms), ssa_map) + "))\n"
+                    }
+                    line_end = loop_end_p
+                } else {
+                    if has_inv == false && find_str(loop_body, "ensure(", 0) != -1 {
+                        fn_ensure_cnt = fn_ensure_cnt + 1
+                        fn_stream = fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: ensure inside loop without invariant\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+                    }
+                    mut mp = 1
+                    let mlen = len(mut_in_loop)
+                    while mp < mlen {
+                        let nb = find_char(mut_in_loop, "|", mp)
+                        if nb == -1 {
+                            mp = mlen
+                        } else {
+                            let mv = slice(mut_in_loop, mp, nb - mp)
+                            mp = nb + 1
+                            if find_str(fn_arr_syms, "|" + mv + "|", 0) != -1 {
+                                ssa_seq = ssa_seq + 1
+                                let ma_sym = mv + "_arr_h" + ssa_seq
+                                let ml_sym = mv + "_len_h" + ssa_seq
+                                fn_stream = fn_stream + "(declare-const " + ma_sym + " " + arr_sort + ")\n"
+                                fn_stream = fn_stream + "(declare-const " + ml_sym + " " + int_sort + ")\n"
+                                if bv_mode {
+                                    fn_stream = fn_stream + "(assert (bvsge " + ml_sym + " (_ bv0 64)))\n"
+                                } else {
+                                    fn_stream = fn_stream + "(assert (>= " + ml_sym + " 0))\n"
+                                }
+                                ssa_map = smt_ssa_set(ssa_map, mv + "_arr", ma_sym)
+                                ssa_map = smt_ssa_set(ssa_map, mv + "_len", ml_sym)
+                            } else {
+                                ssa_seq = ssa_seq + 1
+                                let mp_sym = mv + "_h" + ssa_seq
+                                let hsort = smt_var_sort(mv, fn_fp_syms, int_sort)
+                                fn_stream = fn_stream + "(declare-const " + mp_sym + " " + hsort + ")\n"
+                                if hsort != "Float64" && hsort != "Bool" {
+                                    fn_stream = fn_stream + smt_type_bounds_assert_ex(mp_sym, "i64", bv_mode)
+                                }
+                                ssa_map = smt_ssa_set(ssa_map, mv, mp_sym)
+                            }
+                        }
+                    }
+                    if has_inv {
+                        fn_ensure_cnt = fn_ensure_cnt + 1
+                        fn_stream = fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: invariant inside branched-mutation loop\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+                    }
+                    line_end = loop_end_p
+                }
+            } else if starts_with(line, "let ") || starts_with(line, "mut ") {
+                let is_mut_decl = starts_with(line, "mut ")
+                let rest = trim(slice(line, 4, len(line) - 4))
+                let eq = find_first_top_op(rest, "=")
+                if eq != -1 {
+                    mut vname = trim(slice(rest, 0, eq))
+                    let col = find_char(vname, ":", 0)
+                    mut vtype_ann = ""
+                    if col != -1 {
+                        vtype_ann = trim(slice(vname, col + 1, len(vname) - col - 1))
+                        vname = trim(slice(vname, 0, col))
+                    }
+                    let rhs = trim(slice(rest, eq + 1, len(rest) - eq - 1))
+                    let all_syms = fn_int_syms + fn_bool_syms + fn_arr_syms + fn_fp_syms
+                    let not_declared = (find_str(all_syms, "|" + vname + "|", 0) == -1)
+                    if is_valid_identifier(vname) && not_declared && starts_with(rhs, "[") && ends_with(rhs, "]") {
+                        let inner_arr = trim(slice(rhs, 1, len(rhs) - 2))
+                        mut init_expr = "((as const " + arr_sort + ") 0)"
+                        if bv_mode {
+                            init_expr = "((as const " + arr_sort + ") (_ bv0 64))"
+                        }
+                        mut elem_idx = 0
+                        mut ap = 0
+                        let alen = len(inner_arr)
+                        mut arr_ok = true
+                        while ap < alen && arr_ok {
+                            let cm = find_top_comma(inner_arr, ap)
+                            mut e_item = ""
+                            if cm != -1 {
+                                e_item = trim(slice(inner_arr, ap, cm - ap))
+                                ap = cm + 1
+                            } else {
+                                e_item = trim(slice(inner_arr, ap, alen - ap))
+                                ap = alen
+                            }
+                            if len(e_item) > 0 {
+                                if smt_expr_supported_ex(e_item, all_syms, bv_mode) {
+                                    let esmt = smt_subst_vars(expr_to_smt_fp(e_item, bv_mode, fn_fp_syms), ssa_map)
+                                    mut idx_k = int_to_str(elem_idx)
+                                    if bv_mode {
+                                        idx_k = "(_ bv" + idx_k + " 64)"
+                                    }
+                                    init_expr = "(store " + init_expr + " " + idx_k + " " + esmt + ")"
+                                    elem_idx = elem_idx + 1
+                                } else {
+                                    arr_ok = false
+                                }
+                            }
+                        }
+                        if arr_ok {
+                            fn_arr_syms = fn_arr_syms + vname + "|"
+                            fn_stream = fn_stream + "(declare-const " + vname + "_arr " + arr_sort + ")\n"
+                            fn_stream = fn_stream + "(declare-const " + vname + "_len " + int_sort + ")\n"
+                            mut len_c = int_to_str(elem_idx)
+                            if bv_mode {
+                                len_c = "(_ bv" + len_c + " 64)"
+                            }
+                            fn_stream = fn_stream + "(assert (= " + vname + "_len " + len_c + "))\n"
+                            fn_stream = fn_stream + "(assert (= " + vname + "_arr " + init_expr + "))\n"
+                        }
+                    } else if is_valid_identifier(vname) && not_declared && smt_expr_supported_ex(rhs, all_syms, bv_mode) {
+                        let pg = smt_path_guards_str(path_stack)
+                        if bv_mode {
+                            bv_ovf_stream = bv_ovf_stream + smt_bv_collect_ovf_fp(rhs, ssa_map, pg, 0, fn_fp_syms)
+                        }
+                        bv_ovf_stream = bv_ovf_stream + smt_fp_collect_safety(rhs, ssa_map, pg, 0, bv_mode, fn_fp_syms)
+                        arr_bnd_stream = arr_bnd_stream + smt_arr_collect_bounds(rhs, fn_arr_syms, ssa_map, pg, bv_mode)
+                        let is_fp_var = (vtype_ann == "float" || vtype_ann == "f64" || vtype_ann == "f32" || vtype_ann == "double" || smt_contains_fp(rhs, fn_fp_syms, bv_mode)) && smt_is_bool_expr(rhs, fn_bool_syms) == false
+                        mut rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs, bv_mode, fn_fp_syms), ssa_map)
+                        if is_fp_var {
+                            rhs_smt = smt_subst_vars(smt_as_fp_term(rhs, bv_mode, fn_fp_syms), ssa_map)
+                        }
+                        if smt_is_bool_expr(rhs, fn_bool_syms) || vtype_ann == "bool" {
+                            fn_bool_syms = fn_bool_syms + vname + "|"
+                            fn_stream = fn_stream + "(declare-const " + vname + " Bool)\n"
+                            if is_mut_decl == false {
+                                fn_stream = fn_stream + "(assert (= " + vname + " " + rhs_smt + "))\n"
+                            } else {
+                                fn_mut_syms = fn_mut_syms + vname + "|"
+                                ssa_seq = ssa_seq + 1
+                                let init_s = vname + "_0_" + ssa_seq
+                                fn_stream = fn_stream + "(declare-const " + init_s + " Bool)\n"
+                                fn_stream = fn_stream + "(assert (= " + init_s + " " + rhs_smt + "))\n"
+                                ssa_map = smt_ssa_set(ssa_map, vname, init_s)
+                            }
+                        } else if is_fp_var {
+                            fn_fp_syms = fn_fp_syms + vname + "|"
+                            fn_stream = fn_stream + "(declare-const " + vname + " Float64)\n"
+                            if is_mut_decl == false {
+                                fn_stream = fn_stream + "(assert (= " + vname + " " + rhs_smt + "))\n"
+                            } else {
+                                fn_mut_syms = fn_mut_syms + vname + "|"
+                                ssa_seq = ssa_seq + 1
+                                let init_s = vname + "_0_" + ssa_seq
+                                fn_stream = fn_stream + "(declare-const " + init_s + " Float64)\n"
+                                fn_stream = fn_stream + "(assert (= " + init_s + " " + rhs_smt + "))\n"
+                                ssa_map = smt_ssa_set(ssa_map, vname, init_s)
+                            }
+                        } else {
+                            fn_int_syms = fn_int_syms + vname + "|"
+                            fn_stream = fn_stream + "(declare-const " + vname + " " + int_sort + ")\n"
+                            if is_mut_decl == false {
+                                fn_stream = fn_stream + "(assert (= " + vname + " " + rhs_smt + "))\n"
+                            } else {
+                                fn_mut_syms = fn_mut_syms + vname + "|"
+                                ssa_seq = ssa_seq + 1
+                                let init_s = vname + "_0_" + ssa_seq
+                                fn_stream = fn_stream + "(declare-const " + init_s + " " + int_sort + ")\n"
+                                fn_stream = fn_stream + "(assert (= " + init_s + " " + rhs_smt + "))\n"
+                                ssa_map = smt_ssa_set(ssa_map, vname, init_s)
+                            }
+                        }
+                    }
+                }
+            } else {
+                let eq_a = find_first_top_op(line, "=")
+                if eq_a != -1 && starts_with(line, "return ") == false {
+                    let lhs_a = trim(slice(line, 0, eq_a))
+                    let rhs_a = trim(slice(line, eq_a + 1, len(line) - eq_a - 1))
+                    let all_syms = fn_int_syms + fn_bool_syms + fn_arr_syms + fn_fp_syms
+                    let brk_a = smt_find_top_bracket_open(lhs_a)
+                    let pg = smt_path_guards_str(path_stack)
+                    if brk_a > 0 && ends_with(lhs_a, "]") {
+                        let arr_nm = trim(slice(lhs_a, 0, brk_a))
+                        let idx_nm = trim(slice(lhs_a, brk_a + 1, len(lhs_a) - brk_a - 2))
+                        if is_valid_identifier(arr_nm) && find_str(fn_arr_syms, "|" + arr_nm + "|", 0) != -1 && smt_expr_supported_ex(idx_nm, all_syms, bv_mode) && smt_expr_supported_ex(rhs_a, all_syms, bv_mode) {
+                            arr_bnd_stream = arr_bnd_stream + smt_arr_collect_bounds(lhs_a, fn_arr_syms, ssa_map, pg, bv_mode)
+                            arr_bnd_stream = arr_bnd_stream + smt_arr_collect_bounds(rhs_a, fn_arr_syms, ssa_map, pg, bv_mode)
+                            let cur_arr_s = smt_ssa_get(ssa_map, arr_nm + "_arr")
+                            let idx_smt = smt_subst_vars(expr_to_smt_fp(idx_nm, bv_mode, fn_fp_syms), ssa_map)
+                            let rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs_a, bv_mode, fn_fp_syms), ssa_map)
+                            ssa_seq = ssa_seq + 1
+                            let nxt_arr_s = arr_nm + "_s" + ssa_seq
+                            fn_stream = fn_stream + "(declare-const " + nxt_arr_s + " " + arr_sort + ")\n"
+                            let pc = smt_last_path_cond(path_stack)
+                            if len(pc) > 0 {
+                                fn_stream = fn_stream + "(assert (= " + nxt_arr_s + " (ite " + pc + " (store " + cur_arr_s + " " + idx_smt + " " + rhs_smt + ") " + cur_arr_s + ")))\n"
+                            } else {
+                                fn_stream = fn_stream + "(assert (= " + nxt_arr_s + " (store " + cur_arr_s + " " + idx_smt + " " + rhs_smt + ")))\n"
+                            }
+                            ssa_map = smt_ssa_set(ssa_map, arr_nm + "_arr", nxt_arr_s)
+                        }
+                    } else if is_valid_identifier(lhs_a) && find_str(all_syms, "|" + lhs_a + "|", 0) != -1 && smt_expr_supported_ex(rhs_a, all_syms, bv_mode) {
+                        ssa_seq = ssa_seq + 1
+                        let nxt_s = lhs_a + "_a" + ssa_seq
+                        if bv_mode {
+                            bv_ovf_stream = bv_ovf_stream + smt_bv_collect_ovf_fp(rhs_a, ssa_map, pg, 0, fn_fp_syms)
+                        }
+                        bv_ovf_stream = bv_ovf_stream + smt_fp_collect_safety(rhs_a, ssa_map, pg, 0, bv_mode, fn_fp_syms)
+                        arr_bnd_stream = arr_bnd_stream + smt_arr_collect_bounds(rhs_a, fn_arr_syms, ssa_map, pg, bv_mode)
+                        let asort = smt_var_sort(lhs_a, fn_fp_syms, int_sort)
+                        mut rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs_a, bv_mode, fn_fp_syms), ssa_map)
+                        if asort == "Float64" {
+                            rhs_smt = smt_subst_vars(smt_as_fp_term(rhs_a, bv_mode, fn_fp_syms), ssa_map)
+                        }
+                        fn_stream = fn_stream + "(declare-const " + nxt_s + " " + asort + ")\n"
+                        let pc = smt_last_path_cond(path_stack)
+                        if len(pc) > 0 {
+                            fn_stream = fn_stream + "(assert (=> " + pc + " (= " + nxt_s + " " + rhs_smt + ")))\n"
+                        } else {
+                            fn_stream = fn_stream + "(assert (= " + nxt_s + " " + rhs_smt + "))\n"
+                        }
+                        ssa_map = smt_ssa_set(ssa_map, lhs_a, nxt_s)
+                    }
+                }
+            }
+        }
+        pos = line_end + 1
+    }
+    if fn_ensure_cnt > 0 {
+        return fn_ensure_cnt + "\n(push)\n" + fn_stream + bv_ovf_stream + arr_bnd_stream + "(pop)\n"
+    }
+    return "0\n"
+}
+
+fn smt_ast_has_early_exit(pool: AstPool, nid: int) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_BREAK_STMT() || nd.kind == NK_RETURN_STMT() {
+        return true
+    }
+    if smt_ast_has_early_exit(pool, nd.left) {
+        return true
+    }
+    if smt_ast_has_early_exit(pool, nd.right) {
+        return true
+    }
+    if smt_ast_has_early_exit(pool, nd.extra) {
+        return true
+    }
+    for ci in 0..nd.child_count {
+        if smt_ast_has_early_exit(pool, pool.children[nd.child_start + ci]) {
+            return true
+        }
+    }
+    return false
+}
+
+struct SmtState {
+    mut blk_decls: string,
+    bv_mode: bool,
+    int_sort: string,
+    arr_sort: string,
+    mut fn_stream: string,
+    mut bv_ovf_stream: string,
+    mut arr_bnd_stream: string,
+    mut int_syms: string,
+    mut bool_syms: string,
+    mut mut_syms: string,
+    mut arr_syms: string,
+    mut fp_syms: string,
+    mut ssa_map: string,
+    mut ssa_seq: int,
+    mut ensure_cnt: int,
+    mut path_conds: [string]
+}
+
+fn smt_sym_add(tbl: string, name: string) -> string {
+    if len(name) == 0 || find_str(tbl, "|" + name + "|", 0) != -1 {
+        return tbl
+    }
+    return tbl + name + "|"
+}
+
+fn smt_sym_rem(tbl: string, name: string) -> string {
+    if len(name) == 0 {
+        return tbl
+    }
+    return replace_str(tbl, "|" + name + "|", "|")
+}
+
+fn smt_state_all_syms(st: SmtState) -> string {
+    return st.int_syms + st.bool_syms + st.arr_syms + st.fp_syms
+}
+
+fn smt_state_pg(st: SmtState) -> string {
+    mut out = ""
+    for i in 0..len(st.path_conds) {
+        if len(st.path_conds[i]) > 0 {
+            out = out + "(assert " + st.path_conds[i] + ")\n"
+        }
+    }
+    return out
+}
+
+fn smt_state_conj(st: SmtState) -> string {
+    mut items: [string] = []
+    for i in 0..len(st.path_conds) {
+        if len(st.path_conds[i]) > 0 {
+            items = push(items, st.path_conds[i])
+        }
+    }
+    if len(items) == 0 { return "" }
+    if len(items) == 1 { return items[0] }
+    mut res = "(and"
+    for j in 0..len(items) {
+        res = res + " " + items[j]
+    }
+    return res + ")"
+}
+
+fn smt_var_sort_all(vname: string, bool_syms: string, fp_syms: string, int_sort: string) -> string {
+    if find_str(bool_syms, "|" + vname + "|", 0) != -1 { return "Bool" }
+    if find_str(fp_syms, "|" + vname + "|", 0) != -1 { return "Float64" }
+    return int_sort
+}
+
+fn smt_ast_expr_str(pool: AstPool, nid: int, wrap_bin: bool) -> string {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return ""
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INT_LIT() || nd.kind == NK_FLOAT_LIT() || nd.kind == NK_BOOL_LIT() {
+        return nd.str_val
+    }
+    if nd.kind == NK_IDENT() {
+        return nd.name
+    }
+    if nd.kind == NK_UNARY_OP() {
+        let l = smt_ast_expr_str(pool, nd.left, true)
+        if nd.op == "not" {
+            let s = "not " + l
+            if wrap_bin { return "(" + s + ")" }
+            return s
+        }
+        if nd.op == "-" {
+            let lnd: AstNode = pool.nodes[nd.left]
+            if lnd.kind == NK_INT_LIT() || lnd.kind == NK_FLOAT_LIT() {
+                let s = "-" + lnd.str_val
+                if wrap_bin { return "(" + s + ")" }
+                return s
+            }
+            let s = "-" + l
+            if wrap_bin { return "(" + s + ")" }
+            return s
+        }
+        let s = nd.op + l
+        if wrap_bin { return "(" + s + ")" }
+        return s
+    }
+    if nd.kind == NK_BIN_OP() {
+        mut op_s = nd.op
+        if op_s == "and" { op_s = "&&" }
+        else if op_s == "or" { op_s = "||" }
+        let core = smt_ast_expr_str(pool, nd.left, true) + " " + op_s + " " + smt_ast_expr_str(pool, nd.right, true)
+        if wrap_bin { return "(" + core + ")" }
+        return core
+    }
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind != NK_IDENT() {
+            return "__UNSUPPORTED__"
+        }
+        mut args_s = ""
+        for ci in 0..nd.child_count {
+            if ci > 0 { args_s = args_s + ", " }
+            args_s = args_s + smt_ast_expr_str(pool, pool.children[nd.child_start + ci], false)
+        }
+        return cal.name + "(" + args_s + ")"
+    }
+    if nd.kind == NK_INDEX() {
+        return smt_ast_expr_str(pool, nd.left, false) + "[" + smt_ast_expr_str(pool, nd.right, false) + "]"
+    }
+    return "__UNSUPPORTED__"
+}
+
+fn smt_ast_expr_is_bool(pool: AstPool, nid: int, bool_syms: string) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) { return false }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_BOOL_LIT() { return true }
+    if nd.kind == NK_IDENT() { return find_str(bool_syms, "|" + nd.name + "|", 0) != -1 }
+    if nd.kind == NK_UNARY_OP() { return nd.op == "!" || nd.op == "not" }
+    if nd.kind == NK_BIN_OP() {
+        return nd.op == "==" || nd.op == "!=" || nd.op == "<" || nd.op == ">" || nd.op == "<=" || nd.op == ">=" || nd.op == "&&" || nd.op == "||" || nd.op == "and" || nd.op == "or"
+    }
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        return cal.kind == NK_IDENT() && (cal.name == "is_nan" || cal.name == "is_inf" || cal.name == "is_finite")
+    }
+    return false
+}
+
+fn smt_ast_expr_is_fp(pool: AstPool, nid: int, fp_syms: string) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) { return false }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_FLOAT_LIT() { return true }
+    if nd.kind == NK_IDENT() { return find_str(fp_syms, "|" + nd.name + "|", 0) != -1 }
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind == NK_IDENT() && (cal.name == "fp_abs" || cal.name == "fabs" || cal.name == "fp_sqrt" || cal.name == "to_float") {
+            return true
+        }
+    }
+    if nd.kind == NK_UNARY_OP() { return smt_ast_expr_is_fp(pool, nd.left, fp_syms) }
+    if nd.kind == NK_BIN_OP() {
+        if nd.op == "==" || nd.op == "!=" || nd.op == "<" || nd.op == ">" || nd.op == "<=" || nd.op == ">=" || nd.op == "&&" || nd.op == "||" || nd.op == "and" || nd.op == "or" {
+            return false
+        }
+        return smt_ast_expr_is_fp(pool, nd.left, fp_syms) || smt_ast_expr_is_fp(pool, nd.right, fp_syms)
+    }
+    return false
+}
+
+fn smt_ast_has_ensure(pool: AstPool, nid: int) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) { return false }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_CONTRACT_ENS() { return true }
+    if nd.left != -1 && smt_ast_has_ensure(pool, nd.left) { return true }
+    if nd.right != -1 && smt_ast_has_ensure(pool, nd.right) { return true }
+    if nd.extra != -1 && smt_ast_has_ensure(pool, nd.extra) { return true }
+    for ci in 0..nd.child_count {
+        if smt_ast_has_ensure(pool, pool.children[nd.child_start + ci]) { return true }
+    }
+    return false
+}
+
+fn smt_ast_collect_invs(pool: AstPool, body_id: int) -> [int] {
+    mut out: [int] = []
+    if body_id < 0 || body_id >= len(pool.nodes) { return out }
+    let nd: AstNode = pool.nodes[body_id]
+    if nd.kind == NK_CONTRACT_INV() {
+        out = push(out, body_id)
+        return out
+    }
+    if nd.kind == NK_BLOCK() {
+        for ci in 0..nd.child_count {
+            let cid = pool.children[nd.child_start + ci]
+            if cid >= 0 && cid < len(pool.nodes) && pool.nodes[cid].kind == NK_CONTRACT_INV() {
+                out = push(out, cid)
+            }
+        }
+    }
+    return out
+}
+
+fn smt_ast_scan_loop_muts(pool: AstPool, nid: int, in_branch: bool, inv_syms: string, mut muts_out: [string], mut flag_out: [bool]) {
+    if nid < 0 || nid >= len(pool.nodes) { return }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_IF_STMT() || nd.kind == NK_WHILE_STMT() || nd.kind == NK_FOR_RANGE() {
+        if nd.right != -1 { smt_ast_scan_loop_muts(pool, nd.right, true, inv_syms, muts_out, flag_out) }
+        if nd.extra != -1 { smt_ast_scan_loop_muts(pool, nd.extra, true, inv_syms, muts_out, flag_out) }
+        for ci in 0..nd.child_count {
+            smt_ast_scan_loop_muts(pool, pool.children[nd.child_start + ci], true, inv_syms, muts_out, flag_out)
+        }
+        return
+    }
+    if nd.kind == NK_ASSIGN_STMT() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let lhs: AstNode = pool.nodes[nd.left]
+        if lhs.kind == NK_IDENT() {
+            if find_str(muts_out[0], "|" + lhs.name + "|", 0) == -1 {
+                muts_out[0] = muts_out[0] + lhs.name + "|"
+            }
+            if in_branch {
+                let f_t = true
+                flag_out[0] = f_t
+            }
+        } else if lhs.kind == NK_INDEX() && lhs.left >= 0 && lhs.left < len(pool.nodes) {
+            let base: AstNode = pool.nodes[lhs.left]
+            if base.kind == NK_IDENT() {
+                if find_str(muts_out[0], "|" + base.name + "|", 0) == -1 {
+                    muts_out[0] = muts_out[0] + base.name + "|"
+                }
+                if in_branch || find_str(inv_syms, base.name, 0) != -1 {
+                    let f_t = true
+                    flag_out[0] = f_t
+                }
+            }
+        }
+        return
+    }
+    if nd.kind == NK_EXPR_STMT() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let e: AstNode = pool.nodes[nd.left]
+        if e.kind == NK_CALL() && e.left >= 0 && e.left < len(pool.nodes) {
+            let cal: AstNode = pool.nodes[e.left]
+            if cal.kind == NK_IDENT() && (cal.name == "pop" || cal.name == "push" || cal.name == "arr_free") && e.child_count >= 1 {
+                let a0_id = pool.children[e.child_start]
+                if a0_id >= 0 && a0_id < len(pool.nodes) {
+                    let a0: AstNode = pool.nodes[a0_id]
+                    if a0.kind == NK_IDENT() {
+                        if find_str(muts_out[0], "|" + a0.name + "|", 0) == -1 {
+                            muts_out[0] = muts_out[0] + a0.name + "|"
+                        }
+                        let f_t = true
+                        flag_out[0] = f_t
+                    }
+                }
+            }
+        }
+        return
+    }
+    if nd.kind == NK_MATCH_STMT() {
+        for ci in 0..nd.child_count {
+            let aid = pool.children[nd.child_start + ci]
+            if aid >= 0 && aid < len(pool.nodes) {
+                let arm: AstNode = pool.nodes[aid]
+                smt_ast_scan_loop_muts(pool, arm.right, true, inv_syms, muts_out, flag_out)
+            }
+        }
+        return
+    }
+    if nd.kind == NK_BLOCK() {
+        for ci in 0..nd.child_count {
+            smt_ast_scan_loop_muts(pool, pool.children[nd.child_start + ci], in_branch, inv_syms, muts_out, flag_out)
+        }
+    }
+}
+
+fn smt_ast_havoc_syms(mut st: SmtState, syms_bar: string) {
+    mut mp = 1
+    let mlen = len(syms_bar)
+    while mp < mlen {
+        let nb = find_char(syms_bar, "|", mp)
+        if nb == -1 { break }
+        let mv = slice(syms_bar, mp, nb - mp)
+        mp = nb + 1
+        if find_str(st.arr_syms, "|" + mv + "|", 0) != -1 {
+            st.ssa_seq = st.ssa_seq + 1
+            let ma_sym = mv + "_arr_h" + int_to_str(st.ssa_seq)
+            let ml_sym = mv + "_len_h" + int_to_str(st.ssa_seq)
+            st.fn_stream = st.fn_stream + "(declare-const " + ma_sym + " " + st.arr_sort + ")\n"
+            st.fn_stream = st.fn_stream + "(declare-const " + ml_sym + " " + st.int_sort + ")\n"
+            if st.bv_mode {
+                st.fn_stream = st.fn_stream + "(assert (bvsge " + ml_sym + " (_ bv0 64)))\n"
+            } else {
+                st.fn_stream = st.fn_stream + "(assert (>= " + ml_sym + " 0))\n"
+            }
+            st.ssa_map = smt_ssa_set(st.ssa_map, mv + "_arr", ma_sym)
+            st.ssa_map = smt_ssa_set(st.ssa_map, mv + "_len", ml_sym)
+        } else if find_str(smt_state_all_syms(st), "|" + mv + "|", 0) != -1 {
+            st.ssa_seq = st.ssa_seq + 1
+            let mp_sym = mv + "_h" + int_to_str(st.ssa_seq)
+            let hsort = smt_var_sort_all(mv, st.bool_syms, st.fp_syms, st.int_sort)
+            st.fn_stream = st.fn_stream + "(declare-const " + mp_sym + " " + hsort + ")\n"
+            if hsort != "Float64" && hsort != "Bool" {
+                st.fn_stream = st.fn_stream + smt_type_bounds_assert_ex(mp_sym, "i64", st.bv_mode)
+            }
+            st.ssa_map = smt_ssa_set(st.ssa_map, mv, mp_sym)
+        }
+    }
+}
+
+fn smt_ast_restore_sym_flag(cur_set: string, outer_set: string, sym: string) -> string {
+    if find_str(outer_set, "|" + sym + "|", 0) != -1 {
+        return smt_sym_add(cur_set, sym)
+    }
+    return smt_sym_rem(cur_set, sym)
+}
+
+fn smt_ast_restore_ssa_key(cur_ssa: string, outer_ssa: string, key: string) -> string {
+    if find_str(outer_ssa, "|" + key + "=", 0) != -1 {
+        return smt_ssa_set(cur_ssa, key, smt_ssa_get(outer_ssa, key))
+    }
+    let kpos = find_str(cur_ssa, "|" + key + "=", 0)
+    if kpos != -1 {
+        let kend = find_char(cur_ssa, "|", kpos + 1)
+        if kend != -1 {
+            return slice(cur_ssa, 0, kpos) + slice(cur_ssa, kend, len(cur_ssa) - kend)
+        }
+    }
+    return cur_ssa
+}
+
+fn smt_ast_exit_block_scope(mut st: SmtState, outer_ssa: string, outer_int: string, outer_bool: string, outer_fp: string, outer_arr: string, outer_mut: string, outer_blk: string) {
+    let decls = st.blk_decls
+    mut p = 1
+    let dlen = len(decls)
+    while p < dlen {
+        let nb = find_char(decls, "|", p)
+        if nb == -1 { break }
+        let sym = slice(decls, p, nb - p)
+        p = nb + 1
+        if len(sym) > 0 {
+            st.int_syms = smt_ast_restore_sym_flag(st.int_syms, outer_int, sym)
+            st.bool_syms = smt_ast_restore_sym_flag(st.bool_syms, outer_bool, sym)
+            st.fp_syms = smt_ast_restore_sym_flag(st.fp_syms, outer_fp, sym)
+            st.arr_syms = smt_ast_restore_sym_flag(st.arr_syms, outer_arr, sym)
+            st.mut_syms = smt_ast_restore_sym_flag(st.mut_syms, outer_mut, sym)
+            st.ssa_map = smt_ast_restore_ssa_key(st.ssa_map, outer_ssa, sym)
+            st.ssa_map = smt_ast_restore_ssa_key(st.ssa_map, outer_ssa, sym + "_arr")
+            st.ssa_map = smt_ast_restore_ssa_key(st.ssa_map, outer_ssa, sym + "_len")
+        }
+    }
+    st.blk_decls = outer_blk
+}
+
+fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: [int], mut ens_cols: [int], mut ens_msgs: [string]) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_BLOCK() {
+        let outer_ssa = st.ssa_map
+        let outer_int = st.int_syms
+        let outer_bool = st.bool_syms
+        let outer_fp = st.fp_syms
+        let outer_arr = st.arr_syms
+        let outer_mut = st.mut_syms
+        let outer_blk = st.blk_decls
+        st.blk_decls = "|"
+        for ci in 0..nd.child_count {
+            let cid = pool.children[nd.child_start + ci]
+            if smt_ast_lower_stmt(pool, cid, st, ens_lines, ens_cols, ens_msgs) {
+                smt_ast_exit_block_scope(st, outer_ssa, outer_int, outer_bool, outer_fp, outer_arr, outer_mut, outer_blk)
+                return true
+            }
+        }
+        smt_ast_exit_block_scope(st, outer_ssa, outer_int, outer_bool, outer_fp, outer_arr, outer_mut, outer_blk)
+        return false
+    }
+    if nd.kind == NK_RETURN_STMT() || nd.kind == NK_ABORT_STMT() {
+        return true
+    }
+    if nd.kind == NK_IF_STMT() {
+        let raw_c = smt_ast_expr_str(pool, nd.left, false)
+        let pg_before = smt_state_pg(st)
+        let all_s = smt_state_all_syms(st)
+        mut cond_smt = ""
+        if smt_expr_supported_ex(raw_c, all_s, st.bv_mode) {
+            if st.bv_mode {
+                st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(raw_c, st.ssa_map, pg_before, 0, st.fp_syms)
+            }
+            st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(raw_c, st.ssa_map, pg_before, 0, st.bv_mode, st.fp_syms)
+            st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(raw_c, st.arr_syms, st.ssa_map, pg_before, st.bv_mode)
+            cond_smt = smt_subst_vars(expr_to_smt_fp(raw_c, st.bv_mode, st.fp_syms), st.ssa_map)
+        } else {
+            st.ssa_seq = st.ssa_seq + 1
+            cond_smt = "_nino_unk_cond_" + int_to_str(st.ssa_seq)
+            st.fn_stream = st.fn_stream + "(declare-const " + cond_smt + " Bool)\n"
+        }
+        let pre_ssa = st.ssa_map
+        let pre_int = st.int_syms
+        let pre_bool = st.bool_syms
+        let pre_fp = st.fp_syms
+        let pre_arr = st.arr_syms
+        let pre_mut = st.mut_syms
+        st.path_conds = push(st.path_conds, cond_smt)
+        let then_ret = smt_ast_lower_stmt(pool, nd.right, st, ens_lines, ens_cols, ens_msgs)
+        st.path_conds = pop(st.path_conds)
+        let then_ssa = st.ssa_map
+
+        mut else_ret = false
+        mut else_ssa = pre_ssa
+        if nd.extra != -1 {
+            st.ssa_map = pre_ssa
+            st.int_syms = pre_int
+            st.bool_syms = pre_bool
+            st.fp_syms = pre_fp
+            st.arr_syms = pre_arr
+            st.mut_syms = pre_mut
+            st.path_conds = push(st.path_conds, "(not " + cond_smt + ")")
+            else_ret = smt_ast_lower_stmt(pool, nd.extra, st, ens_lines, ens_cols, ens_msgs)
+            st.path_conds = pop(st.path_conds)
+            else_ssa = st.ssa_map
+        }
+        st.int_syms = pre_int
+        st.bool_syms = pre_bool
+        st.fp_syms = pre_fp
+        st.arr_syms = pre_arr
+        st.mut_syms = pre_mut
+
+        let outer_pc = smt_state_conj(st)
+        if then_ret && else_ret {
+            return true
+        }
+        if then_ret && else_ret == false {
+            if len(outer_pc) > 0 {
+                st.fn_stream = st.fn_stream + "(assert (=> " + outer_pc + " (not " + cond_smt + ")))\n"
+            } else {
+                st.fn_stream = st.fn_stream + "(assert (not " + cond_smt + "))\n"
+            }
+            st.ssa_map = else_ssa
+            return false
+        }
+        if then_ret == false && else_ret {
+            if len(outer_pc) > 0 {
+                st.fn_stream = st.fn_stream + "(assert (=> " + outer_pc + " " + cond_smt + "))\n"
+            } else {
+                st.fn_stream = st.fn_stream + "(assert " + cond_smt + ")\n"
+            }
+            st.ssa_map = then_ssa
+            return false
+        }
+        mut joined_ssa = pre_ssa
+        let scalar_all = pre_int + slice(pre_bool, 1, len(pre_bool) - 1) + slice(pre_fp, 1, len(pre_fp) - 1)
+        mut vp = 1
+        let vlen = len(scalar_all)
+        while vp < vlen {
+            let nb = find_char(scalar_all, "|", vp)
+            if nb == -1 { break }
+            let vn = slice(scalar_all, vp, nb - vp)
+            vp = nb + 1
+            if len(vn) > 0 {
+                let vt = smt_ssa_get(then_ssa, vn)
+                let ve = smt_ssa_get(else_ssa, vn)
+                if vt != ve {
+                    st.ssa_seq = st.ssa_seq + 1
+                    let jnm = vn + "_phi_" + int_to_str(st.ssa_seq)
+                    let vsort = smt_var_sort_all(vn, pre_bool, pre_fp, st.int_sort)
+                    st.fn_stream = st.fn_stream + "(declare-const " + jnm + " " + vsort + ")\n"
+                    st.fn_stream = st.fn_stream + "(assert (= " + jnm + " (ite " + cond_smt + " " + vt + " " + ve + ")))\n"
+                    joined_ssa = smt_ssa_set(joined_ssa, vn, jnm)
+                }
+            }
+        }
+        mut ap = 1
+        let alen = len(pre_arr)
+        while ap < alen {
+            let nb = find_char(pre_arr, "|", ap)
+            if nb == -1 { break }
+            let an = slice(pre_arr, ap, nb - ap)
+            ap = nb + 1
+            if len(an) > 0 {
+                let at_k = smt_ssa_get(then_ssa, an + "_arr")
+                let ae_k = smt_ssa_get(else_ssa, an + "_arr")
+                if at_k != ae_k {
+                    st.ssa_seq = st.ssa_seq + 1
+                    let ja = an + "_arr_phi_" + int_to_str(st.ssa_seq)
+                    st.fn_stream = st.fn_stream + "(declare-const " + ja + " " + st.arr_sort + ")\n"
+                    st.fn_stream = st.fn_stream + "(assert (= " + ja + " (ite " + cond_smt + " " + at_k + " " + ae_k + ")))\n"
+                    joined_ssa = smt_ssa_set(joined_ssa, an + "_arr", ja)
+                }
+                let lt_k = smt_ssa_get(then_ssa, an + "_len")
+                let le_k = smt_ssa_get(else_ssa, an + "_len")
+                if lt_k != le_k {
+                    st.ssa_seq = st.ssa_seq + 1
+                    let jl = an + "_len_phi_" + int_to_str(st.ssa_seq)
+                    st.fn_stream = st.fn_stream + "(declare-const " + jl + " " + st.int_sort + ")\n"
+                    st.fn_stream = st.fn_stream + "(assert (= " + jl + " (ite " + cond_smt + " " + lt_k + " " + le_k + ")))\n"
+                    joined_ssa = smt_ssa_set(joined_ssa, an + "_len", jl)
+                }
+            }
+        }
+        st.ssa_map = joined_ssa
+        return false
+    }
+    if nd.kind == NK_GUARD_STMT() {
+        let raw_c = smt_ast_expr_str(pool, nd.left, false)
+        let pg_before = smt_state_pg(st)
+        let all_s = smt_state_all_syms(st)
+        mut cond_smt = ""
+        if smt_expr_supported_ex(raw_c, all_s, st.bv_mode) {
+            if st.bv_mode {
+                st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(raw_c, st.ssa_map, pg_before, 0, st.fp_syms)
+            }
+            st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(raw_c, st.ssa_map, pg_before, 0, st.bv_mode, st.fp_syms)
+            cond_smt = smt_subst_vars(expr_to_smt_fp(raw_c, st.bv_mode, st.fp_syms), st.ssa_map)
+        } else {
+            st.ssa_seq = st.ssa_seq + 1
+            cond_smt = "_nino_unk_g_" + int_to_str(st.ssa_seq)
+            st.fn_stream = st.fn_stream + "(declare-const " + cond_smt + " Bool)\n"
+        }
+        let pre_ssa = st.ssa_map
+        st.path_conds = push(st.path_conds, "(not " + cond_smt + ")")
+        let eret = smt_ast_lower_stmt(pool, nd.right, st, ens_lines, ens_cols, ens_msgs)
+        st.path_conds = pop(st.path_conds)
+        let outer_pc = smt_state_conj(st)
+        if eret {
+            if len(outer_pc) > 0 {
+                st.fn_stream = st.fn_stream + "(assert (=> " + outer_pc + " " + cond_smt + "))\n"
+            } else {
+                st.fn_stream = st.fn_stream + "(assert " + cond_smt + ")\n"
+            }
+        }
+        st.ssa_map = pre_ssa
+        return false
+    }
+    if nd.kind == NK_CONTRACT_REQ() {
+        let raw_c = smt_ast_expr_str(pool, nd.left, false)
+        let all_s = smt_state_all_syms(st)
+        if smt_expr_supported_ex(raw_c, all_s, st.bv_mode) {
+            let pc_req = smt_state_conj(st)
+            let req_s = smt_subst_vars(expr_to_smt_fp(raw_c, st.bv_mode, st.fp_syms), st.ssa_map)
+            if len(pc_req) > 0 {
+                st.fn_stream = st.fn_stream + "(assert (=> " + pc_req + " " + req_s + "))\n"
+            } else {
+                st.fn_stream = st.fn_stream + "(assert " + req_s + ")\n"
+            }
+        }
+        return false
+    }
+    if nd.kind == NK_CONTRACT_ENS() {
+        let raw_c = smt_ast_expr_str(pool, nd.left, false)
+        st.ensure_cnt = st.ensure_cnt + 1
+        mut msg_txt = raw_c
+        if nd.right >= 0 && nd.right < len(pool.nodes) {
+            let mnd: AstNode = pool.nodes[nd.right]
+            if mnd.kind == NK_STR_LIT() && len(mnd.str_val) >= 2 {
+                msg_txt = slice(mnd.str_val, 1, len(mnd.str_val) - 2)
+            }
+        }
+        ens_lines = push(ens_lines, nd.line > 0 ? nd.line - 1 : 0)
+        ens_cols = push(ens_cols, nd.col > 0 ? nd.col - 1 : 0)
+        ens_msgs = push(ens_msgs, msg_txt)
+        let pg = smt_state_pg(st)
+        let all_s = smt_state_all_syms(st)
+        if smt_expr_supported_ex(raw_c, all_s, st.bv_mode) {
+            if st.bv_mode {
+                st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(raw_c, st.ssa_map, pg, 0, st.fp_syms)
+            }
+            st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(raw_c, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
+            st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(raw_c, st.arr_syms, st.ssa_map, pg, st.bv_mode)
+            let mapped_c = smt_subst_vars(expr_to_smt_fp(raw_c, st.bv_mode, st.fp_syms), st.ssa_map)
+            st.fn_stream = st.fn_stream + "(push)\n" + pg + "(assert (not " + mapped_c + "))\n(check-sat)\n(pop)\n"
+        } else {
+            st.fn_stream = st.fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: " + raw_c + "\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+        }
+        return false
+    }
+    if nd.kind == NK_WHILE_STMT() || nd.kind == NK_FOR_RANGE() {
+        mut body_id = nd.right
+        if nd.kind == NK_FOR_RANGE() {
+            body_id = (nd.child_count >= 1) ? pool.children[nd.child_start] : -1
+        }
+        let inv_nids = smt_ast_collect_invs(pool, body_id)
+        let has_inv = len(inv_nids) > 0
+        mut inv_raws: [string] = []
+        mut inv_cat = ""
+        for ii in 0..len(inv_nids) {
+            let ic_raw = smt_ast_expr_str(pool, pool.nodes[inv_nids[ii]].left, false)
+            inv_raws = push(inv_raws, ic_raw)
+            inv_cat = inv_cat + ic_raw + "|"
+        }
+        mut muts_box: [string] = ["|"]
+        mut branch_flag: [bool] = [false]
+        smt_ast_scan_loop_muts(pool, body_id, false, inv_cat, muts_box, branch_flag)
+        mut mut_in_loop = muts_box[0]
+        let has_early_exit = smt_ast_has_early_exit(pool, body_id)
+        mut has_inner_branch_mut = branch_flag[0]
+        if has_early_exit {
+            has_inner_branch_mut = true
+        }
+        if nd.kind == NK_FOR_RANGE() && nd.extra != -1 {
+            has_inner_branch_mut = true
+        }
+        let pre_for_ssa = st.ssa_map
+        let pre_for_int = st.int_syms
+        let pre_for_bool = st.bool_syms
+        let pre_for_fp = st.fp_syms
+        let pre_for_arr = st.arr_syms
+        let pre_for_mut = st.mut_syms
+        mut for_iv = ""
+        mut for_lo = ""
+        mut guard_cond = ""
+        if nd.kind == NK_WHILE_STMT() {
+            guard_cond = smt_ast_expr_str(pool, nd.left, false)
+        } else {
+            for_iv = nd.name
+            for_lo = smt_ast_expr_str(pool, nd.left, false)
+            let for_hi = smt_ast_expr_str(pool, nd.right, false)
+            if for_iv == for_hi {
+                has_inner_branch_mut = true
+            }
+            guard_cond = "(" + for_iv + " < " + for_hi + ")"
+            if is_valid_identifier(for_iv) {
+                st.int_syms = smt_sym_add(st.int_syms, for_iv)
+                if find_str(mut_in_loop, "|" + for_iv + "|", 0) == -1 {
+                    mut_in_loop = mut_in_loop + for_iv + "|"
+                }
+            }
+        }
+        if has_inv && len(guard_cond) > 0 && has_inner_branch_mut == false {
+            let all_l = smt_state_all_syms(st)
+            let pg = smt_state_pg(st)
+            mut base_ssa = st.ssa_map
+            mut base_extra = ""
+            if len(for_iv) > 0 && smt_expr_supported_ex(for_lo, all_l, st.bv_mode) {
+                st.ssa_seq = st.ssa_seq + 1
+                let iv0 = for_iv + "_b" + int_to_str(st.ssa_seq)
+                st.fn_stream = st.fn_stream + "(declare-const " + iv0 + " " + st.int_sort + ")\n"
+                base_extra = "(assert (= " + iv0 + " " + smt_subst_vars(expr_to_smt_fp(for_lo, st.bv_mode, st.fp_syms), st.ssa_map) + "))\n"
+                base_ssa = smt_ssa_set(base_ssa, for_iv, iv0)
+            }
+            for ii in 0..len(inv_raws) {
+                let ic = inv_raws[ii]
+                st.ensure_cnt = st.ensure_cnt + 1
+                ens_lines = push(ens_lines, nd.line > 0 ? nd.line - 1 : 0)
+                ens_cols = push(ens_cols, nd.col > 0 ? nd.col - 1 : 0)
+                ens_msgs = push(ens_msgs, "invariant base: " + ic)
+                if smt_expr_supported_ex(ic, all_l, st.bv_mode) {
+                    if st.bv_mode {
+                        st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(ic, base_ssa, pg + base_extra, 0, st.fp_syms)
+                    }
+                    let ibase = smt_subst_vars(expr_to_smt_fp(ic, st.bv_mode, st.fp_syms), base_ssa)
+                    st.fn_stream = st.fn_stream + "(push)\n" + pg + base_extra + "(assert (not " + ibase + "))\n(check-sat)\n(pop)\n"
+                } else {
+                    st.fn_stream = st.fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: " + ic + "\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+                }
+            }
+            mut step_st = SmtState {
+                bv_mode: st.bv_mode, int_sort: st.int_sort, arr_sort: st.arr_sort,
+                fn_stream: "", bv_ovf_stream: "", arr_bnd_stream: "",
+                int_syms: st.int_syms, bool_syms: st.bool_syms, mut_syms: st.mut_syms,
+                arr_syms: st.arr_syms, fp_syms: st.fp_syms, blk_decls: "|", ssa_map: st.ssa_map,
+                ssa_seq: st.ssa_seq, ensure_cnt: 0, path_conds: st.path_conds
+            }
+            mut mp = 1
+            let mlen = len(mut_in_loop)
+            while mp < mlen {
+                let nb = find_char(mut_in_loop, "|", mp)
+                if nb == -1 { break }
+                let mv = slice(mut_in_loop, mp, nb - mp)
+                mp = nb + 1
+                step_st.ssa_seq = step_st.ssa_seq + 1
+                let mk = mv + "_k" + int_to_str(step_st.ssa_seq)
+                let msort = smt_var_sort_all(mv, step_st.bool_syms, step_st.fp_syms, step_st.int_sort)
+                step_st.fn_stream = step_st.fn_stream + "(declare-const " + mk + " " + msort + ")\n"
+                if msort != "Float64" && msort != "Bool" {
+                    step_st.fn_stream = step_st.fn_stream + smt_type_bounds_assert_ex(mk, "i64", step_st.bv_mode)
+                }
+                step_st.ssa_map = smt_ssa_set(step_st.ssa_map, mv, mk)
+            }
+            for ii2 in 0..len(inv_raws) {
+                let ic = inv_raws[ii2]
+                if smt_expr_supported_ex(ic, all_l, st.bv_mode) {
+                    step_st.fn_stream = step_st.fn_stream + "(assert " + smt_subst_vars(expr_to_smt_fp(ic, st.bv_mode, step_st.fp_syms), step_st.ssa_map) + ")\n"
+                }
+            }
+            if smt_expr_supported_ex(guard_cond, all_l, st.bv_mode) {
+                step_st.fn_stream = step_st.fn_stream + "(assert " + smt_subst_vars(expr_to_smt_fp(guard_cond, st.bv_mode, step_st.fp_syms), step_st.ssa_map) + ")\n"
+            }
+            if body_id >= 0 && body_id < len(pool.nodes) {
+                let bnd: AstNode = pool.nodes[body_id]
+                if bnd.kind == NK_BLOCK() {
+                    for bci in 0..bnd.child_count {
+                        let bcid = pool.children[bnd.child_start + bci]
+                        let k = pool.nodes[bcid].kind
+                        if k != NK_CONTRACT_INV() && k != NK_CONTRACT_REQ() && k != NK_CONTRACT_ENS() {
+                            smt_ast_lower_stmt(pool, bcid, step_st, ens_lines, ens_cols, ens_msgs)
+                        }
+                    }
+                } else if bnd.kind != NK_CONTRACT_INV() {
+                    smt_ast_lower_stmt(pool, body_id, step_st, ens_lines, ens_cols, ens_msgs)
+                }
+            }
+            if len(for_iv) > 0 {
+                step_st.ssa_seq = step_st.ssa_seq + 1
+                let iv_n = for_iv + "_s" + int_to_str(step_st.ssa_seq)
+                let iv_prev = smt_ssa_get(step_st.ssa_map, for_iv)
+                step_st.fn_stream = step_st.fn_stream + "(declare-const " + iv_n + " " + step_st.int_sort + ")\n"
+                if step_st.bv_mode {
+                    step_st.fn_stream = step_st.fn_stream + "(assert (= " + iv_n + " (bvadd " + iv_prev + " (_ bv1 64))))\n"
+                } else {
+                    step_st.fn_stream = step_st.fn_stream + "(assert (= " + iv_n + " (+ " + iv_prev + " 1)))\n"
+                }
+                step_st.ssa_map = smt_ssa_set(step_st.ssa_map, for_iv, iv_n)
+            }
+            st.ssa_seq = step_st.ssa_seq
+            if len(step_st.bv_ovf_stream) > 0 || len(step_st.arr_bnd_stream) > 0 {
+                st.fn_stream = st.fn_stream + "(push)\n" + pg + step_st.fn_stream + step_st.bv_ovf_stream + step_st.arr_bnd_stream + "(pop)\n"
+            }
+            for ii3 in 0..len(inv_raws) {
+                let ic = inv_raws[ii3]
+                st.ensure_cnt = st.ensure_cnt + 1
+                ens_lines = push(ens_lines, nd.line > 0 ? nd.line - 1 : 0)
+                ens_cols = push(ens_cols, nd.col > 0 ? nd.col - 1 : 0)
+                ens_msgs = push(ens_msgs, "invariant step: " + ic)
+                if smt_expr_supported_ex(ic, all_l, st.bv_mode) {
+                    let istep = smt_subst_vars(expr_to_smt_fp(ic, st.bv_mode, st.fp_syms), step_st.ssa_map)
+                    st.fn_stream = st.fn_stream + "(push)\n" + pg + step_st.fn_stream + "(assert (not " + istep + "))\n(check-sat)\n(pop)\n"
+                } else {
+                    st.fn_stream = st.fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: " + ic + "\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+                }
+            }
+            smt_ast_havoc_syms(st, mut_in_loop)
+            let exit_pc = smt_state_conj(st)
+            for ii4 in 0..len(inv_raws) {
+                let ic = inv_raws[ii4]
+                if smt_expr_supported_ex(ic, all_l, st.bv_mode) {
+                    let i_exit = smt_subst_vars(expr_to_smt_fp(ic, st.bv_mode, st.fp_syms), st.ssa_map)
+                    if len(exit_pc) > 0 {
+                        st.fn_stream = st.fn_stream + "(assert (=> " + exit_pc + " " + i_exit + "))\n"
+                    } else {
+                        st.fn_stream = st.fn_stream + "(assert " + i_exit + ")\n"
+                    }
+                }
+            }
+            if smt_expr_supported_ex(guard_cond, all_l, st.bv_mode) {
+                let g_exit = "(not " + smt_subst_vars(expr_to_smt_fp(guard_cond, st.bv_mode, st.fp_syms), st.ssa_map) + ")"
+                if len(exit_pc) > 0 {
+                    st.fn_stream = st.fn_stream + "(assert (=> " + exit_pc + " " + g_exit + "))\n"
+                } else {
+                    st.fn_stream = st.fn_stream + "(assert " + g_exit + ")\n"
+                }
+            }
+        } else {
+            if has_inv == false && smt_ast_has_ensure(pool, body_id) {
+                st.ensure_cnt = st.ensure_cnt + 1
+                ens_lines = push(ens_lines, nd.line > 0 ? nd.line - 1 : 0)
+                ens_cols = push(ens_cols, nd.col > 0 ? nd.col - 1 : 0)
+                ens_msgs = push(ens_msgs, "ensure inside loop without invariant")
+                st.fn_stream = st.fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: ensure inside loop without invariant\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+            }
+            smt_ast_havoc_syms(st, mut_in_loop)
+            if has_inv {
+                st.ensure_cnt = st.ensure_cnt + 1
+                ens_lines = push(ens_lines, nd.line > 0 ? nd.line - 1 : 0)
+                ens_cols = push(ens_cols, nd.col > 0 ? nd.col - 1 : 0)
+                let inv_msg = has_early_exit ? "invariant inside loop with early exit" : "invariant inside branched-mutation loop"
+                ens_msgs = push(ens_msgs, inv_msg)
+                st.fn_stream = st.fn_stream + "; PCC_UNSUPPORTED_OBLIGATION: " + inv_msg + "\n(push)\n(assert true)\n(check-sat)\n(pop)\n"
+            }
+        }
+        if nd.kind == NK_FOR_RANGE() && is_valid_identifier(for_iv) {
+            st.int_syms = smt_ast_restore_sym_flag(st.int_syms, pre_for_int, for_iv)
+            st.bool_syms = smt_ast_restore_sym_flag(st.bool_syms, pre_for_bool, for_iv)
+            st.fp_syms = smt_ast_restore_sym_flag(st.fp_syms, pre_for_fp, for_iv)
+            st.arr_syms = smt_ast_restore_sym_flag(st.arr_syms, pre_for_arr, for_iv)
+            st.mut_syms = smt_ast_restore_sym_flag(st.mut_syms, pre_for_mut, for_iv)
+            st.ssa_map = smt_ast_restore_ssa_key(st.ssa_map, pre_for_ssa, for_iv)
+        }
+        return false
+    }
+    if nd.kind == NK_LET_STMT() {
+        let vname = nd.name
+        st.blk_decls = smt_sym_add(st.blk_decls, vname)
+        let vtype_ann = trim(nd.type_ann)
+        let rhs_id = nd.left
+        let pg = smt_state_pg(st)
+        let pc = smt_state_conj(st)
+        let all_syms = smt_state_all_syms(st)
+        if is_valid_identifier(vname) && rhs_id >= 0 && rhs_id < len(pool.nodes) && pool.nodes[rhs_id].kind == NK_ARRAY_LIT() {
+            let rnd_a: AstNode = pool.nodes[rhs_id]
+            mut init_expr = st.bv_mode ? ("((as const " + st.arr_sort + ") (_ bv0 64))") : ("((as const " + st.arr_sort + ") 0)")
+            mut arr_ok = true
+            let ac = rnd_a.child_count
+            for ei in 0..ac {
+                let e_item = smt_ast_expr_str(pool, pool.children[rnd_a.child_start + ei], false)
+                if smt_expr_supported_ex(e_item, all_syms, st.bv_mode) {
+                    let esmt = smt_subst_vars(expr_to_smt_fp(e_item, st.bv_mode, st.fp_syms), st.ssa_map)
+                    mut idx_k = int_to_str(ei)
+                    if st.bv_mode { idx_k = "(_ bv" + idx_k + " 64)" }
+                    init_expr = "(store " + init_expr + " " + idx_k + " " + esmt + ")"
+                } else {
+                    arr_ok = false
+                }
+            }
+            if arr_ok {
+                st.ssa_seq = st.ssa_seq + 1
+                let a_sym = vname + "_arr_" + int_to_str(st.ssa_seq)
+                let l_sym = vname + "_len_" + int_to_str(st.ssa_seq)
+                st.arr_syms = smt_sym_add(st.arr_syms, vname)
+                st.fn_stream = st.fn_stream + "(declare-const " + a_sym + " " + st.arr_sort + ")\n"
+                st.fn_stream = st.fn_stream + "(declare-const " + l_sym + " " + st.int_sort + ")\n"
+                mut len_c = int_to_str(ac)
+                if st.bv_mode { len_c = "(_ bv" + len_c + " 64)" }
+                st.fn_stream = st.fn_stream + "(assert (= " + l_sym + " " + len_c + "))\n"
+                st.fn_stream = st.fn_stream + "(assert (= " + a_sym + " " + init_expr + "))\n"
+                st.ssa_map = smt_ssa_set(st.ssa_map, vname + "_arr", a_sym)
+                st.ssa_map = smt_ssa_set(st.ssa_map, vname + "_len", l_sym)
+            }
+            return false
+        }
+        let rhs_raw = smt_ast_expr_str(pool, rhs_id, false)
+        if is_valid_identifier(vname) && smt_expr_supported_ex(rhs_raw, all_syms, st.bv_mode) {
+            if st.bv_mode {
+                st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(rhs_raw, st.ssa_map, pg, 0, st.fp_syms)
+            }
+            st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(rhs_raw, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
+            st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(rhs_raw, st.arr_syms, st.ssa_map, pg, st.bv_mode)
+            let is_b = smt_ast_expr_is_bool(pool, rhs_id, st.bool_syms) || vtype_ann == "bool"
+            let is_fp = (vtype_ann == "float" || vtype_ann == "f64" || vtype_ann == "f32" || vtype_ann == "double" || smt_ast_expr_is_fp(pool, rhs_id, st.fp_syms)) && (is_b == false)
+            mut rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs_raw, st.bv_mode, st.fp_syms), st.ssa_map)
+            if is_fp {
+                rhs_smt = smt_subst_vars(smt_as_fp_term(rhs_raw, st.bv_mode, st.fp_syms), st.ssa_map)
+            }
+            st.ssa_seq = st.ssa_seq + 1
+            let ssa_nm = vname + "_0_" + int_to_str(st.ssa_seq)
+            st.int_syms = smt_sym_rem(st.int_syms, vname)
+            st.bool_syms = smt_sym_rem(st.bool_syms, vname)
+            st.fp_syms = smt_sym_rem(st.fp_syms, vname)
+            st.arr_syms = smt_sym_rem(st.arr_syms, vname)
+            if is_b {
+                st.bool_syms = smt_sym_add(st.bool_syms, vname)
+                st.fn_stream = st.fn_stream + "(declare-const " + ssa_nm + " Bool)\n"
+            } else if is_fp {
+                st.fp_syms = smt_sym_add(st.fp_syms, vname)
+                st.fn_stream = st.fn_stream + "(declare-const " + ssa_nm + " Float64)\n"
+            } else {
+                st.int_syms = smt_sym_add(st.int_syms, vname)
+                st.fn_stream = st.fn_stream + "(declare-const " + ssa_nm + " " + st.int_sort + ")\n"
+                if len(vtype_ann) > 0 {
+                    st.fn_stream = st.fn_stream + smt_type_bounds_assert_ex(ssa_nm, vtype_ann, st.bv_mode)
+                }
+            }
+            if len(pc) > 0 {
+                st.fn_stream = st.fn_stream + "(assert (=> " + pc + " (= " + ssa_nm + " " + rhs_smt + ")))\n"
+            } else {
+                st.fn_stream = st.fn_stream + "(assert (= " + ssa_nm + " " + rhs_smt + "))\n"
+            }
+            st.ssa_map = smt_ssa_set(st.ssa_map, vname, ssa_nm)
+        }
+        return false
+    }
+    if nd.kind == NK_ASSIGN_STMT() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let l_nd: AstNode = pool.nodes[nd.left]
+        let rhs_a = smt_ast_expr_str(pool, nd.right, false)
+        let all_syms = smt_state_all_syms(st)
+        let pg = smt_state_pg(st)
+        let pc = smt_state_conj(st)
+        if l_nd.kind == NK_INDEX() && l_nd.left >= 0 && l_nd.left < len(pool.nodes) {
+            let b_nd: AstNode = pool.nodes[l_nd.left]
+            let idx_nm = smt_ast_expr_str(pool, l_nd.right, false)
+            let lhs_a = smt_ast_expr_str(pool, nd.left, false)
+            if b_nd.kind == NK_IDENT() && find_str(st.arr_syms, "|" + b_nd.name + "|", 0) != -1 {
+                if smt_expr_supported_ex(idx_nm, all_syms, st.bv_mode) && smt_expr_supported_ex(rhs_a, all_syms, st.bv_mode) {
+                    st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(lhs_a, st.arr_syms, st.ssa_map, pg, st.bv_mode)
+                    st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(rhs_a, st.arr_syms, st.ssa_map, pg, st.bv_mode)
+                    let cur_arr_s = smt_ssa_get(st.ssa_map, b_nd.name + "_arr")
+                    let idx_smt = smt_subst_vars(expr_to_smt_fp(idx_nm, st.bv_mode, st.fp_syms), st.ssa_map)
+                    let rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs_a, st.bv_mode, st.fp_syms), st.ssa_map)
+                    st.ssa_seq = st.ssa_seq + 1
+                    let nxt_arr_s = b_nd.name + "_s" + int_to_str(st.ssa_seq)
+                    st.fn_stream = st.fn_stream + "(declare-const " + nxt_arr_s + " " + st.arr_sort + ")\n"
+                    if len(pc) > 0 {
+                        st.fn_stream = st.fn_stream + "(assert (= " + nxt_arr_s + " (ite " + pc + " (store " + cur_arr_s + " " + idx_smt + " " + rhs_smt + ") " + cur_arr_s + ")))\n"
+                    } else {
+                        st.fn_stream = st.fn_stream + "(assert (= " + nxt_arr_s + " (store " + cur_arr_s + " " + idx_smt + " " + rhs_smt + ")))\n"
+                    }
+                    st.ssa_map = smt_ssa_set(st.ssa_map, b_nd.name + "_arr", nxt_arr_s)
+                } else {
+                    st.ssa_seq = st.ssa_seq + 1
+                    let nxt_arr_s = b_nd.name + "_ah" + int_to_str(st.ssa_seq)
+                    st.fn_stream = st.fn_stream + "(declare-const " + nxt_arr_s + " " + st.arr_sort + ")\n"
+                    st.ssa_map = smt_ssa_set(st.ssa_map, b_nd.name + "_arr", nxt_arr_s)
+                }
+            }
+            return false
+        }
+        if l_nd.kind == NK_IDENT() && find_str(all_syms, "|" + l_nd.name + "|", 0) != -1 {
+            let lhs_a = l_nd.name
+            st.ssa_seq = st.ssa_seq + 1
+            let nxt_s = lhs_a + "_a" + int_to_str(st.ssa_seq)
+            let asort = smt_var_sort_all(lhs_a, st.bool_syms, st.fp_syms, st.int_sort)
+            st.fn_stream = st.fn_stream + "(declare-const " + nxt_s + " " + asort + ")\n"
+            if smt_expr_supported_ex(rhs_a, all_syms, st.bv_mode) {
+                if st.bv_mode {
+                    st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(rhs_a, st.ssa_map, pg, 0, st.fp_syms)
+                }
+                st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(rhs_a, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
+                st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(rhs_a, st.arr_syms, st.ssa_map, pg, st.bv_mode)
+                mut rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs_a, st.bv_mode, st.fp_syms), st.ssa_map)
+                if asort == "Float64" {
+                    rhs_smt = smt_subst_vars(smt_as_fp_term(rhs_a, st.bv_mode, st.fp_syms), st.ssa_map)
+                }
+                if len(pc) > 0 {
+                    st.fn_stream = st.fn_stream + "(assert (=> " + pc + " (= " + nxt_s + " " + rhs_smt + ")))\n"
+                } else {
+                    st.fn_stream = st.fn_stream + "(assert (= " + nxt_s + " " + rhs_smt + "))\n"
+                }
+            }
+            st.ssa_map = smt_ssa_set(st.ssa_map, lhs_a, nxt_s)
+        }
+        return false
+    }
+    if nd.kind == NK_TRANSACT_STMT() {
+        smt_ast_lower_stmt(pool, nd.left, st, ens_lines, ens_cols, ens_msgs)
+        if nd.right != -1 {
+            smt_ast_lower_stmt(pool, nd.right, st, ens_lines, ens_cols, ens_msgs)
+        }
+        smt_ast_havoc_syms(st, smt_state_all_syms(st))
+        return false
+    }
+    if nd.kind == NK_COMPTIME() || nd.kind == NK_DEFER_STMT() || nd.kind == NK_RECEIVE_STMT() {
+        smt_ast_lower_stmt(pool, nd.left, st, ens_lines, ens_cols, ens_msgs)
+        return false
+    }
+    if nd.kind == NK_INLINE_ASM() {
+        for ci in 0..nd.child_count {
+            smt_ast_lower_stmt(pool, pool.children[nd.child_start + ci], st, ens_lines, ens_cols, ens_msgs)
+        }
+        return false
+    }
+    if nd.kind == NK_MATCH_STMT() {
+        mut arm_muts: [string] = ["|"]
+        mut arm_flag: [bool] = [false]
+        for ci in 0..nd.child_count {
+            let aid = pool.children[nd.child_start + ci]
+            if aid >= 0 && aid < len(pool.nodes) {
+                let arm: AstNode = pool.nodes[aid]
+                smt_ast_scan_loop_muts(pool, arm.right, false, "", arm_muts, arm_flag)
+                let pre_ssa = st.ssa_map
+                smt_ast_lower_stmt(pool, arm.right, st, ens_lines, ens_cols, ens_msgs)
+                st.ssa_map = pre_ssa
+            }
+        }
+        smt_ast_havoc_syms(st, st.mut_syms)
+        smt_ast_havoc_syms(st, arm_muts[0])
+        return false
+    }
+    return false
+}
+
+fn smt_ast_build_fn(pool: AstPool, fn_nid: int, bv_mode: bool, mut out_ens_lines: [int], mut out_ens_cols: [int], mut out_ens_msgs: [string], mut out_cnt: [int]) -> string {
+    let nd: AstNode = pool.nodes[fn_nid]
+    mut int_sort = "Int"
+    mut arr_sort = "(Array Int Int)"
+    if bv_mode {
+        int_sort = "(_ BitVec 64)"
+        arr_sort = "(Array (_ BitVec 64) (_ BitVec 64))"
+    }
+    mut st = SmtState {
+        bv_mode: bv_mode, int_sort: int_sort, arr_sort: arr_sort,
+        fn_stream: "", bv_ovf_stream: "", arr_bnd_stream: "",
+        int_syms: "|", bool_syms: "|", mut_syms: "|", arr_syms: "|", fp_syms: "|",
+        ssa_map: "|", blk_decls: "|", ssa_seq: 0, ensure_cnt: 0, path_conds: []
+    }
+    for pi in 0..nd.child_count {
+        let pnd: AstNode = pool.nodes[pool.children[nd.child_start + pi]]
+        let pname = pnd.name
+        let ptype = trim(pnd.type_ann)
+        let is_mp = (pnd.flags & NF_MUT()) != 0
+        if ptype == "int" || ptype == "i64" || ptype == "int64_t" || ptype == "i32" || ptype == "int32_t" || ptype == "u32" || ptype == "uint32_t" || ptype == "u64" || ptype == "uint64_t" || ptype == "byte" || ptype == "u8" || ptype == "uint8_t" {
+            if find_str(st.int_syms, "|" + pname + "|", 0) == -1 {
+                st.int_syms = st.int_syms + pname + "|"
+                if is_mp { st.mut_syms = st.mut_syms + pname + "|" }
+                st.fn_stream = st.fn_stream + "(declare-const " + pname + " " + int_sort + ")\n"
+                st.fn_stream = st.fn_stream + smt_type_bounds_assert_ex(pname, ptype, bv_mode)
+            }
+        } else if ptype == "[int]" || ptype == "[i64]" || ptype == "Array<int>" || ptype == "Array<i64>" {
+            if find_str(st.arr_syms, "|" + pname + "|", 0) == -1 {
+                st.arr_syms = st.arr_syms + pname + "|"
+                st.fn_stream = st.fn_stream + "(declare-const " + pname + "_arr " + arr_sort + ")\n"
+                st.fn_stream = st.fn_stream + "(declare-const " + pname + "_len " + int_sort + ")\n"
+                if bv_mode {
+                    st.fn_stream = st.fn_stream + "(assert (bvsge " + pname + "_len (_ bv0 64)))\n"
+                } else {
+                    st.fn_stream = st.fn_stream + "(assert (>= " + pname + "_len 0))\n"
+                }
+            }
+        } else if ptype == "bool" {
+            if find_str(st.bool_syms, "|" + pname + "|", 0) == -1 {
+                st.bool_syms = st.bool_syms + pname + "|"
+                st.fn_stream = st.fn_stream + "(declare-const " + pname + " Bool)\n"
+            }
+        } else if ptype == "float" || ptype == "f64" || ptype == "f32" || ptype == "double" {
+            if find_str(st.fp_syms, "|" + pname + "|", 0) == -1 {
+                st.fp_syms = st.fp_syms + pname + "|"
+                if is_mp { st.mut_syms = st.mut_syms + pname + "|" }
+                st.fn_stream = st.fn_stream + "(declare-const " + pname + " Float64)\n"
+            }
+        }
+    }
+    if nd.left != -1 {
+        smt_ast_lower_stmt(pool, nd.left, st, out_ens_lines, out_ens_cols, out_ens_msgs)
+    }
+    out_cnt[0] = st.ensure_cnt
+    if st.ensure_cnt > 0 {
+        return "(push)\n" + st.fn_stream + st.bv_ovf_stream + st.arr_bnd_stream + "(pop)\n"
+    }
+    return ""
+}
+
+fn smt_process_fn_block_ex(fn_body: string, init_decls: string, init_assumes: string, init_int_syms: string, init_bool_syms: string, init_mut_syms: string, init_arr_syms: string, init_types: string, bv_mode: bool) -> string {
+    return smt_process_fn_block_fp(fn_body, init_decls, init_assumes, init_int_syms, init_bool_syms, init_mut_syms, init_arr_syms, "|", init_types, bv_mode)
+}
+
+fn smt_process_fn_block(fn_body: string, init_decls: string, init_assumes: string, init_int_syms: string, init_bool_syms: string, init_mut_syms: string, init_types: string) -> string {
+    return smt_process_fn_block_ex(fn_body, init_decls, init_assumes, init_int_syms, init_bool_syms, init_mut_syms, "|", init_types, false)
+}
+
+fn synthesize_formal_smt_ex(source: string, bv_mode: bool) -> string {
+    mut smt = "; Nino Sovereign Prover SMT-LIB2 Dynamic Formal Specification\n(set-logic ALL)\n"
+    if bv_mode {
+        smt = "; Nino Sovereign Prover SMT-LIB2 64-Bit Hardware BitVector Specification\n(set-logic ALL)\n"
+    }
+    let pool = ast_parse_unit_ex(source, ".", "pcc.nino", false)
+    if pool.has_error || pool.root < 0 || pool.root >= len(pool.nodes) {
+        return smt + "; NO_VERIFICATION_OBLIGATIONS\n(assert true)\n(check-sat)\n"
+    }
+    let root_nd: AstNode = pool.nodes[pool.root]
+    mut total_ensures = 0
+    for ci in 0..root_nd.child_count {
+        let iid = pool.children[root_nd.child_start + ci]
+        if iid >= 0 && iid < len(pool.nodes) && pool.nodes[iid].kind == NK_FN_DECL() {
+            mut e_lns: [int] = []
+            mut e_cols: [int] = []
+            mut e_msgs: [string] = []
+            mut fn_cnt: [int] = [0]
+            let fn_smt = smt_ast_build_fn(pool, iid, bv_mode, e_lns, e_cols, e_msgs, fn_cnt)
+            if fn_cnt[0] > 0 {
+                smt = smt + fn_smt
+                total_ensures = total_ensures + fn_cnt[0]
+            }
+        }
+    }
+    if total_ensures == 0 {
+        smt = smt + "; NO_VERIFICATION_OBLIGATIONS\n(assert true)\n(check-sat)\n"
+    } else if find_str(smt, "Float64", 0) != -1 && find_str(smt, "(Array", 0) == -1 && find_str(smt, " Int)", 0) == -1 && find_str(smt, "to_real", 0) == -1 {
+        smt = replace_str(smt, "(set-logic ALL)\n", "(set-logic QF_BVFP)\n")
+    }
+    return smt
+}
+
+fn synthesize_formal_smt(source: string) -> string {
+    return synthesize_formal_smt_ex(source, false)
+}
+
+fn parse_z3_verdict(z3_out: string) -> string {
+    let clean = replace_str(z3_out, "\r\n", "\n")
+    let clen = len(clean)
+    mut pos = 0
+    mut unsat_count = 0
+    mut saw_sat = false
+    mut saw_unknown = false
+    mut saw_error = false
+    while pos < clen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < clen && searching {
+            if char_at(clean, line_end) == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let line = trim(slice(clean, pos, line_end - pos))
+        if len(line) > 0 {
+            if line == "sat" {
+                saw_sat = true
+            } else if line == "unsat" {
+                unsat_count = unsat_count + 1
+            } else if line == "unknown" {
+                saw_unknown = true
+            } else {
+                saw_error = true
+            }
+        }
+        pos = line_end + 1
+    }
+    if saw_sat {
+        return "sat"
+    }
+    if saw_unknown {
+        return "unknown"
+    }
+    if saw_error || unsat_count == 0 {
+        return "error"
+    }
+    return "unsat"
+}
+
+fn z3_extract_counterexample_model(z3_bin: string, smt_spec: string, z3_out: string, tmp_prefix: string) -> string {
+    if len(z3_bin) == 0 || len(smt_spec) == 0 {
+        return ""
+    }
+    let clean = replace_str(z3_out, "\r\n", "\n")
+    let clen = len(clean)
+    mut pos = 0
+    mut sat_idx = -1
+    mut check_idx = 0
+    while pos < clen {
+        let nl = find_char(clean, "\n", pos)
+        mut le = clen
+        if nl != -1 {
+            le = nl
+        }
+        let ln = trim(slice(clean, pos, le - pos))
+        if ln == "unsat" || ln == "sat" || ln == "unknown" {
+            if ln == "sat" && sat_idx == -1 {
+                sat_idx = check_idx
+            }
+            check_idx = check_idx + 1
+        }
+        pos = le + 1
+    }
+    if sat_idx == -1 {
+        return ""
+    }
+    mut seen = 0
+    mut sp = 0
+    let slen = len(smt_spec)
+    mut cut_pos = -1
+    while sp < slen {
+        let hit = find_str(smt_spec, "(check-sat)", sp)
+        if hit == -1 {
+            sp = slen
+        } else {
+            if seen == sat_idx {
+                cut_pos = hit + 11
+                sp = slen
+            } else {
+                seen = seen + 1
+                sp = hit + 11
+            }
+        }
+    }
+    if cut_pos == -1 {
+        return ""
+    }
+    let focused = slice(smt_spec, 0, cut_pos) + "\n(get-model)\n"
+    let mpath = tmp_prefix + ".model.smt2"
+    let moutp = tmp_prefix + ".model.z3out"
+    write_file(mpath, focused)
+    run_z3_smt_file(z3_bin, mpath, moutp)
+    mut m_res = ""
+    if file_exists(moutp) {
+        m_res = trim(read_file(moutp))
+        delete_temp_file(moutp)
+    }
+    delete_temp_file(mpath)
+    return m_res
+}
+

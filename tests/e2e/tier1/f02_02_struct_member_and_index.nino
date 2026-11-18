@@ -1,0 +1,18 @@
+struct Counter {
+    mut x: int,
+    label: string
+}
+
+fn main() -> int {
+    mut s = Counter { x: 10, label: "ctr" }
+    s.x = s.x + 5
+    mut nums: [int] = [4, 8, 12]
+    nums[1] = nums[1] + 2
+    mut d = { "host": "localhost" }
+    d["port"] = 9000
+    require(s.x == 15 && s.label == "ctr", "struct field check failed")
+    require(nums[0] == 4 && nums[1] == 10 && nums[2] == 12, "array indexing check failed")
+    require(d["host"] == "localhost" && d["port"] == "9000", "dict indexing check failed")
+    print("T1-F02-02:PASS")
+    return 0
+}

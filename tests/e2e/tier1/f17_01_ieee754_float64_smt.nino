@@ -1,0 +1,31 @@
+fn safe_fp_div(a: float, b: float) -> float {
+    require(is_finite(a) && is_finite(b) && a >= 0.0 && a <= 20.0 && b >= 2.0 && b <= 4.0)
+    let r = a / b
+    ensure(is_finite(r) && r >= 0.0 && r <= 10.0)
+    return r
+}
+
+fn cvt_pos_float(n: int) -> float {
+    require(n >= 0 && n <= 100)
+    let x = to_float(n)
+    ensure(is_finite(x) && x >= 0.0)
+    return x
+}
+
+fn main() -> int {
+    mut z = 0.0
+    let nan_v = z / z
+    let inf_v = 1.0 / z
+    require(is_nan(nan_v), "is_nan failed")
+    require(is_inf(inf_v), "is_inf failed")
+    require(is_finite(3.5), "is_finite failed")
+    require(is_finite(nan_v) == false, "NaN must not be finite")
+    require(fp_abs(-2.5) > 2.4 && fp_abs(-2.5) < 2.6, "fp_abs failed")
+    require(fp_sqrt(9.0) > 2.99 && fp_sqrt(9.0) < 3.01, "fp_sqrt failed")
+    let f = cvt_pos_float(42)
+    require(f > 41.9 && f < 42.1, "to_float failed")
+    let q = safe_fp_div(12.0, 3.0)
+    require(q > 3.9 && q < 4.1, "safe_fp_div failed")
+    print("T1-F17-01:PASS")
+    return 0
+}

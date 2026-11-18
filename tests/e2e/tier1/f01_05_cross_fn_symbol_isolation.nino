@@ -1,0 +1,24 @@
+fn alpha(val: string, arr: [string], k: string) -> string {
+    mut out: string = val + "_" + k
+    if len(arr) > 0 {
+        out = out + "_" + arr[0]
+    }
+    return out
+}
+
+fn beta(val: int, arr: [int], k: int) -> int {
+    mut out: int = val + k
+    if len(arr) > 1 {
+        out = out + arr[1]
+    }
+    return out
+}
+
+fn main() -> int {
+    let s_res = alpha("hdr", ["tag", "end"], "key")
+    let i_res = beta(10, [5, 25], 7)
+    require(s_res == "hdr_key_tag", "alpha string isolation failed")
+    require(i_res == 42, "beta int isolation failed")
+    print("T1-F01-05:PASS")
+    return 0
+}

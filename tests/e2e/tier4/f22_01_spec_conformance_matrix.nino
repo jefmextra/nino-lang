@@ -1,0 +1,40 @@
+import "std/str.nino"
+
+fn main() -> int {
+    require(file_exists("SPECIFICATION.md"), "Missing SPECIFICATION.md")
+    require(file_exists("GOVERNANCE.md"), "Missing GOVERNANCE.md")
+    require(file_exists("rfcs/README.md"), "Missing rfcs/README.md")
+    require(file_exists("rfcs/RFC-0001-arena-epoch-memory-safety.md"), "Missing RFC-0001")
+    require(file_exists("rfcs/RFC-0002-pcc-smt-ed25519-abi.md"), "Missing RFC-0002")
+    require(file_exists("rfcs/RFC-0003-nir-simd-vectorization-and-native-isa.md"), "Missing RFC-0003")
+
+    let spec = read_file("SPECIFICATION.md")
+    require(str_contains(spec, "Clause 10"), "Missing Clause 10 Conformance Traceability Matrix in SPECIFICATION.md")
+
+    let all_m = read_file("tests/e2e/manifests/m1.json") + "\n" + read_file("tests/e2e/manifests/m2.json") + "\n" + read_file("tests/e2e/manifests/m3.json") + "\n" + read_file("tests/e2e/manifests/m4.json")
+    let required_ids = [
+        "T1-F01-01",
+        "T2-F01-01",
+        "T1-F04-01",
+        "T2-F04-01",
+        "T1-F05-02",
+        "T1-F06-01",
+        "T1-F07-01",
+        "T1-F08-01",
+        "T1-F09-01",
+        "T3-F09-01",
+        "T1-F17-01",
+        "T2-F17-01",
+        "T3-F18-01",
+        "T4-F19-01",
+        "T1-F20-01",
+        "T4-F21-01"
+    ]
+    for idx in 0..len(required_ids) {
+        let tid = required_ids[idx]
+        require(str_contains(spec, tid), "SPECIFICATION.md Traceability Matrix missing test ID: " + tid)
+        require(str_contains(all_m, "\"" + tid + "\""), "Manifest missing traced test ID: " + tid)
+    }
+    print("T4-F22-01:PASS")
+    return 0
+}

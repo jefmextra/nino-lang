@@ -1,0 +1,5 @@
+fn single_bad(a: int) -> int { ensure(a > 10, "single line must be verified") return a }
+
+fn main() -> int {
+    return single_bad(1)
+}

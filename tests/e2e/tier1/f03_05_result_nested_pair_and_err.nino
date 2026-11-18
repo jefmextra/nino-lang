@@ -1,0 +1,29 @@
+struct ErrorCode {
+    code: int,
+    msg: string
+}
+
+fn eval_pair(flag: bool) -> Result<Pair<int, bool>, ErrorCode> {
+    if flag {
+        let p: Pair<int, bool> = (Pair_int_bool){ .first = 123, .second = true }
+        return (Result_Pair_int_bool_ErrorCode){
+            .is_ok = true,
+            .ok_val = p,
+            .err_val = ErrorCode { code: 0, msg: "" }
+        }
+    }
+    return (Result_Pair_int_bool_ErrorCode){
+        .is_ok = false,
+        .ok_val = (Pair_int_bool){ .first = 0, .second = false },
+        .err_val = ErrorCode { code: 503, msg: "unavailable" }
+    }
+}
+
+fn main() -> int {
+    let ok_r = eval_pair(true)
+    let err_r = eval_pair(false)
+    require(ok_r.is_ok && ok_r.ok_val.first == 123 && ok_r.ok_val.second == true, "Result<Pair<int, bool>, ErrorCode> ok check")
+    require(!err_r.is_ok && err_r.err_val.code == 503 && err_r.err_val.msg == "unavailable", "Result<Pair<int, bool>, ErrorCode> err check")
+    print("T1-F03-05:PASS")
+    return 0
+}

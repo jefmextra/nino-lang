@@ -1,0 +1,23 @@
+fn compute_score(base: int, bonus: int, active: bool) -> int {
+    mut acc: int = base + bonus
+    if active {
+        acc = acc * 2
+    }
+    return acc
+}
+
+fn is_valid_threshold(v: int) -> bool {
+    return v >= 10 && v <= 100
+}
+
+fn main() -> int {
+    let base_pts = 15
+    mut bonus_pts = 5
+    bonus_pts = bonus_pts + 5
+    let final_score = compute_score(base_pts, bonus_pts, true)
+    let ok = is_valid_threshold(final_score)
+    require(final_score == 50, "compute_score should yield 50")
+    require(ok == true, "threshold check should be true")
+    print("T1-F01-01:PASS")
+    return 0
+}

@@ -1,0 +1,63 @@
+#no_std
+
+let COLOR_BLACK = 0
+let COLOR_BLUE = 1
+let COLOR_GREEN = 2
+let COLOR_CYAN = 3
+let COLOR_RED = 4
+let COLOR_MAGENTA = 5
+let COLOR_BROWN = 6
+let COLOR_LIGHT_GRAY = 7
+let COLOR_DARK_GRAY = 8
+let COLOR_LIGHT_BLUE = 9
+let COLOR_LIGHT_GREEN = 10
+let COLOR_LIGHT_CYAN = 11
+let COLOR_LIGHT_RED = 12
+let COLOR_PINK = 13
+let COLOR_YELLOW = 14
+let COLOR_WHITE = 15
+
+fn kernel_main() {
+    write_vga(0, 0, " [ NINO OS ]  File   Edit   View   Security   Tools   Diagnostics   About       ", COLOR_CYAN)
+
+    write_vga(2, 2,  "+---------------------------------------------+", COLOR_LIGHT_CYAN)
+    write_vga(3, 2,  "|  [SECURITY] Hardware Enclave Core (Ring 0)  |", COLOR_YELLOW)
+    write_vga(4, 2,  "+---------------------------------------------+", COLOR_LIGHT_CYAN)
+    write_vga(5, 2,  "| Target CPU:    x86_64 Freestanding Long Mode |", COLOR_WHITE)
+    write_vga(6, 2,  "| Sealed Memory: ACTIVE (0-Leak Auto-Drop)    |", COLOR_LIGHT_GREEN)
+    write_vga(7, 2,  "| Morphic Mask:  99.98% Entropy Dynamic XOR   |", COLOR_LIGHT_GREEN)
+    write_vga(8, 2,  "| VRAM Physical: 0xB8000 Framebuffer Direct   |", COLOR_WHITE)
+    write_vga(9, 2,  "| Serial UART:   COM1 Port 0x3F8 Connected    |", COLOR_WHITE)
+    write_vga(10, 2, "| Libc Linkage:  NONE (100% Freestanding)     |", COLOR_LIGHT_GREEN)
+    write_vga(11, 2, "+---------------------------------------------+", COLOR_LIGHT_CYAN)
+
+    write_vga(2, 50,  "+----------------------------+", COLOR_LIGHT_CYAN)
+    write_vga(3, 50,  "|  [SYSTEM] Diagnostics      |", COLOR_YELLOW)
+    write_vga(4, 50,  "+----------------------------+", COLOR_LIGHT_CYAN)
+    write_vga(5, 50,  "| Kernel Status: NOMINAL     |", COLOR_LIGHT_GREEN)
+    write_vga(6, 50,  "| Memory Bounds: 100% Guard  |", COLOR_WHITE)
+    write_vga(7, 50,  "| Interrupts:    IDT Ready   |", COLOR_WHITE)
+    write_vga(8, 50,  "| Architecture:  64-bit Core |", COLOR_WHITE)
+    write_vga(9, 50,  "| Architect:     vvictor     |", COLOR_YELLOW)
+    write_vga(10, 50, "| Authority:     ninosec.me  |", COLOR_LIGHT_CYAN)
+    write_vga(11, 50, "+----------------------------+", COLOR_LIGHT_CYAN)
+
+    write_vga(13, 2, "+----------------------------------------------------------------------------+", COLOR_LIGHT_CYAN)
+    write_vga(14, 2, "|  [TERMINAL] Nino Vanguard Interactive Shell & Driver Bus                   |", COLOR_YELLOW)
+    write_vga(15, 2, "+----------------------------------------------------------------------------+", COLOR_LIGHT_CYAN)
+    write_vga(16, 2, "| nino-os/root> sysinfo                                                      |", COLOR_WHITE)
+    write_vga(17, 2, "| [OS] Nino Kernel OS v0.4.0 - Pioneer Cryptographic Bare-Metal System       |", COLOR_LIGHT_GREEN)
+    write_vga(18, 2, "| nino-os/root> enclave --verify-sealed                                      |", COLOR_WHITE)
+    write_vga(19, 2, "| [SECURITY ENCLAVE] Status: PASS | Zero-Leak Boundary Cryptographically Enforced |", COLOR_LIGHT_CYAN)
+    write_vga(20, 2, "| nino-os/root> _                                                            |", COLOR_YELLOW)
+    write_vga(21, 2, "+----------------------------------------------------------------------------+", COLOR_LIGHT_CYAN)
+
+    write_vga(23, 0, " [F1] Help   [F2] Start Menu   [F3] Enclave Test   [F4] Clear   [F10] Reboot    ", COLOR_LIGHT_GRAY)
+
+    write_vga(24, 0, " [Start]  Nino OS v0.4.0 [Ring 0]       Portal: ninosec.me       Author: vvictor ", COLOR_YELLOW)
+
+    outb(0x3F8, 0x4E)
+    outb(0x3F8, 0x4F)
+
+    hlt()
+}

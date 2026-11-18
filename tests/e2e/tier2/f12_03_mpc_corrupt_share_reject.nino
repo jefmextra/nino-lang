@@ -1,0 +1,9 @@
+import "std/mpc.nino"
+
+fn main() -> int {
+    let key = mpc_split_secret(77777, 2, 3)
+    mut s0 = key.shares[0]
+    s0.y = s0.y + 1
+    print(mpc_reconstruct_secret([s0, key.shares[1]], 2))
+    return 0
+}

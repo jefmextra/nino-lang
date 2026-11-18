@@ -1,0 +1,24 @@
+fn main() -> int {
+    mut ints = [1, 2]
+    ints = push(ints, 3)
+    ints = push(ints, 4)
+
+    mut floats = [1.5, 2.5]
+    floats = push(floats, 3.5)
+
+    mut strs = ["a", "b"]
+    strs = push(strs, "c")
+
+    mut int_sum = 0
+    for iv in ints {
+        int_sum = int_sum + iv
+    }
+    mut str_len_sum = 0
+    for sv in strs {
+        str_len_sum = str_len_sum + len(sv)
+    }
+
+    require(int_sum == 10 && len(floats) == 3 && floats[2] > 3.0 && str_len_sum == 3, "push & for-in strict-c11 check failed")
+    print("T1-F05-05:PASS")
+    return 0
+}

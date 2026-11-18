@@ -1,0 +1,7 @@
+fn bad_loop(n: int) -> int { mut x = 0; while true { x = x + 1; if x > n { break } }; return x }
+
+fn bad_rec(n: int) -> int { if n <= 0 { return 0 } else { return bad_rec(n - 1) } }
+
+fn main() -> int {
+    return bad_loop(1) + bad_rec(1)
+}

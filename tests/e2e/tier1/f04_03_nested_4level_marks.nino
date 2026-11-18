@@ -1,0 +1,21 @@
+fn main() -> int {
+    let m1 = arena_mark()
+    let s1 = "lvl1_" + int_to_str(1)
+    let m2 = arena_mark()
+    let s2 = "lvl2_" + int_to_str(2)
+    let m3 = arena_mark()
+    let s3 = "lvl3_" + int_to_str(3)
+    let m4 = arena_mark()
+    let s4 = "lvl4_" + int_to_str(4)
+    require(len(s4) == 6, "lvl4 string valid before m4 rollback")
+    arena_rollback(m4)
+    require(s3 == "lvl3_3", "lvl3 string valid after m4 rollback")
+    arena_rollback(m3)
+    require(s2 == "lvl2_2", "lvl2 string valid after m3 rollback")
+    arena_rollback(m2)
+    require(s1 == "lvl1_1", "lvl1 string valid after m2 rollback")
+    arena_rollback(m1)
+    require(arena_used() == m1, "arena_used must return to m1")
+    print("T1-F04-03:PASS")
+    return 0
+}

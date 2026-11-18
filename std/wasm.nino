@@ -1,0 +1,998 @@
+struct WasmInstance {
+    module_name: str,
+    memory_limit_mb: i64,
+    gas_limit: i64,
+    mut gas_used: i64,
+    mut is_active: bool,
+    mut has_module: bool,
+    mut exported_memory: [i64],
+    mut globals: [i64],
+    mut code_pool: [i64],
+    mut func_type_ids: [i64],
+    mut func_body_starts: [i64],
+    mut func_body_lens: [i64],
+    mut func_local_cnts: [i64],
+    mut type_param_cnts: [i64],
+    mut type_ret_cnts: [i64],
+    mut export_names: [str],
+    mut export_kinds: [i64],
+    mut export_ids: [i64]
+}
+
+fn wasm_hex_nib(ch: str) -> i64 {
+    let c = char_code(ch)
+    if c >= 48 && c <= 57 {
+        return c - 48
+    }
+    if c >= 97 && c <= 102 {
+        return c - 87
+    }
+    if c >= 65 && c <= 70 {
+        return c - 55
+    }
+    let neg1: i64 = -1
+    return neg1
+}
+
+fn wasm_spawn(module_name: str, memory_limit_mb: i64, gas_limit: i64) -> WasmInstance {
+    require(memory_limit_mb > 0, "Memory limit must be strictly positive")
+    require(gas_limit > 0, "Gas instruction limit must be positive")
+
+    mut initial_mem: [i64] = []
+    let initial_bytes = 65536
+    for i in 0..initial_bytes {
+        initial_mem = push(initial_mem, 0)
+    }
+    initial_mem[0] = 0
+    initial_mem[1] = 97
+    initial_mem[2] = 115
+    initial_mem[3] = 109
+    initial_mem[4] = 1
+    initial_mem[5] = 0
+    initial_mem[6] = 0
+    initial_mem[7] = 0
+
+    mut g_init: [i64] = [0, 0, 0, 0, 0, 0, 0, 0]
+    mut e_cp: [i64] = []
+    mut e_ft: [i64] = []
+    mut e_bs: [i64] = []
+    mut e_bl: [i64] = []
+    mut e_lc: [i64] = []
+    mut e_tp: [i64] = []
+    mut e_tr: [i64] = []
+    mut e_en: [str] = []
+    mut e_ek: [i64] = []
+    mut e_ei: [i64] = []
+
+    return WasmInstance {
+        module_name: module_name,
+        memory_limit_mb: memory_limit_mb,
+        gas_limit: gas_limit,
+        gas_used: 0,
+        is_active: true,
+        has_module: false,
+        exported_memory: initial_mem,
+        globals: g_init,
+        code_pool: e_cp,
+        func_type_ids: e_ft,
+        func_body_starts: e_bs,
+        func_body_lens: e_bl,
+        func_local_cnts: e_lc,
+        type_param_cnts: e_tp,
+        type_ret_cnts: e_tr,
+        export_names: e_en,
+        export_kinds: e_ek,
+        export_ids: e_ei
+    }
+}
+
+fn wasm_read_leb_u(buf: [i64], limit: i64, mut cur: [i64]) -> i64 {
+    mut p = cur[0]
+    mut res: i64 = 0
+    mut shift: i64 = 0
+    mut done = false
+    while p < limit && done == false {
+        let b = buf[p] & 255
+        p = p + 1
+        res = res | ((b & 127) << shift)
+        if (b & 128) == 0 {
+            done = true
+        } else {
+            shift = shift + 7
+        }
+    }
+    cur[0] = p
+    return res
+}
+
+fn wasm_read_leb_s(buf: [i64], limit: i64, mut cur: [i64]) -> i64 {
+    mut p = cur[0]
+    mut res: i64 = 0
+    mut shift: i64 = 0
+    mut last_b: i64 = 0
+    mut done = false
+    while p < limit && done == false {
+        let b = buf[p] & 255
+        p = p + 1
+        last_b = b
+        res = res | ((b & 127) << shift)
+        shift = shift + 7
+        if (b & 128) == 0 {
+            done = true
+        }
+    }
+    cur[0] = p
+    if shift < 64 && (last_b & 64) != 0 {
+        res = res | ((0 - 1) << shift)
+    }
+    return res
+}
+
+fn wasm_decode_ascii(buf: [i64], start: i64, slen: i64) -> str {
+    mut s = ""
+    for i in 0..slen {
+        if start + i < len(buf) {
+            s = s + char_from_code(buf[start + i] & 255)
+        }
+    }
+    return s
+}
+
+fn wasm_load_bytes(mut instance: WasmInstance, raw: [i64]) -> bool {
+    require(instance.is_active, "Cannot load module into terminated Wasm sandbox")
+    let blen = len(raw)
+    if blen < 8 {
+        return false
+    }
+    if raw[0] != 0 || raw[1] != 97 || raw[2] != 115 || raw[3] != 109 {
+        return false
+    }
+    if raw[4] != 1 || raw[5] != 0 || raw[6] != 0 || raw[7] != 0 {
+        return false
+    }
+    mut r_cp: [i64] = []
+    mut r_ft: [i64] = []
+    mut r_bs: [i64] = []
+    mut r_bl: [i64] = []
+    mut r_lc: [i64] = []
+    mut r_tp: [i64] = []
+    mut r_tr: [i64] = []
+    mut r_en: [str] = []
+    mut r_ek: [i64] = []
+    mut r_ei: [i64] = []
+    instance.code_pool = r_cp
+    instance.func_type_ids = r_ft
+    instance.func_body_starts = r_bs
+    instance.func_body_lens = r_bl
+    instance.func_local_cnts = r_lc
+    instance.type_param_cnts = r_tp
+    instance.type_ret_cnts = r_tr
+    instance.export_names = r_en
+    instance.export_kinds = r_ek
+    instance.export_ids = r_ei
+    mut g_reset: [i64] = []
+    instance.globals = g_reset
+
+    mut pos: [i64] = [8]
+    while pos[0] < blen {
+        let sec_id = raw[pos[0]] & 255
+        pos[0] = pos[0] + 1
+        let sec_size = wasm_read_leb_u(raw, blen, pos)
+        if sec_size < 0 || pos[0] + sec_size > blen {
+            return false
+        }
+        let sec_end = pos[0] + sec_size
+        if sec_id == 1 {
+            let tcnt = wasm_read_leb_u(raw, sec_end, pos)
+            for ti in 0..tcnt {
+                if pos[0] >= sec_end {
+                    return false
+                }
+                let form = raw[pos[0]] & 255
+                pos[0] = pos[0] + 1
+                if form != 96 {
+                    return false
+                }
+                let pcnt = wasm_read_leb_u(raw, sec_end, pos)
+                pos[0] = pos[0] + pcnt
+                let rcnt = wasm_read_leb_u(raw, sec_end, pos)
+                pos[0] = pos[0] + rcnt
+                instance.type_param_cnts = push(instance.type_param_cnts, pcnt)
+                instance.type_ret_cnts = push(instance.type_ret_cnts, rcnt)
+            }
+        } else if sec_id == 3 {
+            let fcnt = wasm_read_leb_u(raw, sec_end, pos)
+            for fi in 0..fcnt {
+                let tidx = wasm_read_leb_u(raw, sec_end, pos)
+                instance.func_type_ids = push(instance.func_type_ids, tidx)
+            }
+        } else if sec_id == 5 {
+            let mcnt = wasm_read_leb_u(raw, sec_end, pos)
+            for mi in 0..mcnt {
+                if pos[0] >= sec_end {
+                    return false
+                }
+                let mflags = wasm_read_leb_u(raw, sec_end, pos)
+                let init_pages = wasm_read_leb_u(raw, sec_end, pos)
+                if (mflags & 1) != 0 {
+                    let max_p = wasm_read_leb_u(raw, sec_end, pos)
+                    let _mp = max_p
+                }
+                let need_bytes = init_pages * 65536
+                if init_pages * 64 <= instance.memory_limit_mb * 1024 {
+                    while len(instance.exported_memory) < need_bytes {
+                        instance.exported_memory = push(instance.exported_memory, 0)
+                    }
+                } else {
+                    return false
+                }
+            }
+        } else if sec_id == 6 {
+            let gcnt = wasm_read_leb_u(raw, sec_end, pos)
+            for gi in 0..gcnt {
+                if pos[0] + 2 > sec_end {
+                    return false
+                }
+                pos[0] = pos[0] + 2
+                mut gval: i64 = 0
+                let eop = raw[pos[0]] & 255
+                pos[0] = pos[0] + 1
+                if eop == 65 || eop == 66 {
+                    gval = wasm_read_leb_s(raw, sec_end, pos)
+                }
+                while pos[0] < sec_end && (raw[pos[0]] & 255) != 11 {
+                    pos[0] = pos[0] + 1
+                }
+                if pos[0] < sec_end && (raw[pos[0]] & 255) == 11 {
+                    pos[0] = pos[0] + 1
+                }
+                instance.globals = push(instance.globals, gval)
+            }
+        } else if sec_id == 7 {
+            let ecnt = wasm_read_leb_u(raw, sec_end, pos)
+            for ei in 0..ecnt {
+                let nlen = wasm_read_leb_u(raw, sec_end, pos)
+                if pos[0] + nlen + 1 > sec_end {
+                    return false
+                }
+                let ename = wasm_decode_ascii(raw, pos[0], nlen)
+                pos[0] = pos[0] + nlen
+                let ekind = raw[pos[0]] & 255
+                pos[0] = pos[0] + 1
+                let eidx = wasm_read_leb_u(raw, sec_end, pos)
+                instance.export_names = push(instance.export_names, ename)
+                instance.export_kinds = push(instance.export_kinds, ekind)
+                instance.export_ids = push(instance.export_ids, eidx)
+            }
+        } else if sec_id == 10 {
+            let ccnt = wasm_read_leb_u(raw, sec_end, pos)
+            for ci in 0..ccnt {
+                let bsize = wasm_read_leb_u(raw, sec_end, pos)
+                let body_end = pos[0] + bsize
+                if body_end > sec_end {
+                    return false
+                }
+                let ldecl_cnt = wasm_read_leb_u(raw, body_end, pos)
+                mut tot_locals: i64 = 0
+                for li in 0..ldecl_cnt {
+                    let lrep = wasm_read_leb_u(raw, body_end, pos)
+                    tot_locals = tot_locals + lrep
+                    if pos[0] < body_end {
+                        pos[0] = pos[0] + 1
+                    }
+                }
+                let code_start = len(instance.code_pool)
+                mut code_cnt: i64 = 0
+                while pos[0] < body_end {
+                    instance.code_pool = push(instance.code_pool, raw[pos[0]] & 255)
+                    pos[0] = pos[0] + 1
+                    code_cnt = code_cnt + 1
+                }
+                instance.func_body_starts = push(instance.func_body_starts, code_start)
+                instance.func_body_lens = push(instance.func_body_lens, code_cnt)
+                instance.func_local_cnts = push(instance.func_local_cnts, tot_locals)
+            }
+        } else if sec_id == 11 {
+            let dcnt = wasm_read_leb_u(raw, sec_end, pos)
+            for di in 0..dcnt {
+                let dflags = wasm_read_leb_u(raw, sec_end, pos)
+                if dflags == 2 {
+                    let _midx = wasm_read_leb_u(raw, sec_end, pos)
+                }
+                mut mem_off: i64 = 0
+                if (dflags == 0 || dflags == 2) && pos[0] < sec_end {
+                    let eop = raw[pos[0]] & 255
+                    pos[0] = pos[0] + 1
+                    if eop == 65 || eop == 66 {
+                        mem_off = wasm_read_leb_s(raw, sec_end, pos)
+                    }
+                    while pos[0] < sec_end && (raw[pos[0]] & 255) != 11 {
+                        pos[0] = pos[0] + 1
+                    }
+                    if pos[0] < sec_end && (raw[pos[0]] & 255) == 11 {
+                        pos[0] = pos[0] + 1
+                    }
+                }
+                let dlen = wasm_read_leb_u(raw, sec_end, pos)
+                if dflags == 0 && mem_off >= 0 {
+                    for bi in 0..dlen {
+                        if pos[0] + bi < sec_end && mem_off + bi < len(instance.exported_memory) {
+                            instance.exported_memory[mem_off + bi] = raw[pos[0] + bi] & 255
+                        }
+                    }
+                }
+                pos[0] = pos[0] + dlen
+            }
+        }
+        pos[0] = sec_end
+    }
+    instance.has_module = (len(instance.func_body_starts) > 0)
+    return instance.has_module
+}
+
+fn wasm_load_hex(mut instance: WasmInstance, hex_str: str) -> bool {
+    mut raw: [i64] = []
+    let hlen = len(hex_str)
+    mut i: i64 = 0
+    while i + 1 < hlen {
+        let hi = wasm_hex_nib(char_at(hex_str, i))
+        let lo = wasm_hex_nib(char_at(hex_str, i + 1))
+        if hi < 0 || lo < 0 {
+            return false
+        }
+        raw = push(raw, (hi << 4) + lo)
+        i = i + 2
+    }
+    return wasm_load_bytes(instance, raw)
+}
+
+fn wasm_memory_read_u8(instance: WasmInstance, addr: i64) -> i64 {
+    if addr >= 0 && addr < len(instance.exported_memory) {
+        return instance.exported_memory[addr] & 255
+    }
+    return 0
+}
+
+fn wasm_memory_write_u8(mut instance: WasmInstance, addr: i64, val: i64) {
+    if addr >= 0 && addr < len(instance.exported_memory) {
+        instance.exported_memory[addr] = val & 255
+    }
+}
+
+fn wasm_memory_read_i32(instance: WasmInstance, addr: i64) -> i64 {
+    let mlen = len(instance.exported_memory)
+    if addr >= 0 && addr + 3 < mlen {
+        let b0 = instance.exported_memory[addr] & 255
+        let b1 = instance.exported_memory[addr + 1] & 255
+        let b2 = instance.exported_memory[addr + 2] & 255
+        let b3 = instance.exported_memory[addr + 3] & 255
+        return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+    }
+    return 0
+}
+
+fn wasm_memory_write_i32(mut instance: WasmInstance, addr: i64, val: i64) {
+    let mlen = len(instance.exported_memory)
+    if addr >= 0 && addr + 3 < mlen {
+        instance.exported_memory[addr] = val & 255
+        instance.exported_memory[addr + 1] = (val >> 8) & 255
+        instance.exported_memory[addr + 2] = (val >> 16) & 255
+        instance.exported_memory[addr + 3] = (val >> 24) & 255
+    }
+}
+
+fn wasm_trap_if_oob(mut instance: WasmInstance, addr: i64, width: i64) {
+    let mlen = len(instance.exported_memory)
+    if addr < 0 || addr + width > mlen {
+        instance.is_active = false
+        panic("[Wasm Trap] Linear memory out-of-bounds access")
+    }
+}
+
+fn wasm_read_imm_u(buf: [i64], limit: i64, mut cur: [i64], is_byte_stream: bool) -> i64 {
+    if is_byte_stream == false {
+        let p = cur[0]
+        if p < limit {
+            cur[0] = p + 1
+            return buf[p]
+        }
+        return 0
+    }
+    return wasm_read_leb_u(buf, limit, cur)
+}
+
+fn wasm_read_imm_s(buf: [i64], limit: i64, mut cur: [i64], is_byte_stream: bool) -> i64 {
+    if is_byte_stream == false {
+        let p = cur[0]
+        if p < limit {
+            cur[0] = p + 1
+            return buf[p]
+        }
+        return 0
+    }
+    return wasm_read_leb_s(buf, limit, cur)
+}
+
+fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64], extra_locals: i64, depth: i64, is_byte_stream: bool) -> i64 {
+    require(instance.is_active, "Cannot execute bytecode on terminated Wasm sandbox")
+    if depth > 64 {
+        instance.is_active = false
+        panic("[Wasm Trap] Call stack exhaustion (max depth 64)")
+    }
+    let clen = len(code)
+    let neg1: i64 = -1
+
+    mut cf_end: [i64] = []
+    mut cf_else: [i64] = []
+    for k in 0..clen {
+        cf_end = push(cf_end, neg1)
+        cf_else = push(cf_else, neg1)
+    }
+    mut cstk_pos: [i64] = []
+    mut scan_pos: [i64] = [0]
+    while scan_pos[0] < clen {
+        let ipc = scan_pos[0]
+        let opc = code[ipc] & 255
+        scan_pos[0] = ipc + 1
+        if opc == 2 || opc == 3 || opc == 4 {
+            let _bt = wasm_read_imm_s(code, clen, scan_pos, is_byte_stream)
+            cstk_pos = push(cstk_pos, ipc)
+        } else if opc == 5 {
+            if len(cstk_pos) > 0 {
+                let open_pc = cstk_pos[len(cstk_pos) - 1]
+                cf_else[open_pc] = scan_pos[0]
+                cstk_pos = push(cstk_pos, ipc)
+            }
+        } else if opc == 11 {
+            if len(cstk_pos) > 0 {
+                let top_pc = cstk_pos[len(cstk_pos) - 1]
+                cstk_pos = pop(cstk_pos)
+                if code[top_pc] == 5 {
+                    cf_end[top_pc] = scan_pos[0]
+                    if len(cstk_pos) > 0 {
+                        let if_pc = cstk_pos[len(cstk_pos) - 1]
+                        cstk_pos = pop(cstk_pos)
+                        cf_end[if_pc] = scan_pos[0]
+                    }
+                } else {
+                    cf_end[top_pc] = scan_pos[0]
+                }
+            }
+        } else if opc == 12 || opc == 13 || opc == 16 || opc == 32 || opc == 33 || opc == 34 || opc == 35 || opc == 36 {
+            let _imm = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
+        } else if opc == 14 {
+            let bcnt = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
+            for bi in 0..(bcnt + 1) {
+                let _lbl = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
+            }
+        } else if opc == 65 || opc == 66 {
+            let _imm = wasm_read_imm_s(code, clen, scan_pos, is_byte_stream)
+        } else if (opc >= 40 && opc <= 62) {
+            let _al = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
+            let _of = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
+        } else if opc == 63 || opc == 64 {
+            let _zr = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
+        }
+    }
+
+    mut stack: [i64] = []
+    for si in 0..256 {
+        stack = push(stack, 0)
+    }
+    mut sp: i64 = 0
+
+    mut locals: [i64] = []
+    let alen = len(args)
+    for ai in 0..alen {
+        locals = push(locals, args[ai])
+    }
+    let need_locals = alen + extra_locals
+    while len(locals) < need_locals || len(locals) < 64 {
+        locals = push(locals, 0)
+    }
+
+    mut blk_kind: [i64] = []
+    mut blk_start: [i64] = []
+    mut blk_end: [i64] = []
+    mut blk_sp: [i64] = []
+
+    mut cur_pc: [i64] = [0]
+    while cur_pc[0] < clen {
+        let ins_pc = cur_pc[0]
+        let op = code[ins_pc] & 255
+        cur_pc[0] = ins_pc + 1
+        instance.gas_used = instance.gas_used + 10
+        if instance.gas_used > instance.gas_limit {
+            instance.is_active = false
+            panic("[Wasm Sandbox Gas Exhaustion] Execution budget exceeded allocated gas limit")
+        }
+
+        if op == 0 {
+            instance.is_active = false
+            panic("[Wasm Trap] unreachable instruction executed")
+        } else if op == 1 {
+            sp = sp
+        } else if op == 2 {
+            let _bt = wasm_read_imm_s(code, clen, cur_pc, is_byte_stream)
+            blk_kind = push(blk_kind, 2)
+            blk_start = push(blk_start, cur_pc[0])
+            blk_end = push(blk_end, cf_end[ins_pc])
+            blk_sp = push(blk_sp, sp)
+        } else if op == 3 {
+            let _bt = wasm_read_imm_s(code, clen, cur_pc, is_byte_stream)
+            blk_kind = push(blk_kind, 3)
+            blk_start = push(blk_start, cur_pc[0])
+            blk_end = push(blk_end, cf_end[ins_pc])
+            blk_sp = push(blk_sp, sp)
+        } else if op == 4 {
+            let _bt = wasm_read_imm_s(code, clen, cur_pc, is_byte_stream)
+            if sp == 0 {
+                instance.is_active = false
+                panic("[Wasm Trap] stack underflow on if")
+            }
+            sp = sp - 1
+            let cond = stack[sp]
+            let e_target = cf_end[ins_pc]
+            let else_target = cf_else[ins_pc]
+            if cond != 0 {
+                blk_kind = push(blk_kind, 4)
+                blk_start = push(blk_start, cur_pc[0])
+                blk_end = push(blk_end, e_target)
+                blk_sp = push(blk_sp, sp)
+            } else if else_target >= 0 {
+                blk_kind = push(blk_kind, 4)
+                blk_start = push(blk_start, else_target)
+                blk_end = push(blk_end, e_target)
+                blk_sp = push(blk_sp, sp)
+                cur_pc[0] = else_target
+            } else if e_target >= 0 {
+                cur_pc[0] = e_target
+            }
+        } else if op == 5 {
+            if len(blk_end) > 0 {
+                let e_target = blk_end[len(blk_end) - 1]
+                blk_kind = pop(blk_kind)
+                blk_start = pop(blk_start)
+                blk_end = pop(blk_end)
+                blk_sp = pop(blk_sp)
+                if e_target >= 0 {
+                    cur_pc[0] = e_target
+                }
+            }
+        } else if op == 11 {
+            if len(blk_end) > 0 {
+                blk_kind = pop(blk_kind)
+                blk_start = pop(blk_start)
+                blk_end = pop(blk_end)
+                blk_sp = pop(blk_sp)
+            } else if cur_pc[0] >= clen {
+                if sp > 0 {
+                    return stack[sp - 1]
+                }
+                return 0
+            }
+        } else if op == 12 || op == 13 || op == 14 {
+            mut lbl_depth: i64 = 0
+            mut do_branch = true
+            if op == 12 {
+                lbl_depth = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            } else if op == 13 {
+                lbl_depth = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+                if sp == 0 {
+                    instance.is_active = false
+                    panic("[Wasm Trap] stack underflow on br_if")
+                }
+                sp = sp - 1
+                if stack[sp] == 0 {
+                    do_branch = false
+                }
+            } else {
+                let bcnt = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+                mut tvec: [i64] = []
+                for bi in 0..bcnt {
+                    tvec = push(tvec, wasm_read_imm_u(code, clen, cur_pc, is_byte_stream))
+                }
+                let def_lbl = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+                if sp == 0 {
+                    instance.is_active = false
+                    panic("[Wasm Trap] stack underflow on br_table")
+                }
+                sp = sp - 1
+                let bidx = stack[sp]
+                if bidx >= 0 && bidx < len(tvec) {
+                    lbl_depth = tvec[bidx]
+                } else {
+                    lbl_depth = def_lbl
+                }
+            }
+            if do_branch {
+                let stk_n = len(blk_kind)
+                if stk_n == 0 && is_byte_stream == false && lbl_depth >= 0 && lbl_depth < clen {
+                    cur_pc[0] = lbl_depth
+                } else if lbl_depth == stk_n {
+                    if sp > 0 {
+                        return stack[sp - 1]
+                    }
+                    return 0
+                } else if lbl_depth >= 0 && lbl_depth < stk_n {
+                    let tgt_i = stk_n - 1 - lbl_depth
+                    let t_kind = blk_kind[tgt_i]
+                    let t_start = blk_start[tgt_i]
+                    let t_end = blk_end[tgt_i]
+                    if t_kind == 3 {
+                        while len(blk_kind) > tgt_i + 1 {
+                            blk_kind = pop(blk_kind)
+                            blk_start = pop(blk_start)
+                            blk_end = pop(blk_end)
+                            blk_sp = pop(blk_sp)
+                        }
+                        cur_pc[0] = t_start
+                    } else {
+                        while len(blk_kind) > tgt_i {
+                            blk_kind = pop(blk_kind)
+                            blk_start = pop(blk_start)
+                            blk_end = pop(blk_end)
+                            blk_sp = pop(blk_sp)
+                        }
+                        if t_end >= 0 {
+                            cur_pc[0] = t_end
+                        } else {
+                            cur_pc[0] = clen
+                        }
+                    }
+                } else {
+                    instance.is_active = false
+                    panic("[Wasm Trap] invalid branch label depth")
+                }
+            }
+        } else if op == 15 {
+            if sp > 0 {
+                return stack[sp - 1]
+            }
+            return 0
+        } else if op == 16 {
+            let fidx = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if instance.has_module == false || fidx < 0 || fidx >= len(instance.func_body_starts) {
+                instance.is_active = false
+                panic("[Wasm Trap] Invalid function index in call")
+            }
+            let tidx = instance.func_type_ids[fidx]
+            mut pcnt: i64 = 0
+            mut rcnt: i64 = 1
+            if tidx >= 0 && tidx < len(instance.type_param_cnts) {
+                pcnt = instance.type_param_cnts[tidx]
+                rcnt = instance.type_ret_cnts[tidx]
+            }
+            if sp < pcnt {
+                instance.is_active = false
+                panic("[Wasm Trap] Stack underflow preparing call arguments")
+            }
+            mut cargs: [i64] = []
+            let base_sp = sp - pcnt
+            for ai in 0..pcnt {
+                cargs = push(cargs, stack[base_sp + ai])
+            }
+            sp = base_sp
+            let cstart = instance.func_body_starts[fidx]
+            let c_len = instance.func_body_lens[fidx]
+            let eloc = instance.func_local_cnts[fidx]
+            mut cbody: [i64] = []
+            for ci in 0..c_len {
+                cbody = push(cbody, instance.code_pool[cstart + ci])
+            }
+            let cres = wasm_exec_bytecode_depth(instance, cbody, cargs, eloc, depth + 1, true)
+            if rcnt > 0 && sp < len(stack) {
+                stack[sp] = cres
+                sp = sp + 1
+            }
+        } else if op == 26 {
+            if sp > 0 {
+                sp = sp - 1
+            }
+        } else if op == 27 {
+            if sp >= 3 {
+                sp = sp - 1
+                let c = stack[sp]
+                sp = sp - 1
+                let val2 = stack[sp]
+                sp = sp - 1
+                let val1 = stack[sp]
+                if c != 0 {
+                    stack[sp] = val1
+                } else {
+                    stack[sp] = val2
+                }
+                sp = sp + 1
+            }
+        } else if op == 32 {
+            let lidx = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            mut lval: i64 = 0
+            if lidx >= 0 && lidx < len(locals) {
+                lval = locals[lidx]
+            }
+            if sp < len(stack) {
+                stack[sp] = lval
+                sp = sp + 1
+            }
+        } else if op == 33 {
+            let lidx = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if sp > 0 {
+                sp = sp - 1
+                let sval = stack[sp]
+                if lidx >= 0 && lidx < len(locals) {
+                    locals[lidx] = sval
+                }
+            }
+        } else if op == 34 {
+            let lidx = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if sp > 0 {
+                let sval = stack[sp - 1]
+                if lidx >= 0 && lidx < len(locals) {
+                    locals[lidx] = sval
+                }
+            }
+        } else if op == 35 {
+            let gidx = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            mut gval: i64 = 0
+            if gidx >= 0 && gidx < len(instance.globals) {
+                gval = instance.globals[gidx]
+            }
+            if sp < len(stack) {
+                stack[sp] = gval
+                sp = sp + 1
+            }
+        } else if op == 36 {
+            let gidx = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if sp > 0 {
+                sp = sp - 1
+                let sval = stack[sp]
+                if gidx >= 0 && gidx < len(instance.globals) {
+                    instance.globals[gidx] = sval
+                }
+            }
+        } else if op == 40 {
+            let _align = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            let offset = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if sp > 0 {
+                let eff = stack[sp - 1] + offset
+                wasm_trap_if_oob(instance, eff, 4)
+                stack[sp - 1] = wasm_memory_read_i32(instance, eff)
+            }
+        } else if op == 45 {
+            let _align = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            let offset = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if sp > 0 {
+                let eff = stack[sp - 1] + offset
+                wasm_trap_if_oob(instance, eff, 1)
+                stack[sp - 1] = wasm_memory_read_u8(instance, eff)
+            }
+        } else if op == 54 {
+            let _align = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            let offset = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if sp >= 2 {
+                sp = sp - 1
+                let val = stack[sp]
+                sp = sp - 1
+                let eff = stack[sp] + offset
+                wasm_trap_if_oob(instance, eff, 4)
+                wasm_memory_write_i32(instance, eff, val)
+            }
+        } else if op == 58 {
+            let _align = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            let offset = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if sp >= 2 {
+                sp = sp - 1
+                let val = stack[sp]
+                sp = sp - 1
+                let eff = stack[sp] + offset
+                wasm_trap_if_oob(instance, eff, 1)
+                wasm_memory_write_u8(instance, eff, val)
+            }
+        } else if op == 63 {
+            let _z = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            let page_cnt = len(instance.exported_memory) / 65536
+            if sp < len(stack) {
+                stack[sp] = page_cnt
+                sp = sp + 1
+            }
+        } else if op == 64 {
+            let _z = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+            if sp > 0 {
+                let delta = stack[sp - 1]
+                let old_pages = len(instance.exported_memory) / 65536
+                let new_pages = old_pages + delta
+                if delta >= 0 && new_pages * 64 <= instance.memory_limit_mb * 1024 {
+                    for gi in 0..(delta * 65536) {
+                        instance.exported_memory = push(instance.exported_memory, 0)
+                    }
+                    stack[sp - 1] = old_pages
+                } else {
+                    stack[sp - 1] = neg1
+                }
+            }
+        } else if op == 65 || op == 66 {
+            let imm = wasm_read_imm_s(code, clen, cur_pc, is_byte_stream)
+            if sp < len(stack) {
+                stack[sp] = imm
+                sp = sp + 1
+            }
+        } else if op == 69 {
+            if sp > 0 {
+                stack[sp - 1] = (stack[sp - 1] == 0) ? 1 : 0
+            }
+        } else if op == 70 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp]
+                stack[sp - 1] = (stack[sp - 1] == b) ? 1 : 0
+            }
+        } else if op == 71 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp]
+                stack[sp - 1] = (stack[sp - 1] != b) ? 1 : 0
+            }
+        } else if op == 72 || op == 73 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp]
+                stack[sp - 1] = (stack[sp - 1] < b) ? 1 : 0
+            }
+        } else if op == 74 || op == 75 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp]
+                stack[sp - 1] = (stack[sp - 1] > b) ? 1 : 0
+            }
+        } else if op == 76 || op == 77 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp]
+                stack[sp - 1] = (stack[sp - 1] <= b) ? 1 : 0
+            }
+        } else if op == 78 || op == 79 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp]
+                stack[sp - 1] = (stack[sp - 1] >= b) ? 1 : 0
+            }
+        } else if op == 106 {
+            if sp >= 2 {
+                sp = sp - 1
+                stack[sp - 1] = stack[sp - 1] + stack[sp]
+            }
+        } else if op == 107 {
+            if sp >= 2 {
+                sp = sp - 1
+                stack[sp - 1] = stack[sp - 1] - stack[sp]
+            }
+        } else if op == 108 {
+            if sp >= 2 {
+                sp = sp - 1
+                stack[sp - 1] = stack[sp - 1] * stack[sp]
+            }
+        } else if op == 109 || op == 110 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp]
+                let a = stack[sp - 1]
+                if b == 0 {
+                    instance.is_active = false
+                    panic("[Wasm Trap] integer divide by zero")
+                }
+                if op == 109 && a == (0 - 2147483648) && b == neg1 {
+                    instance.is_active = false
+                    panic("[Wasm Trap] integer division overflow")
+                }
+                stack[sp - 1] = a / b
+            }
+        } else if op == 111 || op == 112 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp]
+                let a = stack[sp - 1]
+                if b == 0 {
+                    instance.is_active = false
+                    panic("[Wasm Trap] integer remainder by zero")
+                }
+                stack[sp - 1] = a % b
+            }
+        } else if op == 113 {
+            if sp >= 2 {
+                sp = sp - 1
+                stack[sp - 1] = stack[sp - 1] & stack[sp]
+            }
+        } else if op == 114 {
+            if sp >= 2 {
+                sp = sp - 1
+                stack[sp - 1] = stack[sp - 1] | stack[sp]
+            }
+        } else if op == 115 {
+            if sp >= 2 {
+                sp = sp - 1
+                stack[sp - 1] = stack[sp - 1] ^ stack[sp]
+            }
+        } else if op == 116 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp] & 31
+                stack[sp - 1] = stack[sp - 1] << b
+            }
+        } else if op == 117 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp] & 31
+                mut a32 = stack[sp - 1] & 4294967295
+                if a32 >= 2147483648 {
+                    a32 = a32 - 4294967296
+                }
+                stack[sp - 1] = a32 >> b
+            }
+        } else if op == 118 {
+            if sp >= 2 {
+                sp = sp - 1
+                let b = stack[sp] & 31
+                let u32 = stack[sp - 1] & 4294967295
+                stack[sp - 1] = u32 >> b
+            }
+        } else {
+            instance.is_active = false
+            panic("[Wasm Trap] Unsupported Wasm opcode: " + int_to_str(op))
+        }
+    }
+    if sp > 0 {
+        return stack[sp - 1]
+    }
+    return 0
+}
+
+fn wasm_exec_bytecode(mut instance: WasmInstance, code: [i64], args: [i64]) -> i64 {
+    return wasm_exec_bytecode_depth(instance, code, args, 0, 0, false)
+}
+
+fn wasm_invoke(mut instance: WasmInstance, fn_name: str, args: [i64]) -> i64 {
+    require(instance.is_active, "Cannot invoke terminated Wasm sandbox")
+    instance.gas_used = instance.gas_used + (len(args) * 10)
+    if instance.gas_used > instance.gas_limit {
+        instance.is_active = false
+        panic("[Wasm Sandbox Gas Exhaustion] Execution budget exceeded allocated gas limit")
+    }
+    if instance.has_module {
+        let neg1: i64 = -1
+        mut found_fidx: i64 = neg1
+        for ei in 0..len(instance.export_names) {
+            if instance.export_names[ei] == fn_name && instance.export_kinds[ei] == 0 {
+                found_fidx = instance.export_ids[ei]
+                break
+            }
+        }
+        if found_fidx < 0 || found_fidx >= len(instance.func_body_starts) {
+            instance.is_active = false
+            panic("[Wasm Trap] Exported function not found in module: " + fn_name)
+        }
+        let cstart = instance.func_body_starts[found_fidx]
+        let clen = instance.func_body_lens[found_fidx]
+        let eloc = instance.func_local_cnts[found_fidx]
+        mut cbody: [i64] = []
+        for ci in 0..clen {
+            cbody = push(cbody, instance.code_pool[cstart + ci])
+        }
+        return wasm_exec_bytecode_depth(instance, cbody, args, eloc, 0, true)
+    }
+    instance.is_active = false
+    panic("[Wasm Trap] No WebAssembly module loaded in sandbox for function: " + fn_name)
+    return 0
+}
+
+fn wasm_gas_remaining(instance: WasmInstance) -> i64 {
+    let rem = instance.gas_limit - instance.gas_used
+    if rem < 0 {
+        return 0
+    }
+    return rem
+}
+
+fn wasm_terminate(mut instance: WasmInstance) -> bool {
+    instance.is_active = false
+    return true
+}

@@ -1,0 +1,20 @@
+fn build_tag(idx: int) -> string {
+    let m = arena_mark()
+    let raw = "worker_" + int_to_str(idx)
+    let pinned = region_pin(raw)
+    arena_rollback(m)
+    return pinned
+}
+
+fn main() -> int {
+    let base_used = arena_used()
+    mut last_tag = ""
+    for i in 0..200 {
+        last_tag = build_tag(i)
+    }
+    let after_used = arena_used()
+    require(last_tag == "worker_199", "last worker tag check")
+    require(after_used == base_used, "arena usage must stay bounded across 200 worker calls")
+    print("T1-F04-06:PASS")
+    return 0
+}

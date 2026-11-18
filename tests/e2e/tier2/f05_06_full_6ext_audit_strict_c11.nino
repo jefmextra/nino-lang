@@ -1,0 +1,23 @@
+fn main() -> int {
+    let digest = sha256("nino_c11_strict_audit")
+    mut cfg = { "mode": "strict" }
+    cfg["step"] = 99
+    mut arr = [5, 10]
+    arr = push(arr, 15)
+    mut sum_loop = 0
+    for v in arr {
+        sum_loop = sum_loop + v
+    }
+    let filtered = arr_filter(arr, |x| x >= 10)
+    let total = arr_reduce(filtered, 0, |acc, x| acc + x)
+    mut tx = 1
+    transact {
+        tx = 2
+        abort "tx_abort"
+    } compensate {
+        tx = 9
+    }
+    require(len(digest) == 64 && cfg["mode"] == "strict" && cfg["step"] == "99" && sum_loop == 30 && total == 25 && tx == 9, "strict C11 dict/for-in/push/sha256/lambda audit failed")
+    print("T2-F05-06:PASS")
+    return 0
+}

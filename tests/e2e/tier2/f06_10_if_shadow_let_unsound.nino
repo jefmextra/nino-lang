@@ -1,0 +1,13 @@
+fn shadow_leak(c: bool) -> int {
+    let x = 5
+    if c {
+        let x = 99
+        let dummy = x + 1
+    }
+    ensure(x == 99, "inner block let must not leak into outer Phi-join")
+    return x
+}
+
+fn main() -> int {
+    return shadow_leak(true)
+}

@@ -1,0 +1,22 @@
+fn main() -> int {
+    mut score = 0
+    if true {
+        let tmp: int = 42
+        score = score + tmp
+    }
+    if true {
+        let tmp: string = "reused"
+        if tmp == "reused" {
+            score = score + 8
+        }
+    }
+    for i in 0..3 {
+        let tmp: bool = (i % 2 == 0)
+        if tmp {
+            score = score + 5
+        }
+    }
+    require(score == 60, "sibling block variable reuse score must be 60")
+    print("T1-F01-03:PASS")
+    return 0
+}

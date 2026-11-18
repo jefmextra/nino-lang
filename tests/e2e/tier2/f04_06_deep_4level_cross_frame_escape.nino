@@ -1,0 +1,19 @@
+fn main() -> int {
+    let m1 = arena_mark()
+    mut d1_escape: string = "ok"
+    let m2 = arena_mark()
+    let s2 = "lvl2_" + int_to_str(2)
+    let m3 = arena_mark()
+    let s3 = "lvl3_" + int_to_str(3)
+    let m4 = arena_mark()
+    let s4 = "lvl4_" + int_to_str(4)
+    require(len(s4) == 6, "s4")
+    arena_rollback(m4)
+    d1_escape = s3
+    arena_rollback(m3)
+    require(len(s2) == 6, "s2")
+    print(d1_escape)
+    arena_rollback(m2)
+    arena_rollback(m1)
+    return 0
+}

@@ -1,0 +1,27 @@
+import "std/str.nino"
+
+fn main() -> int {
+    let bad_rc = db_redis_connect("127.0.0.1", 59999)
+    require(len(bad_rc) == 0 && db_driver_mode(bad_rc) == "disconnected", "unreachable TCP Redis must fail closed")
+
+    let mem_rc = db_redis_connect(":memory:", 0)
+    require(len(mem_rc) > 0 && db_driver_mode(mem_rc) == "embedded:redis-mem", "explicit :memory: must select embedded KV")
+    db_redis_cmd(mem_rc, "SET", ["k_sec", "v_sec"])
+    require(db_redis_cmd(mem_rc, "GET", ["k_sec"]) == "v_sec", "embedded Redis must round-trip values")
+    db_close(mem_rc)
+
+    let db = db_sqlite_open(":memory:")
+    db_exec(db, "CREATE TABLE IF NOT EXISTS items (sku TEXT, price INTEGER)", [])
+    let payload = "bad'); DROP TABLE items; --"
+    db_exec(db, "INSERT INTO items VALUES (?, ?)", [payload, "4200"])
+    let rows = db_query(db, "SELECT sku, price FROM items WHERE sku = ?", [payload])
+    require(len(rows) == 1, "parameterized query must treat injection payload as literal data")
+
+    let j = db_query_json(db, "SELECT sku, price FROM items")
+    require(str_contains(j, "\"sku\":") && str_contains(j, "\"price\":4200"), "db_query_json must use table column names and unquoted numeric values")
+    require(!str_contains(j, "\"owner\":") && !str_contains(j, "\"balance\":"), "db_query_json must not hardcode fake schema columns")
+    db_close(db)
+
+    print("T1-F11-02:PASS")
+    return 0
+}

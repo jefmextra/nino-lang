@@ -1,0 +1,7 @@
+import "std/wasm.nino"
+
+fn main() -> int {
+    mut w = wasm_spawn("unk.wasm", 1, 5000)
+    print(wasm_invoke(w, "unknown_fn", [1]))
+    return 0
+}
