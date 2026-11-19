@@ -16,7 +16,7 @@ fn run_test_unit(source_file: string) -> int {
 
 fn main() -> int {
     print("================================================================================")
-    print("[Nino Sovereign Pure Native Test Suite Runner]")
+    print("[Nino Pure Native Test Suite Runner]")
     print("Self-Hosted Test Verification (Zero Python Dependencies)")
     print("")
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 echo "============================================================================"
-echo "[Nino Sovereign Bootstrap] Zero-Dependency Native Toolchain Installer"
+echo "[Nino Bootstrap] Zero-Dependency Native Toolchain Installer"
 echo "============================================================================"
 
 CC_BIN="${CC:-gcc}"
@@ -16,5 +16,5 @@ rm -f bin/ninoc_stage0
 cp -f bin/ninoc ninoc
 
 echo "============================================================================"
-echo "[SUCCESS] Sovereign Native Compiler installed at: bin/ninoc"
+echo "[SUCCESS] Nino native compiler installed at: bin/ninoc"
 echo "============================================================================"

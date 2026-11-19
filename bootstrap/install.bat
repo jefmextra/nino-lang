@@ -1,6 +1,6 @@
 @echo off
 echo ============================================================================
-echo [Nino Sovereign Bootstrap] Zero-Dependency Native Toolchain Installer
+echo [Nino Bootstrap] Zero-Dependency Native Toolchain Installer
 echo ============================================================================
 
 where gcc >nul 2>nul
@@ -30,5 +30,5 @@ del /q bin\ninoc_stage0.exe 2>nul
 copy /y bin\ninoc.exe ninoc.exe >nul
 copy /y bin\ninoc.exe compiler\ninoc.exe >nul
 echo ============================================================================
-echo [SUCCESS] Sovereign Native Compiler installed at: bin\ninoc.exe
+echo [SUCCESS] Nino native compiler installed at: bin\ninoc.exe
 echo ============================================================================

@@ -122,7 +122,7 @@ fn check_text_no_dashes(path: string) -> int {
 
 fn main() -> int {
     print("================================================================================")
-    print("[Nino Sovereign Native Compliance Auditor (Code Hygiene & Conformance)]")
+    print("[Nino Native Compliance Auditor (Code Hygiene & Conformance)]")
     print("================================================================================")
 
     mut v = 0
@@ -205,6 +205,7 @@ fn main() -> int {
     v = v + check_nino_source_file("tools/compliance_check.nino")
     v = v + check_nino_source_file("tools/fuzzer.nino")
     v = v + check_nino_source_file("tools/iso_conformance.nino")
+    v = v + check_nino_source_file("tools/sync_runtime_hdr.nino")
     v = v + check_nino_source_file("tools/test_runner.nino")
     v = v + check_nino_source_file("tests/e2e/tier1/f01_07_comments_all_stages.nino")
 

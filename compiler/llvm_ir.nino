@@ -407,7 +407,7 @@ fn llvm_int_lit_dec(raw_s: string) -> string {
     if starts_with(s, "0x") || starts_with(s, "0X") {
         mut hv = 0
         for i in 2..len(s) {
-            let nib = m3_hex_nib_val(char_at(s, i))
+            let nib = hex_nibble_val(char_at(s, i))
             if nib < 0 { return "0" }
             hv = hv * 16 + nib
         }
@@ -1360,7 +1360,7 @@ fn compile_nino_llvm(source_path: string, output_ll: string) -> int {
         return 1
     }
     print("\033[96m================================================================================\033[0m")
-    print("\033[93m[Nino Sovereign LLVM SSA IR Generator (ninoc)]\033[0m")
+    print("\033[93m[Nino LLVM SSA IR Generator (ninoc)]\033[0m")
     print("  Source Unit     : " + source_path)
     print("  Output LLVM IR  : " + output_ll)
     if verify_syntax_balance(source_text) == false {

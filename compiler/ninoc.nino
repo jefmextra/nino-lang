@@ -42,7 +42,7 @@ fn compile_nino_unit_opts(source_path: string, output_exe_path: string, debug_mo
         return 1
     }
     print("\033[96m================================================================================\033[0m")
-    print("\033[93m[Nino Sovereign Self-Hosting Native Compiler (ninoc)]\033[0m")
+    print("\033[93m[Nino Self-Hosting Native Compiler (ninoc)]\033[0m")
     print("  Source Unit     : " + source_path)
     print("  Output Binary   : " + output_exe_path)
     
@@ -253,6 +253,859 @@ fn compile_nino_unit(source_path: string, output_exe_path: string) -> int {
 }
 
 
+fn cmd_lex(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'lex' command.")
+        print("Usage: ninoc lex <file.nino>")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    let src_txt = read_file(target_src)
+    let t_count = lex_count_tokens(src_txt)
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Lexical Analysis & Token Stream Inspector]\033[0m")
+    print("  Source Unit : " + target_src)
+    print("  Source Bytes: " + len(src_txt) + " bytes")
+    print("  Tokens Found: " + t_count + " tokens")
+    print("  Lexer Status: \033[92m[✓ LEXICAL SCAN SOUND - ZERO UNRECOGNIZED TOKENS]\033[0m")
+    print("--------------------------------------------------------------------------------")
+    print("  Formal Token Stream Classification (Sample Window):")
+    lex_dump_tokens(src_txt, 25)
+    print("\033[96m================================================================================\033[0m\n")
+    return 0
+}
+
+fn cmd_doc(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'doc' command.")
+        print("Usage: ninoc doc <file.nino> [-o <output.md>]")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    let src_txt = read_file(target_src)
+    let generated_doc = generate_api_doc(src_txt, target_src)
+    mut out_path = ""
+    if arg_count >= 5 {
+        let opt = argv(3)
+        if opt == "-o" {
+            out_path = argv(4)
+        }
+    }
+    if len(out_path) > 0 {
+        write_file(out_path, generated_doc)
+        print("\033[92m[✓ Documentation Generated Successfully]\033[0m Written to: " + out_path)
+    } else {
+        print("\033[96m================================================================================\033[0m")
+        print("\033[93m[Nino Automated API Documentation Generator (ninoc doc)]\033[0m")
+        print("  Source Unit : " + target_src)
+        print("--------------------------------------------------------------------------------")
+        print(generated_doc)
+        print("\033[96m================================================================================\033[0m\n")
+    }
+    return 0
+}
+
+fn cmd_lint(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'lint' command.")
+        print("Usage: ninoc lint [--strict] <file.nino>")
+        return 1
+    }
+    mut strict_m = false
+    mut target_src = ""
+    mut li = 2
+    while li < arg_count {
+        let la = argv(li)
+        if la == "--strict" || la == "-strict" {
+            strict_m = true
+        } else if len(target_src) == 0 && starts_with(la, "-") == false {
+            target_src = la
+        }
+        li = li + 1
+    }
+    if len(target_src) == 0 || file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    let src_txt = read_file(target_src)
+    return run_architecture_linter(target_src, src_txt, strict_m)
+}
+
+fn cmd_equiv(arg_count: int) -> int {
+    if arg_count < 4 {
+        print("\033[91m[Error]\033[0m Missing source files for 'equiv' command.")
+        print("Usage: ninoc equiv <fileA.nino> <fileB.nino> [fn_name]")
+        return 1
+    }
+    let file_a = argv(2)
+    let file_b = argv(3)
+    mut target_fn = ""
+    if arg_count >= 5 {
+        target_fn = trim(argv(4))
+    }
+    if file_exists(file_a) == false || file_exists(file_b) == false {
+        print("\033[91m[Error]\033[0m Both comparison source files must exist.")
+        return 1
+    }
+    let src_a = read_file(file_a)
+    let src_b = read_file(file_b)
+    let smt_eq = synthesize_equiv_smt_ex(src_a, src_b, target_fn)
+    let smt_path = file_a + ".equiv.smt2"
+    write_file(smt_path, smt_eq)
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Mathematical Differential Equivalence Prover (ninoc equiv)]\033[0m")
+    print("  Baseline Unit : " + file_a)
+    print("  Candidate Unit: " + file_b)
+    if len(target_fn) > 0 {
+        print("  Target Fn     : " + target_fn)
+    } else {
+        print("  Target Scope  : All Top-Level Functions")
+    }
+    let z3_bin = find_z3_binary()
+    if len(z3_bin) == 0 {
+        delete_temp_file(smt_path)
+        print("  Solver Status : [Notice] Z3 binary not found in PATH")
+        print("\033[96m================================================================================\033[0m")
+        return 1
+    }
+    let out_z3 = file_a + ".equiv.z3out"
+    run_z3_smt_file(z3_bin, smt_path, out_z3)
+    mut z3_txt = ""
+    if file_exists(out_z3) {
+        z3_txt = read_file(out_z3)
+        delete_temp_file(out_z3)
+    }
+    delete_temp_file(smt_path)
+    let z3_clean = trim(replace_str(z3_txt, "\r\n", "\n"))
+    let nl_p = find_char(z3_clean, "\n", 0)
+    let verdict = (nl_p == -1) ? z3_clean : trim(slice(z3_clean, 0, nl_p))
+    if verdict == "unsat" {
+        print("  Proof Verdict : \033[92m[✓ FORMALLY EQUIVALENT (UNSAT) - 0 Divergence Inputs Across Integer/Bool States]\033[0m")
+        print("\033[96m================================================================================\033[0m")
+        return 0
+    }
+    if verdict == "sat" {
+        print("  Proof Verdict : \033[91m[✗ EQUIVALENCE REFUTED (SAT) - Divergence Input Discovered by Z3]\033[0m")
+    } else {
+        print("  Proof Verdict : \033[93m[? EQUIVALENCE INCONCLUSIVE (" + (len(verdict) > 0 ? verdict : "error") + ") - Fail-Closed]\033[0m")
+    }
+    print(z3_clean)
+    print("\033[96m================================================================================\033[0m")
+    return 1
+}
+
+fn cmd_sbom(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'sbom' command.")
+        print("Usage: ninoc sbom <file.nino> [-o <sbom.json>]")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    mut out_sbom = target_src + ".sbom.json"
+    if arg_count >= 5 && argv(3) == "-o" {
+        out_sbom = argv(4)
+    }
+    let src_txt = read_file(target_src)
+    let sbom_json = generate_cyclonedx_sbom(target_src, src_txt)
+    write_file(out_sbom, sbom_json)
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Cryptographic CycloneDX v1.5 SBOM Generator (ninoc sbom)]\033[0m")
+    print("  Root Source Unit : " + target_src)
+    print("  Output SBOM File : " + out_sbom)
+    print("  Source SHA-256   : " + sha256(src_txt))
+    print("  SBOM Status      : \033[92m[✓ CYCLONEDX v1.5 CRYPTOGRAPHIC SBOM GENERATED]\033[0m")
+    print("\033[96m================================================================================\033[0m")
+    return 0
+}
+
+fn cmd_bench(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'bench' command.")
+        print("Usage: ninoc bench <file.nino>")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Hardware-Counter Nanosecond Microbenchmark Engine (ninoc bench)]\033[0m")
+    print("  Target Unit : " + target_src)
+    let target_exe = trim(default_exe_name(target_src))
+    let c_stat = compile_nino_unit_ex(target_src, target_exe, false, false, "gcc", false)
+    if c_stat != 0 {
+        return c_stat
+    }
+    let run_cmd = prepare_run_cmd(target_exe)
+    let t0 = time_now_ns()
+    let ec = exec_cmd(run_cmd)
+    let t1 = time_now_ns()
+    delete_temp_file(target_exe)
+    delete_temp_file(target_src + ".c")
+    let elapsed_ns = t1 - t0
+    let elapsed_us = elapsed_ns / 1000
+    print("  Wall Clock  : " + int_to_str(elapsed_ns) + " ns (" + int_to_str(elapsed_us) + " us)")
+    print("  Bench Status: \033[92m[✓ HARDWARE NANOSECOND BENCHMARK COMPLETED]\033[0m")
+    print("\033[96m================================================================================\033[0m")
+    return ec
+}
+
+fn cmd_witness(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'witness' command.")
+        print("Usage: ninoc witness <file.nino> [-o <output_witness.nino>]")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    mut out_path = target_src + ".witness.nino"
+    if arg_count >= 5 {
+        if argv(3) == "-o" {
+            out_path = argv(4)
+        }
+    }
+    let src_txt = read_file(target_src)
+    return synthesize_witness_nino(src_txt, target_src, out_path)
+}
+
+fn cmd_bindgen(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing C header file for 'bindgen' command.")
+        print("Usage: ninoc bindgen <header.h> [-o <bindings.nino>]")
+        return 1
+    }
+    let target_h = argv(2)
+    if file_exists(target_h) == false {
+        print("\033[91m[Error]\033[0m Header file not found: " + target_h)
+        return 1
+    }
+    mut out_nino = target_h + ".nino"
+    if ends_with(target_h, ".h") {
+        out_nino = slice(target_h, 0, len(target_h) - 2) + "_bindings.nino"
+    }
+    if arg_count >= 5 {
+        if argv(3) == "-o" {
+            out_nino = argv(4)
+        }
+    }
+    let h_txt = read_file(target_h)
+    let nino_bindings = generate_c_bindgen(h_txt, target_h)
+    write_file(out_nino, nino_bindings)
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Native C-Header Bindgen Engine (ninoc bindgen)]\033[0m")
+    print("  Input C Header  : " + target_h)
+    print("  Output Bindings : " + out_nino)
+    print("  Generated Size  : " + len(nino_bindings) + " bytes")
+    print("  Bindgen Status  : \033[92m[✓ ZERO-OVERHEAD NATIVE FFI BINDINGS SYNTHESIZED]\033[0m")
+    print("\033[96m================================================================================\033[0m")
+    return 0
+}
+
+fn cmd_fmt(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'fmt' command.")
+        print("Usage: ninoc fmt <file.nino> [--check] [-o <output.nino>]")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    mut check_only = false
+    mut out_path = target_src
+    mut fi = 3
+    while fi < arg_count {
+        let fa = argv(fi)
+        if fa == "--check" || fa == "-check" {
+            check_only = true
+        } else if fa == "-o" {
+            if fi + 1 < arg_count {
+                out_path = argv(fi + 1)
+                fi = fi + 1
+            }
+        }
+        fi = fi + 1
+    }
+    let raw_src = read_file(target_src)
+    let formatted = format_nino_source(raw_src)
+    let norm_raw = replace_str(raw_src, "\r\n", "\n")
+    if check_only {
+        if norm_raw == formatted {
+            print("\033[92m[✓ Canonical Format Verified]\033[0m " + target_src)
+            return 0
+        } else {
+            print("\033[91m[✗ Formatting Drift Detected]\033[0m " + target_src)
+            return 1
+        }
+    }
+    write_file(out_path, formatted)
+    print("\033[92m[✓ Formatted Canonically]\033[0m " + out_path)
+    return 0
+}
+
+fn cmd_trace(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'trace' command.")
+        print("Usage: ninoc trace <file.nino>")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Deterministic Flight Recorder & Execution Trace Engine (ninoc trace)]\033[0m")
+    print("  Target Unit : " + target_src)
+    print("--------------------------------------------------------------------------------")
+    let target_exe = trim(default_exe_name(target_src))
+    let compile_status = compile_nino_unit_ex(target_src, target_exe, false, false, "gcc", false)
+    if compile_status != 0 {
+        return compile_status
+    }
+    let run_cmd = prepare_run_cmd(target_exe)
+    let exit_code = exec_cmd(run_cmd)
+    delete_temp_file(target_exe)
+    let temp_c = target_src + ".c"
+    delete_temp_file(temp_c)
+    print("\033[96m================================================================================\033[0m")
+    return exit_code
+}
+
+fn cmd_ast(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'ast' command.")
+        print("Usage: ninoc ast <file.nino> [-o <output.ast>]")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    let src_text = read_file(target_src)
+    let ast_tree = ast_render_tree(src_text)
+    mut out_ast = ""
+    if arg_count >= 5 && argv(3) == "-o" {
+        out_ast = argv(4)
+    }
+    if len(out_ast) > 0 {
+        write_file(out_ast, ast_tree)
+        print("\033[92m[✓ AST Dump Written]\033[0m " + out_ast)
+    } else {
+        print(ast_tree)
+    }
+    return 0
+}
+
+fn cmd_check(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'check' command.")
+        print("Usage: ninoc check <file.nino>")
+        return 1
+    }
+    let target_src = argv(2)
+    if file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    let src_text = read_file(target_src)
+    if verify_syntax_balance(src_text) == false {
+        return 1
+    }
+    let n_cnt = parse_program_ast(src_text)
+    let bdir = get_directory_of(target_src)
+    if run_semantic_type_check(src_text, bdir, target_src) == false {
+        return 1
+    }
+    print("\033[92m[✓ Semantic & Region Check Passed]\033[0m " + target_src + " (" + int_to_str(n_cnt) + " AST nodes)")
+    return 0
+}
+
+fn cmd_ir(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'ir' command.")
+        print("Usage: ninoc ir <file.nino> [-o <output.nir>]")
+        return 1
+    }
+    let target_src = argv(2)
+    mut target_nir = target_src + ".nir"
+    if arg_count >= 5 {
+        let name = argv(3)
+        if name == "-o" {
+            target_nir = argv(4)
+        }
+    }
+    let src_text = read_file(target_src)
+    let nir_code = synthesize_program_nir(src_text)
+    write_file(target_nir, nir_code)
+    let icnt = count_nir_instructions(nir_code)
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Intermediate Representation Engine (ninoc)]\033[0m")
+    print("  Source Unit     : " + target_src)
+    print("  Output NIR SSA  : " + target_nir)
+    print("  IR Pipeline     : [✓ " + icnt + " SSA 3-Address Code Instructions (SSA Lowering + DCE + Const-Folding + BCE)]")
+    print("\033[96m================================================================================\033[0m\n")
+    return 0
+}
+
+fn cmd_run(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'run' command.")
+        print("Usage: ninoc run <file.nino> [-g|--debug] [--sanitize] [--backend=gcc|llvm] [--strict-c11]")
+        return 1
+    }
+    mut target_src = ""
+    mut debug_mode = false
+    mut sanitize_mode = false
+    mut backend_mode = "gcc"
+    mut strict_c11 = false
+    mut i = 2
+    while i < arg_count {
+        let a = argv(i)
+        if a == "-g" || a == "--debug" {
+            debug_mode = true
+        } else if a == "--sanitize" || a == "-fsanitize" {
+            sanitize_mode = true
+        } else if a == "--backend=llvm" || a == "-backend=llvm" {
+            backend_mode = "llvm"
+        } else if a == "--backend=gcc" || a == "-backend=gcc" {
+            backend_mode = "gcc"
+        } else if a == "--backend=native" || a == "-backend=native" {
+            backend_mode = "native"
+        } else if a == "--backend=native-pe" || a == "-backend=native-pe" {
+            backend_mode = "native-pe"
+        } else if a == "--strict-c11" || a == "-strict-c11" {
+            strict_c11 = true
+        } else if len(target_src) == 0 && starts_with(a, "-") == false {
+            target_src = a
+        }
+        i = i + 1
+    }
+    if len(target_src) == 0 {
+        print("\033[91m[Error]\033[0m Missing source file for 'run' command.")
+        return 1
+    }
+    let target_exe = trim(default_exe_name(target_src))
+    let compile_status = compile_nino_unit_opts(target_src, target_exe, debug_mode, sanitize_mode, backend_mode, false, false, false, strict_c11)
+    if compile_status != 0 {
+        return compile_status
+    }
+    let run_cmd = prepare_run_cmd(target_exe)
+    let exit_code = exec_cmd(run_cmd)
+    delete_temp_file(target_exe)
+    let temp_c = target_src + ".c"
+    delete_temp_file(temp_c)
+    return exit_code
+}
+
+fn cmd_mobile(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'mobile' command.")
+        print("Usage: ninoc mobile <file.nino> [--pkg <com.nino.app>] [--class <NinoBridge>] [-o <prefix>] [--proof]")
+        return 1
+    }
+    mut target_src = ""
+    mut pkg_name = "com.nino.app"
+    mut class_name = "NinoBridge"
+    mut out_prefix = "mobile_out"
+    mut pcc_mode = false
+    mut mi = 2
+    while mi < arg_count {
+        let ma = argv(mi)
+        if ma == "--pkg" {
+            if mi + 1 < arg_count {
+                pkg_name = argv(mi + 1)
+                mi = mi + 1
+            }
+        } else if ma == "--class" {
+            if mi + 1 < arg_count {
+                class_name = argv(mi + 1)
+                mi = mi + 1
+            }
+        } else if ma == "-o" {
+            if mi + 1 < arg_count {
+                out_prefix = argv(mi + 1)
+                mi = mi + 1
+            }
+        } else if ma == "--proof" || ma == "-proof" || ma == "--pcc" {
+            pcc_mode = true
+        } else if len(target_src) == 0 && starts_with(ma, "-") == false {
+            target_src = ma
+        }
+        mi = mi + 1
+    }
+    if len(target_src) == 0 {
+        print("\033[91m[Error]\033[0m Missing source file for 'mobile' command.")
+        return 1
+    }
+    return build_mobile_bridges(target_src, pkg_name, class_name, out_prefix, pcc_mode)
+}
+
+fn cmd_build(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'build' command.")
+        print("Usage: ninoc build <file.nino> [-o <output>] [--shared] [-g|--debug] [--sanitize] [--backend=gcc|llvm|native|native-pe|native-elf|native-arm64] [--arch=x86_64|aarch64] [--proof] [--bv] [--strict-c11]")
+        return 1
+    }
+    mut target_src = ""
+    mut target_exe = ""
+    mut debug_mode = false
+    mut sanitize_mode = false
+    mut backend_mode = "gcc"
+    mut pcc_mode = false
+    mut bv_mode = false
+    mut int_logic = false
+    mut strict_c11 = false
+    mut shared_mode = false
+    mut release_pqc = false
+    mut i = 2
+    while i < arg_count {
+        let a = argv(i)
+        if a == "-o" {
+            if i + 1 < arg_count {
+                target_exe = argv(i + 1)
+                i = i + 1
+            }
+        } else if a == "--shared" || a == "-shared" || a == "--lib" {
+            shared_mode = true
+        } else if a == "-g" || a == "--debug" {
+            debug_mode = true
+        } else if a == "--sanitize" || a == "-fsanitize" {
+            sanitize_mode = true
+        } else if a == "--backend=llvm" || a == "-backend=llvm" {
+            backend_mode = "llvm"
+        } else if a == "--backend=gcc" || a == "-backend=gcc" {
+            backend_mode = "gcc"
+        } else if a == "--backend=native" || a == "-backend=native" {
+            if backend_mode != "native-arm64" && backend_mode != "native-elf" && backend_mode != "native-pe" {
+                backend_mode = "native"
+            }
+        } else if a == "--backend=native-pe" || a == "-backend=native-pe" {
+            backend_mode = "native-pe"
+        } else if a == "--backend=native-elf" || a == "-backend=native-elf" {
+            backend_mode = "native-elf"
+        } else if a == "--backend=native-arm64" || a == "--backend=native-aarch64" || a == "-backend=native-arm64" {
+            backend_mode = "native-arm64"
+        } else if a == "--arch=aarch64" || a == "--arch=arm64" {
+            backend_mode = "native-arm64"
+        } else if a == "--arch=x86_64" || a == "--arch=amd64" {
+            if backend_mode == "native-arm64" {
+                backend_mode = "native"
+            }
+        } else if a == "--proof" || a == "-proof" || a == "--pcc" {
+            pcc_mode = true
+            if int_logic == false {
+                bv_mode = true
+            }
+        } else if a == "--bv" || a == "-bv" {
+            bv_mode = true
+            int_logic = false
+        } else if a == "--int-logic" || a == "--unbounded" {
+            int_logic = true
+            bv_mode = false
+        } else if a == "--proof-bv" {
+            pcc_mode = true
+            bv_mode = true
+            int_logic = false
+        } else if a == "--strict-c11" || a == "-strict-c11" {
+            strict_c11 = true
+        } else if a == "--release-pqc" || a == "-release-pqc" {
+            release_pqc = true
+        } else if len(target_src) == 0 && starts_with(a, "-") == false {
+            target_src = a
+        }
+        i = i + 1
+    }
+    if len(target_src) == 0 {
+        print("\033[91m[Error]\033[0m Missing source file for 'build' command.")
+        return 1
+    }
+    if shared_mode {
+        if len(target_exe) == 0 {
+            target_exe = trim(default_shared_lib_name(target_src))
+        }
+        return compile_nino_shared_unit(target_src, target_exe, pcc_mode, "")
+    }
+    if len(target_exe) == 0 {
+        if backend_mode == "native-elf" || backend_mode == "native-arm64" {
+            if ends_with(target_src, ".nino") && len(target_src) > 5 {
+                target_exe = slice(target_src, 0, len(target_src) - 5) + ".elf"
+            } else {
+                target_exe = target_src + ".elf"
+            }
+        } else if backend_mode == "native-pe" {
+            if ends_with(target_src, ".nino") && len(target_src) > 5 {
+                target_exe = slice(target_src, 0, len(target_src) - 5) + ".exe"
+            } else {
+                target_exe = target_src + ".exe"
+            }
+        } else {
+            target_exe = trim(default_exe_name(target_src))
+        }
+    }
+    return compile_nino_unit_opts(target_src, target_exe, debug_mode, sanitize_mode, backend_mode, pcc_mode, release_pqc, bv_mode, strict_c11)
+}
+
+fn cmd_llvm(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'llvm' command.")
+        print("Usage: ninoc llvm <file.nino> [-o <output.ll>]")
+        return 1
+    }
+    let target_src = argv(2)
+    mut target_ll = target_src + ".ll"
+    if arg_count >= 5 {
+        let name = argv(3)
+        if name == "-o" {
+            target_ll = argv(4)
+        }
+    }
+    return compile_nino_llvm(target_src, target_ll)
+}
+
+fn cmd_prove(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'prove' command.")
+        print("Usage: ninoc prove <file.nino> [--bv] [--int-logic]")
+        return 1
+    }
+    mut target_src = ""
+    mut bv_mode = true
+    mut pi = 2
+    while pi < arg_count {
+        let pa = argv(pi)
+        if pa == "--bv" || pa == "-bv" {
+            bv_mode = true
+        } else if pa == "--int-logic" || pa == "--unbounded" {
+            bv_mode = false
+        } else if len(target_src) == 0 && starts_with(pa, "-") == false {
+            target_src = pa
+        }
+        pi = pi + 1
+    }
+    if len(target_src) == 0 || file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino SMT Invariant Prover Engine]\033[0m")
+    print("  Target Unit : " + target_src)
+    let source_text = read_file(target_src)
+    let base_dir = get_directory_of(target_src)
+    if verify_syntax_balance(source_text) == false || run_semantic_type_check(source_text, base_dir, target_src) == false {
+        print("\033[91m  Prover Status: [✗ FAILED FRONTEND CHECK]\033[0m")
+        return 1
+    }
+    let smt_path = target_src + ".smt2"
+    let smt_content = synthesize_formal_smt_ex(source_text, bv_mode)
+    if find_str(smt_content, "NO_VERIFICATION_OBLIGATIONS", 0) != -1 {
+        print("\033[91m  Prover Status: [✗ ZERO ENSURE/INVARIANT OBLIGATIONS]\033[0m Fail-closed: zero provable postcondition or loop invariant obligations found.")
+        return 1
+    }
+    if find_str(smt_content, "PCC_UNSUPPORTED_OBLIGATION", 0) != -1 {
+        print("\033[91m  Prover Status: [✗ UNSUPPORTED OBLIGATION]\033[0m Fail-closed: ensure() or invariant() contains an expression unsupported by SMT translation.")
+        return 1
+    }
+    write_file(smt_path, smt_content)
+    if find_str(smt_content, "Float64", 0) != -1 {
+        if bv_mode && find_str(smt_content, "(_ BitVec 64)", 0) != -1 {
+            print("  SMT-LIB2 Spec : Synthesized [QF_BVFP + 64bit-IEEE754] -> " + smt_path)
+        } else {
+            print("  SMT-LIB2 Spec : Synthesized [QF_FP + 64bit-IEEE754] -> " + smt_path)
+        }
+    } else if bv_mode {
+        print("  SMT-LIB2 Spec : Synthesized [QF_BV + 64bit-Overflow] -> " + smt_path)
+    } else {
+        print("  SMT-LIB2 Spec : Synthesized [ALL/QF_NIA+Array] -> " + smt_path)
+    }
+    let z3_bin = find_z3_binary()
+    if len(z3_bin) == 0 {
+        delete_temp_file(smt_path)
+        print("\033[91m  Prover Status: [✗ Z3 SOLVER NOT FOUND]\033[0m Microsoft Z3 binary required for formal theorem proving.")
+        print("\033[96m================================================================================\033[0m\n")
+        return 1
+    }
+    print("  SMT Solver    : Microsoft Z3 Engine (" + z3_bin + ")")
+    let z3_out_path = target_src + ".z3out"
+    run_z3_smt_file(z3_bin, smt_path, z3_out_path)
+    mut z3_out = ""
+    if file_exists(z3_out_path) {
+        z3_out = trim(read_file(z3_out_path))
+        delete_temp_file(z3_out_path)
+    }
+    let verdict = parse_z3_verdict(z3_out)
+    if verdict == "sat" {
+        let model_out = z3_extract_counterexample_model(z3_bin, smt_content, z3_out, target_src + ".prove")
+        print("  Z3 Proof State: \033[91m[✗ SAT Refutation - Counterexample Found! Contract Breached]\033[0m")
+        print("  Counterexample Model:")
+        print(z3_out)
+        if len(model_out) > 0 && find_str(model_out, "(define-fun ", 0) != -1 {
+            print(model_out)
+        }
+        delete_temp_file(smt_path)
+        print("\033[96m================================================================================\033[0m\n")
+        return 1
+    }
+    if verdict != "unsat" {
+        print("  Z3 Proof State: [Solver Response (" + verdict + "): " + z3_out + "]")
+        delete_temp_file(smt_path)
+        print("\033[96m================================================================================\033[0m\n")
+        return 1
+    }
+    print("  Z3 Proof State: \033[92m[✓ UNSAT Verified - 0 Counterexamples Found. Theorem Universally Proven]\033[0m")
+    delete_temp_file(smt_path)
+    let target_exe = trim(default_exe_name(target_src))
+    let unit_status = compile_nino_unit(target_src, target_exe)
+    if unit_status != 0 {
+        print("\033[91m  Prover Status: [✗ FAILED COMPILING PROVEN UNIT]\033[0m")
+        return unit_status
+    }
+    print("\033[96m================================================================================\033[0m\n")
+    let run_cmd = prepare_run_cmd(target_exe)
+    let exit_code = exec_cmd(run_cmd)
+    return exit_code
+}
+
+fn cmd_asm(arg_count: int) -> int {
+    if arg_count < 3 {
+        print("\033[91m[Error]\033[0m Missing source file for 'asm' command.")
+        print("Usage: ninoc asm <file.nino> [--arch=x86_64|aarch64] [--format=pe|elf] [-o <out.asm>]")
+        return 1
+    }
+    mut target_src = ""
+    mut out_asm = ""
+    mut arch = "x86_64"
+    mut fmt = is_host_windows() ? "pe" : "elf"
+    mut ai = 2
+    while ai < arg_count {
+        let aa = argv(ai)
+        if aa == "-o" {
+            if ai + 1 < arg_count {
+                out_asm = argv(ai + 1)
+                ai = ai + 1
+            }
+        } else if aa == "--arch=aarch64" || aa == "--arch=arm64" {
+            arch = "arm64"
+            fmt = "elf"
+        } else if aa == "--arch=x86_64" || aa == "--arch=amd64" {
+            arch = "x86_64"
+        } else if aa == "--format=pe" {
+            fmt = "pe"
+            arch = "x86_64"
+        } else if aa == "--format=elf" {
+            fmt = "elf"
+        } else if len(target_src) == 0 && starts_with(aa, "-") == false {
+            target_src = aa
+        }
+        ai = ai + 1
+    }
+    if len(target_src) == 0 || file_exists(target_src) == false {
+        print("\033[91m[Error]\033[0m File not found: " + target_src)
+        return 1
+    }
+    let src_txt = read_file(target_src)
+    let bdir = get_directory_of(target_src)
+    if verify_syntax_balance(src_txt) == false || run_semantic_type_check(src_txt, bdir, target_src) == false {
+        return 1
+    }
+    mut ctx = nat_compile_ast(src_txt, bdir, target_src, arch, fmt, true)
+    if ctx.has_error {
+        print("\033[91m[Nino Direct Native Backend Error]\033[0m " + ctx.err_msg)
+        return 1
+    }
+    if fmt == "pe" {
+        nat_build_pe32p(ctx)
+    } else {
+        nat_build_elf64(ctx)
+    }
+    let listing = nat_render_asm(ctx)
+    if len(out_asm) > 0 {
+        write_file(out_asm, listing)
+        print("\033[92m[✓ Native Machine Listing Emitted]\033[0m -> " + out_asm)
+    } else {
+        print(listing)
+    }
+    return 0
+}
+
+fn cmd_keygen(arg_count: int) -> int {
+    mut seed_hex = ""
+    mut ki = 2
+    while ki < arg_count {
+        let ka = argv(ki)
+        if ka == "--seed" || ka == "-seed" {
+            if ki + 1 < arg_count {
+                seed_hex = argv(ki + 1)
+                ki = ki + 1
+            }
+        } else if len(seed_hex) == 0 && starts_with(ka, "-") == false {
+            seed_hex = ka
+        }
+        ki = ki + 1
+    }
+    mut kp = ""
+    if len(seed_hex) > 0 {
+        if len(seed_hex) < 64 {
+            print("\033[91m[Error]\033[0m Ed25519 seed must be at least 64 hex characters (32 bytes).")
+            return 1
+        }
+        kp = ed25519_keygen_seed(seed_hex)
+    } else {
+        kp = ed25519_keygen()
+    }
+    let col = find_char(kp, ":", 0)
+    if col <= 0 {
+        print("\033[91m[Error]\033[0m Failed generating Ed25519 keypair.")
+        return 1
+    }
+    let pk = slice(kp, 0, col)
+    let sk = slice(kp, col + 1, len(kp) - col - 1)
+    let seed_part = slice(sk, 0, 64)
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Asymmetric Proof-Carrying Code Keygen (RFC 8032 Ed25519)]\033[0m")
+    print("  Ed25519 Public Key : " + pk)
+    print("  Ed25519 Seed (32B) : " + seed_part)
+    print("  Ed25519 PrivKey64B : " + sk)
+    print("  Sign Usage         : set NINO_PCC_ED25519_SEED=" + seed_part)
+    print("  Verify Usage       : <binary.exe> --verify-proof --pubkey " + pk)
+    print("\033[96m================================================================================\033[0m")
+    return 0
+}
+
+fn cmd_test() -> int {
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Native Test Suite]\033[0m")
+    print("  Runner Unit : tools/test_runner.nino")
+    let runner_bin = trim(default_exe_name("tools/test_runner.nino"))
+    let runner_status = compile_nino_unit("tools/test_runner.nino", runner_bin)
+    if runner_status != 0 {
+        return runner_status
+    }
+    let run_cmd = prepare_run_cmd(runner_bin)
+    let exit_code = exec_cmd(run_cmd)
+    delete_temp_file(runner_bin)
+    delete_temp_file("tools/test_runner.nino.c")
+    return exit_code
+}
+
 fn main() -> int {
     let arg_count = argc()
     if arg_count < 2 {
@@ -265,858 +1118,33 @@ fn main() -> int {
         print_usage()
         return 0
     }
-
     if flag == "version" || flag == "-v" || flag == "--version" {
         print_version()
         return 0
     }
-
-    if flag == "lex" || flag == "tokens" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'lex' command.")
-            print("Usage: ninoc lex <file.nino>")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        let src_txt = read_file(target_src)
-        let t_count = lex_count_tokens(src_txt)
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Lexical Analysis & Token Stream Inspector]\033[0m")
-        print("  Source Unit : " + target_src)
-        print("  Source Bytes: " + len(src_txt) + " bytes")
-        print("  Tokens Found: " + t_count + " tokens")
-        print("  Lexer Status: \033[92m[✓ LEXICAL SCAN SOUND - ZERO UNRECOGNIZED TOKENS]\033[0m")
-        print("--------------------------------------------------------------------------------")
-        print("  Formal Token Stream Classification (Sample Window):")
-        lex_dump_tokens(src_txt, 25)
-        print("\033[96m================================================================================\033[0m\n")
-        return 0
-    }
-
-    if flag == "doc" || flag == "document" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'doc' command.")
-            print("Usage: ninoc doc <file.nino> [-o <output.md>]")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        let src_txt = read_file(target_src)
-        let generated_doc = generate_api_doc(src_txt, target_src)
-        mut out_path = ""
-        if arg_count >= 5 {
-            let opt = argv(3)
-            if opt == "-o" {
-                out_path = argv(4)
-            }
-        }
-        if len(out_path) > 0 {
-            write_file(out_path, generated_doc)
-            print("\033[92m[✓ Documentation Generated Successfully]\033[0m Written to: " + out_path)
-        } else {
-            print("\033[96m================================================================================\033[0m")
-            print("\033[93m[Nino Automated API Documentation Generator (ninoc doc)]\033[0m")
-            print("  Source Unit : " + target_src)
-            print("--------------------------------------------------------------------------------")
-            print(generated_doc)
-            print("\033[96m================================================================================\033[0m\n")
-        }
-        return 0
-    }
-
-    if flag == "lsp" {
-        return run_lsp_server()
-    }
-
-    if flag == "lint" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'lint' command.")
-            print("Usage: ninoc lint [--strict] <file.nino>")
-            return 1
-        }
-        mut strict_m = false
-        mut target_src = ""
-        mut li = 2
-        while li < arg_count {
-            let la = argv(li)
-            if la == "--strict" || la == "-strict" {
-                strict_m = true
-            } else if len(target_src) == 0 && starts_with(la, "-") == false {
-                target_src = la
-            }
-            li = li + 1
-        }
-        if len(target_src) == 0 || file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        let src_txt = read_file(target_src)
-        return run_architecture_linter(target_src, src_txt, strict_m)
-    }
-
-    if flag == "equiv" {
-        if arg_count < 4 {
-            print("\033[91m[Error]\033[0m Missing source files for 'equiv' command.")
-            print("Usage: ninoc equiv <fileA.nino> <fileB.nino> [fn_name]")
-            return 1
-        }
-        let file_a = argv(2)
-        let file_b = argv(3)
-        mut target_fn = ""
-        if arg_count >= 5 {
-            target_fn = trim(argv(4))
-        }
-        if file_exists(file_a) == false || file_exists(file_b) == false {
-            print("\033[91m[Error]\033[0m Both comparison source files must exist.")
-            return 1
-        }
-        let src_a = read_file(file_a)
-        let src_b = read_file(file_b)
-        let smt_eq = synthesize_equiv_smt_ex(src_a, src_b, target_fn)
-        let smt_path = file_a + ".equiv.smt2"
-        write_file(smt_path, smt_eq)
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Mathematical Differential Equivalence Prover (ninoc equiv)]\033[0m")
-        print("  Baseline Unit : " + file_a)
-        print("  Candidate Unit: " + file_b)
-        if len(target_fn) > 0 {
-            print("  Target Fn     : " + target_fn)
-        } else {
-            print("  Target Scope  : All Top-Level Functions")
-        }
-        let z3_bin = find_z3_binary()
-        if len(z3_bin) == 0 {
-            delete_temp_file(smt_path)
-            print("  Solver Status : [Notice] Z3 binary not found in PATH")
-            print("\033[96m================================================================================\033[0m")
-            return 1
-        }
-        let out_z3 = file_a + ".equiv.z3out"
-        run_z3_smt_file(z3_bin, smt_path, out_z3)
-        mut z3_txt = ""
-        if file_exists(out_z3) {
-            z3_txt = read_file(out_z3)
-            delete_temp_file(out_z3)
-        }
-        delete_temp_file(smt_path)
-        let z3_clean = trim(replace_str(z3_txt, "\r\n", "\n"))
-        let nl_p = find_char(z3_clean, "\n", 0)
-        let verdict = (nl_p == -1) ? z3_clean : trim(slice(z3_clean, 0, nl_p))
-        if verdict == "unsat" {
-            print("  Proof Verdict : \033[92m[✓ FORMALLY EQUIVALENT (UNSAT) - 0 Divergence Inputs Across Integer/Bool States]\033[0m")
-            print("\033[96m================================================================================\033[0m")
-            return 0
-        }
-        if verdict == "sat" {
-            print("  Proof Verdict : \033[91m[✗ EQUIVALENCE REFUTED (SAT) - Divergence Input Discovered by Z3]\033[0m")
-        } else {
-            print("  Proof Verdict : \033[93m[? EQUIVALENCE INCONCLUSIVE (" + (len(verdict) > 0 ? verdict : "error") + ") - Fail-Closed]\033[0m")
-        }
-        print(z3_clean)
-        print("\033[96m================================================================================\033[0m")
-        return 1
-    }
-
-    if flag == "sbom" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'sbom' command.")
-            print("Usage: ninoc sbom <file.nino> [-o <sbom.json>]")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        mut out_sbom = target_src + ".sbom.json"
-        if arg_count >= 5 && argv(3) == "-o" {
-            out_sbom = argv(4)
-        }
-        let src_txt = read_file(target_src)
-        let sbom_json = generate_cyclonedx_sbom(target_src, src_txt)
-        write_file(out_sbom, sbom_json)
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Cryptographic CycloneDX v1.5 SBOM Generator (ninoc sbom)]\033[0m")
-        print("  Root Source Unit : " + target_src)
-        print("  Output SBOM File : " + out_sbom)
-        print("  Source SHA-256   : " + sha256(src_txt))
-        print("  SBOM Status      : \033[92m[✓ CYCLONEDX v1.5 CRYPTOGRAPHIC SBOM GENERATED]\033[0m")
-        print("\033[96m================================================================================\033[0m")
-        return 0
-    }
-
-    if flag == "bench" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'bench' command.")
-            print("Usage: ninoc bench <file.nino>")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Hardware-Counter Nanosecond Microbenchmark Engine (ninoc bench)]\033[0m")
-        print("  Target Unit : " + target_src)
-        let target_exe = trim(default_exe_name(target_src))
-        let c_stat = compile_nino_unit_ex(target_src, target_exe, false, false, "gcc", false)
-        if c_stat != 0 {
-            return c_stat
-        }
-        let run_cmd = prepare_run_cmd(target_exe)
-        let t0 = time_now_ns()
-        let ec = exec_cmd(run_cmd)
-        let t1 = time_now_ns()
-        delete_temp_file(target_exe)
-        delete_temp_file(target_src + ".c")
-        let elapsed_ns = t1 - t0
-        let elapsed_us = elapsed_ns / 1000
-        print("  Wall Clock  : " + int_to_str(elapsed_ns) + " ns (" + int_to_str(elapsed_us) + " us)")
-        print("  Bench Status: \033[92m[✓ HARDWARE NANOSECOND BENCHMARK COMPLETED]\033[0m")
-        print("\033[96m================================================================================\033[0m")
-        return ec
-    }
-
-    if flag == "witness" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'witness' command.")
-            print("Usage: ninoc witness <file.nino> [-o <output_witness.nino>]")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        mut out_path = target_src + ".witness.nino"
-        if arg_count >= 5 {
-            if argv(3) == "-o" {
-                out_path = argv(4)
-            }
-        }
-        let src_txt = read_file(target_src)
-        return synthesize_witness_nino(src_txt, target_src, out_path)
-    }
-
-    if flag == "bindgen" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing C header file for 'bindgen' command.")
-            print("Usage: ninoc bindgen <header.h> [-o <bindings.nino>]")
-            return 1
-        }
-        let target_h = argv(2)
-        if file_exists(target_h) == false {
-            print("\033[91m[Error]\033[0m Header file not found: " + target_h)
-            return 1
-        }
-        mut out_nino = target_h + ".nino"
-        if ends_with(target_h, ".h") {
-            out_nino = slice(target_h, 0, len(target_h) - 2) + "_bindings.nino"
-        }
-        if arg_count >= 5 {
-            if argv(3) == "-o" {
-                out_nino = argv(4)
-            }
-        }
-        let h_txt = read_file(target_h)
-        let nino_bindings = generate_c_bindgen(h_txt, target_h)
-        write_file(out_nino, nino_bindings)
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Native C-Header Bindgen Engine (ninoc bindgen)]\033[0m")
-        print("  Input C Header  : " + target_h)
-        print("  Output Bindings : " + out_nino)
-        print("  Generated Size  : " + len(nino_bindings) + " bytes")
-        print("  Bindgen Status  : \033[92m[✓ ZERO-OVERHEAD NATIVE FFI BINDINGS SYNTHESIZED]\033[0m")
-        print("\033[96m================================================================================\033[0m")
-        return 0
-    }
-
-    if flag == "fmt" || flag == "format" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'fmt' command.")
-            print("Usage: ninoc fmt <file.nino> [--check] [-o <output.nino>]")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        mut check_only = false
-        mut out_path = target_src
-        mut fi = 3
-        while fi < arg_count {
-            let fa = argv(fi)
-            if fa == "--check" || fa == "-check" {
-                check_only = true
-            } else if fa == "-o" && fi + 1 < arg_count {
-                out_path = argv(fi + 1)
-                fi = fi + 1
-            }
-            fi = fi + 1
-        }
-        let raw_src = read_file(target_src)
-        let formatted = format_nino_source(raw_src)
-        let norm_raw = replace_str(raw_src, "\r\n", "\n")
-        if check_only {
-            if norm_raw == formatted {
-                print("\033[92m[✓ Canonical Format Verified]\033[0m " + target_src)
-                return 0
-            } else {
-                print("\033[91m[✗ Formatting Drift Detected]\033[0m " + target_src)
-                return 1
-            }
-        }
-        write_file(out_path, formatted)
-        print("\033[92m[✓ Formatted Canonically]\033[0m " + out_path)
-        return 0
-    }
-
-    if flag == "trace" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'trace' command.")
-            print("Usage: ninoc trace <file.nino>")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Deterministic Flight Recorder & Execution Trace Engine (ninoc trace)]\033[0m")
-        print("  Target Unit : " + target_src)
-        print("--------------------------------------------------------------------------------")
-        let target_exe = trim(default_exe_name(target_src))
-        let compile_status = compile_nino_unit_ex(target_src, target_exe, false, false, "gcc", false)
-        if compile_status != 0 {
-            return compile_status
-        }
-        let run_cmd = prepare_run_cmd(target_exe)
-        let exit_code = exec_cmd(run_cmd)
-        delete_temp_file(target_exe)
-        let temp_c = target_src + ".c"
-        delete_temp_file(temp_c)
-        print("\033[96m================================================================================\033[0m")
-        return exit_code
-    }
-
-    if flag == "pkg" {
-        return handle_pkg_command(arg_count)
-    }
-
-    if flag == "ast" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'ast' command.")
-            print("Usage: ninoc ast <file.nino> [-o <output.ast>]")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        let src_text = read_file(target_src)
-        let ast_tree = ast_render_tree(src_text)
-        mut out_ast = ""
-        if arg_count >= 5 && argv(3) == "-o" {
-            out_ast = argv(4)
-        }
-        if len(out_ast) > 0 {
-            write_file(out_ast, ast_tree)
-            print("\033[92m[✓ AST Dump Written]\033[0m " + out_ast)
-        } else {
-            print(ast_tree)
-        }
-        return 0
-    }
-
-    if flag == "check" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'check' command.")
-            print("Usage: ninoc check <file.nino>")
-            return 1
-        }
-        let target_src = argv(2)
-        if file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        let src_text = read_file(target_src)
-        if verify_syntax_balance(src_text) == false {
-            return 1
-        }
-        let n_cnt = parse_program_ast(src_text)
-        let bdir = get_directory_of(target_src)
-        if run_semantic_type_check(src_text, bdir, target_src) == false {
-            return 1
-        }
-        print("\033[92m[✓ Semantic & Region Check Passed]\033[0m " + target_src + " (" + int_to_str(n_cnt) + " AST nodes)")
-        return 0
-    }
-
-    if flag == "ir" || flag == "emit-ir" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'ir' command.")
-            print("Usage: ninoc ir <file.nino> [-o <output.nir>]")
-            return 1
-        }
-        let target_src = argv(2)
-        mut target_nir = target_src + ".nir"
-        if arg_count >= 5 {
-            let name = argv(3)
-            if name == "-o" {
-                target_nir = argv(4)
-            }
-        }
-        let src_text = read_file(target_src)
-        let nir_code = synthesize_program_nir(src_text)
-        write_file(target_nir, nir_code)
-        let icnt = count_nir_instructions(nir_code)
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Sovereign Intermediate Representation Engine (ninoc)]\033[0m")
-        print("  Source Unit     : " + target_src)
-        print("  Output NIR SSA  : " + target_nir)
-        print("  IR Pipeline     : [✓ " + icnt + " SSA 3-Address Code Instructions (SSA Lowering + DCE + Const-Folding + BCE)]")
-        print("\033[96m================================================================================\033[0m\n")
-        return 0
-    }
-
-    if flag == "run" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'run' command.")
-            print("Usage: ninoc run <file.nino> [-g|--debug] [--sanitize] [--backend=gcc|llvm] [--strict-c11]")
-            return 1
-        }
-        mut target_src = ""
-        mut debug_mode = false
-        mut sanitize_mode = false
-        mut backend_mode = "gcc"
-        mut strict_c11 = false
-        mut i = 2
-        while i < arg_count {
-            let a = argv(i)
-            if a == "-g" || a == "--debug" {
-                debug_mode = true
-            } else if a == "--sanitize" || a == "-fsanitize" {
-                sanitize_mode = true
-            } else if a == "--backend=llvm" || a == "-backend=llvm" {
-                backend_mode = "llvm"
-            } else if a == "--backend=gcc" || a == "-backend=gcc" {
-                backend_mode = "gcc"
-            } else if a == "--backend=native" || a == "-backend=native" {
-                backend_mode = "native"
-            } else if a == "--backend=native-pe" || a == "-backend=native-pe" {
-                backend_mode = "native-pe"
-            } else if a == "--strict-c11" || a == "-strict-c11" {
-                strict_c11 = true
-            } else if len(target_src) == 0 && starts_with(a, "-") == false {
-                target_src = a
-            }
-            i = i + 1
-        }
-        if len(target_src) == 0 {
-            print("\033[91m[Error]\033[0m Missing source file for 'run' command.")
-            return 1
-        }
-        let target_exe = trim(default_exe_name(target_src))
-        let compile_status = compile_nino_unit_opts(target_src, target_exe, debug_mode, sanitize_mode, backend_mode, false, false, false, strict_c11)
-        if compile_status != 0 {
-            return compile_status
-        }
-        let run_cmd = prepare_run_cmd(target_exe)
-        let exit_code = exec_cmd(run_cmd)
-        delete_temp_file(target_exe)
-        let temp_c = target_src + ".c"
-        delete_temp_file(temp_c)
-        return exit_code
-    }
-
-    if flag == "mobile" || flag == "android" || flag == "ios" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'mobile' command.")
-            print("Usage: ninoc mobile <file.nino> [--pkg <com.nino.app>] [--class <NinoBridge>] [-o <prefix>] [--proof]")
-            return 1
-        }
-        mut target_src = ""
-        mut pkg_name = "com.nino.app"
-        mut class_name = "NinoBridge"
-        mut out_prefix = "mobile_out"
-        mut pcc_mode = false
-        mut mi = 2
-        while mi < arg_count {
-            let ma = argv(mi)
-            if ma == "--pkg" && mi + 1 < arg_count {
-                pkg_name = argv(mi + 1)
-                mi = mi + 1
-            } else if ma == "--class" && mi + 1 < arg_count {
-                class_name = argv(mi + 1)
-                mi = mi + 1
-            } else if ma == "-o" && mi + 1 < arg_count {
-                out_prefix = argv(mi + 1)
-                mi = mi + 1
-            } else if ma == "--proof" || ma == "-proof" || ma == "--pcc" {
-                pcc_mode = true
-            } else if len(target_src) == 0 && starts_with(ma, "-") == false {
-                target_src = ma
-            }
-            mi = mi + 1
-        }
-        if len(target_src) == 0 {
-            print("\033[91m[Error]\033[0m Missing source file for 'mobile' command.")
-            return 1
-        }
-        return build_mobile_bridges(target_src, pkg_name, class_name, out_prefix, pcc_mode)
-    }
-
-    if flag == "build" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'build' command.")
-            print("Usage: ninoc build <file.nino> [-o <output>] [--shared] [-g|--debug] [--sanitize] [--backend=gcc|llvm|native|native-pe|native-elf|native-arm64] [--arch=x86_64|aarch64] [--proof] [--bv] [--strict-c11]")
-            return 1
-        }
-        mut target_src = ""
-        mut target_exe = ""
-        mut debug_mode = false
-        mut sanitize_mode = false
-        mut backend_mode = "gcc"
-        mut pcc_mode = false
-        mut bv_mode = false
-        mut int_logic = false
-        mut strict_c11 = false
-        mut shared_mode = false
-        mut release_pqc = false
-        mut i = 2
-        while i < arg_count {
-            let a = argv(i)
-            if a == "-o" && i + 1 < arg_count {
-                target_exe = argv(i + 1)
-                i = i + 1
-            } else if a == "--shared" || a == "-shared" || a == "--lib" {
-                shared_mode = true
-            } else if a == "-g" || a == "--debug" {
-                debug_mode = true
-            } else if a == "--sanitize" || a == "-fsanitize" {
-                sanitize_mode = true
-            } else if a == "--backend=llvm" || a == "-backend=llvm" {
-                backend_mode = "llvm"
-            } else if a == "--backend=gcc" || a == "-backend=gcc" {
-                backend_mode = "gcc"
-            } else if a == "--backend=native" || a == "-backend=native" {
-                if backend_mode != "native-arm64" && backend_mode != "native-elf" && backend_mode != "native-pe" {
-                    backend_mode = "native"
-                }
-            } else if a == "--backend=native-pe" || a == "-backend=native-pe" {
-                backend_mode = "native-pe"
-            } else if a == "--backend=native-elf" || a == "-backend=native-elf" {
-                backend_mode = "native-elf"
-            } else if a == "--backend=native-arm64" || a == "--backend=native-aarch64" || a == "-backend=native-arm64" {
-                backend_mode = "native-arm64"
-            } else if a == "--arch=aarch64" || a == "--arch=arm64" {
-                backend_mode = "native-arm64"
-            } else if a == "--arch=x86_64" || a == "--arch=amd64" {
-                if backend_mode == "native-arm64" {
-                    backend_mode = "native"
-                }
-            } else if a == "--proof" || a == "-proof" || a == "--pcc" {
-                pcc_mode = true
-                if int_logic == false {
-                    bv_mode = true
-                }
-            } else if a == "--bv" || a == "-bv" {
-                bv_mode = true
-                int_logic = false
-            } else if a == "--int-logic" || a == "--unbounded" {
-                int_logic = true
-                bv_mode = false
-            } else if a == "--proof-bv" {
-                pcc_mode = true
-                bv_mode = true
-                int_logic = false
-            } else if a == "--strict-c11" || a == "-strict-c11" {
-                strict_c11 = true
-            } else if a == "--release-pqc" || a == "-release-pqc" {
-                release_pqc = true
-            } else if len(target_src) == 0 && starts_with(a, "-") == false {
-                target_src = a
-            }
-            i = i + 1
-        }
-        if len(target_src) == 0 {
-            print("\033[91m[Error]\033[0m Missing source file for 'build' command.")
-            return 1
-        }
-        if shared_mode {
-            if len(target_exe) == 0 {
-                target_exe = trim(default_shared_lib_name(target_src))
-            }
-            return compile_nino_shared_unit(target_src, target_exe, pcc_mode, "")
-        }
-        if len(target_exe) == 0 {
-            if backend_mode == "native-elf" || backend_mode == "native-arm64" {
-                if ends_with(target_src, ".nino") && len(target_src) > 5 {
-                    target_exe = slice(target_src, 0, len(target_src) - 5) + ".elf"
-                } else {
-                    target_exe = target_src + ".elf"
-                }
-            } else if backend_mode == "native-pe" {
-                if ends_with(target_src, ".nino") && len(target_src) > 5 {
-                    target_exe = slice(target_src, 0, len(target_src) - 5) + ".exe"
-                } else {
-                    target_exe = target_src + ".exe"
-                }
-            } else {
-                target_exe = trim(default_exe_name(target_src))
-            }
-        }
-        return compile_nino_unit_opts(target_src, target_exe, debug_mode, sanitize_mode, backend_mode, pcc_mode, release_pqc, bv_mode, strict_c11)
-    }
-
-    if flag == "llvm" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for \'llvm\' command.")
-            print("Usage: ninoc llvm <file.nino> [-o <output.ll>]")
-            return 1
-        }
-        let target_src = argv(2)
-        mut target_ll = target_src + ".ll"
-        if arg_count >= 5 {
-            let name = argv(3)
-            if name == "-o" {
-                target_ll = argv(4)
-            }
-        }
-        return compile_nino_llvm(target_src, target_ll)
-    }
-
-    if flag == "prove" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'prove' command.")
-            print("Usage: ninoc prove <file.nino> [--bv] [--int-logic]")
-            return 1
-        }
-        mut target_src = ""
-        mut bv_mode = true
-        mut pi = 2
-        while pi < arg_count {
-            let pa = argv(pi)
-            if pa == "--bv" || pa == "-bv" {
-                bv_mode = true
-            } else if pa == "--int-logic" || pa == "--unbounded" {
-                bv_mode = false
-            } else if len(target_src) == 0 && starts_with(pa, "-") == false {
-                target_src = pa
-            }
-            pi = pi + 1
-        }
-        if len(target_src) == 0 || file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino SMT Invariant Prover Engine]\033[0m")
-        print("  Target Unit : " + target_src)
-        let source_text = read_file(target_src)
-        let base_dir = get_directory_of(target_src)
-        if verify_syntax_balance(source_text) == false || run_semantic_type_check(source_text, base_dir, target_src) == false {
-            print("\033[91m  Prover Status: [✗ FAILED FRONTEND CHECK]\033[0m")
-            return 1
-        }
-        let smt_path = target_src + ".smt2"
-        let smt_content = synthesize_formal_smt_ex(source_text, bv_mode)
-        if find_str(smt_content, "NO_VERIFICATION_OBLIGATIONS", 0) != -1 {
-            print("\033[91m  Prover Status: [✗ ZERO ENSURE/INVARIANT OBLIGATIONS]\033[0m Fail-closed: zero provable postcondition or loop invariant obligations found.")
-            return 1
-        }
-        if find_str(smt_content, "PCC_UNSUPPORTED_OBLIGATION", 0) != -1 {
-            print("\033[91m  Prover Status: [✗ UNSUPPORTED OBLIGATION]\033[0m Fail-closed: ensure() or invariant() contains an expression unsupported by SMT translation.")
-            return 1
-        }
-        write_file(smt_path, smt_content)
-        if find_str(smt_content, "Float64", 0) != -1 {
-            if bv_mode && find_str(smt_content, "(_ BitVec 64)", 0) != -1 {
-                print("  SMT-LIB2 Spec : Synthesized [QF_BVFP + 64bit-IEEE754] -> " + smt_path)
-            } else {
-                print("  SMT-LIB2 Spec : Synthesized [QF_FP + 64bit-IEEE754] -> " + smt_path)
-            }
-        } else if bv_mode {
-            print("  SMT-LIB2 Spec : Synthesized [QF_BV + 64bit-Overflow] -> " + smt_path)
-        } else {
-            print("  SMT-LIB2 Spec : Synthesized [ALL/QF_NIA+Array] -> " + smt_path)
-        }
-        let z3_bin = find_z3_binary()
-        if len(z3_bin) == 0 {
-            delete_temp_file(smt_path)
-            print("\033[91m  Prover Status: [✗ Z3 SOLVER NOT FOUND]\033[0m Microsoft Z3 binary required for formal theorem proving.")
-            print("\033[96m================================================================================\033[0m\n")
-            return 1
-        }
-        print("  SMT Solver    : Microsoft Z3 Engine (" + z3_bin + ")")
-        let z3_out_path = target_src + ".z3out"
-        run_z3_smt_file(z3_bin, smt_path, z3_out_path)
-        mut z3_out = ""
-        if file_exists(z3_out_path) {
-            z3_out = trim(read_file(z3_out_path))
-            delete_temp_file(z3_out_path)
-        }
-        let verdict = parse_z3_verdict(z3_out)
-        if verdict == "sat" {
-            let model_out = z3_extract_counterexample_model(z3_bin, smt_content, z3_out, target_src + ".prove")
-            print("  Z3 Proof State: \033[91m[✗ SAT Refutation - Counterexample Found! Contract Breached]\033[0m")
-            print("  Counterexample Model:")
-            print(z3_out)
-            if len(model_out) > 0 && find_str(model_out, "(define-fun ", 0) != -1 {
-                print(model_out)
-            }
-            delete_temp_file(smt_path)
-            print("\033[96m================================================================================\033[0m\n")
-            return 1
-        }
-        if verdict != "unsat" {
-            print("  Z3 Proof State: [Solver Response (" + verdict + "): " + z3_out + "]")
-            delete_temp_file(smt_path)
-            print("\033[96m================================================================================\033[0m\n")
-            return 1
-        }
-        print("  Z3 Proof State: \033[92m[✓ UNSAT Verified - 0 Counterexamples Found. Theorem Universally Proven]\033[0m")
-        delete_temp_file(smt_path)
-        let target_exe = trim(default_exe_name(target_src))
-        let unit_status = compile_nino_unit(target_src, target_exe)
-        if unit_status != 0 {
-            print("\033[91m  Prover Status: [✗ FAILED COMPILING PROVEN UNIT]\033[0m")
-            return unit_status
-        }
-        print("\033[96m================================================================================\033[0m\n")
-        let run_cmd = prepare_run_cmd(target_exe)
-        let exit_code = exec_cmd(run_cmd)
-        return exit_code
-    }
-
-    if flag == "asm" {
-        if arg_count < 3 {
-            print("\033[91m[Error]\033[0m Missing source file for 'asm' command.")
-            print("Usage: ninoc asm <file.nino> [--arch=x86_64|aarch64] [--format=pe|elf] [-o <out.asm>]")
-            return 1
-        }
-        mut target_src = ""
-        mut out_asm = ""
-        mut arch = "x86_64"
-        mut fmt = is_host_windows() ? "pe" : "elf"
-        mut ai = 2
-        while ai < arg_count {
-            let aa = argv(ai)
-            if aa == "-o" && ai + 1 < arg_count {
-                out_asm = argv(ai + 1)
-                ai = ai + 1
-            } else if aa == "--arch=aarch64" || aa == "--arch=arm64" {
-                arch = "arm64"
-                fmt = "elf"
-            } else if aa == "--arch=x86_64" || aa == "--arch=amd64" {
-                arch = "x86_64"
-            } else if aa == "--format=pe" {
-                fmt = "pe"
-                arch = "x86_64"
-            } else if aa == "--format=elf" {
-                fmt = "elf"
-            } else if len(target_src) == 0 && starts_with(aa, "-") == false {
-                target_src = aa
-            }
-            ai = ai + 1
-        }
-        if len(target_src) == 0 || file_exists(target_src) == false {
-            print("\033[91m[Error]\033[0m File not found: " + target_src)
-            return 1
-        }
-        let src_txt = read_file(target_src)
-        let bdir = get_directory_of(target_src)
-        if verify_syntax_balance(src_txt) == false || run_semantic_type_check(src_txt, bdir, target_src) == false {
-            return 1
-        }
-        mut ctx = nat_compile_ast(src_txt, bdir, target_src, arch, fmt, true)
-        if ctx.has_error {
-            print("\033[91m[Nino Direct Native Backend Error]\033[0m " + ctx.err_msg)
-            return 1
-        }
-        if fmt == "pe" {
-            nat_build_pe32p(ctx)
-        } else {
-            nat_build_elf64(ctx)
-        }
-        let listing = nat_render_asm(ctx)
-        if len(out_asm) > 0 {
-            write_file(out_asm, listing)
-            print("\033[92m[✓ Native Machine Listing Emitted]\033[0m -> " + out_asm)
-        } else {
-            print(listing)
-        }
-        return 0
-    }
-
-    if flag == "keygen" {
-        mut seed_hex = ""
-        mut ki = 2
-        while ki < arg_count {
-            let ka = argv(ki)
-            if (ka == "--seed" || ka == "-seed") && ki + 1 < arg_count {
-                seed_hex = argv(ki + 1)
-                ki = ki + 1
-            } else if len(seed_hex) == 0 && starts_with(ka, "-") == false {
-                seed_hex = ka
-            }
-            ki = ki + 1
-        }
-        mut kp = ""
-        if len(seed_hex) > 0 {
-            if len(seed_hex) < 64 {
-                print("\033[91m[Error]\033[0m Ed25519 seed must be at least 64 hex characters (32 bytes).")
-                return 1
-            }
-            kp = ed25519_keygen_seed(seed_hex)
-        } else {
-            kp = ed25519_keygen()
-        }
-        let col = find_char(kp, ":", 0)
-        if col <= 0 {
-            print("\033[91m[Error]\033[0m Failed generating Ed25519 keypair.")
-            return 1
-        }
-        let pk = slice(kp, 0, col)
-        let sk = slice(kp, col + 1, len(kp) - col - 1)
-        let seed_part = slice(sk, 0, 64)
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Asymmetric Proof-Carrying Code Keygen (RFC 8032 Ed25519)]\033[0m")
-        print("  Ed25519 Public Key : " + pk)
-        print("  Ed25519 Seed (32B) : " + seed_part)
-        print("  Ed25519 PrivKey64B : " + sk)
-        print("  Sign Usage         : set NINO_PCC_ED25519_SEED=" + seed_part)
-        print("  Verify Usage       : <binary.exe> --verify-proof --pubkey " + pk)
-        print("\033[96m================================================================================\033[0m")
-        return 0
-    }
-
-    if flag == "test" {
-        print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Sovereign Test Suite]\033[0m")
-        print("  Runner Unit : tools/test_runner.nino")
-        let runner_bin = trim(default_exe_name("tools/test_runner.nino"))
-        let runner_status = compile_nino_unit("tools/test_runner.nino", runner_bin)
-        if runner_status != 0 {
-            return runner_status
-        }
-        let run_cmd = prepare_run_cmd(runner_bin)
-        let exit_code = exec_cmd(run_cmd)
-        delete_temp_file(runner_bin)
-        delete_temp_file("tools/test_runner.nino.c")
-        return exit_code
-    }
+    if flag == "lex" || flag == "tokens" { return cmd_lex(arg_count) }
+    if flag == "doc" || flag == "document" { return cmd_doc(arg_count) }
+    if flag == "lsp" { return run_lsp_server() }
+    if flag == "lint" { return cmd_lint(arg_count) }
+    if flag == "equiv" { return cmd_equiv(arg_count) }
+    if flag == "sbom" { return cmd_sbom(arg_count) }
+    if flag == "bench" { return cmd_bench(arg_count) }
+    if flag == "witness" { return cmd_witness(arg_count) }
+    if flag == "bindgen" { return cmd_bindgen(arg_count) }
+    if flag == "fmt" || flag == "format" { return cmd_fmt(arg_count) }
+    if flag == "trace" { return cmd_trace(arg_count) }
+    if flag == "pkg" { return handle_pkg_command(arg_count) }
+    if flag == "ast" { return cmd_ast(arg_count) }
+    if flag == "check" { return cmd_check(arg_count) }
+    if flag == "ir" || flag == "emit-ir" { return cmd_ir(arg_count) }
+    if flag == "run" { return cmd_run(arg_count) }
+    if flag == "mobile" || flag == "android" || flag == "ios" { return cmd_mobile(arg_count) }
+    if flag == "build" { return cmd_build(arg_count) }
+    if flag == "llvm" { return cmd_llvm(arg_count) }
+    if flag == "prove" { return cmd_prove(arg_count) }
+    if flag == "asm" { return cmd_asm(arg_count) }
+    if flag == "keygen" { return cmd_keygen(arg_count) }
+    if flag == "test" { return cmd_test() }
 
     mut target_src = flag
     mut target_exe = trim(default_exe_name(target_src))

@@ -843,7 +843,7 @@ fn run_lsp_server() -> int {
                         sid = "null"
                     }
                     let caps = "{\"textDocumentSync\":1,\"hoverProvider\":true}"
-                    let sinfo = "{\"name\":\"ninoc-lsp\",\"version\":\"1.2.3\"}"
+                    let sinfo = "{\"name\":\"ninoc-lsp\",\"version\":\"1.2.4\"}"
                     let res_obj = "{\"capabilities\":" + caps + ",\"serverInfo\":" + sinfo + "}"
                     let resp = "{\"jsonrpc\":\"2.0\",\"id\":" + sid + ",\"result\":" + res_obj + "}"
                     lsp_send(resp)
@@ -927,7 +927,7 @@ fn run_lsp_server() -> int {
     return 0
 }
 
-fn m2_bv_lit_to_signed_str(tok_raw: string) -> string {
+fn bv_lit_to_signed_str(tok_raw: string) -> string {
     let tok = trim(tok_raw)
     if starts_with(tok, "#x") && len(tok) > 2 {
         let h = slice(tok, 2, len(tok) - 2)
@@ -1010,14 +1010,14 @@ fn extract_z3_model_param(z3_out: string, param_name: string, param_type: string
         if end_p != -1 {
             let inner = trim(slice(z3_out, cur + 1, end_p - cur - 1))
             if starts_with(inner, "- ") {
-                return m2_bv_lit_to_signed_str("-" + trim(slice(inner, 2, len(inner) - 2)))
+                return bv_lit_to_signed_str("-" + trim(slice(inner, 2, len(inner) - 2)))
             }
             return replace_str(inner, " ", "")
         }
     }
     let end_p2 = find_char(z3_out, ")", cur)
     if end_p2 != -1 {
-        return m2_bv_lit_to_signed_str(trim(slice(z3_out, cur, end_p2 - cur)))
+        return bv_lit_to_signed_str(trim(slice(z3_out, cur, end_p2 - cur)))
     }
     return "1"
 }
@@ -1644,7 +1644,7 @@ fn generate_c_header(source: string, guard_stem: string) -> string {
                     let mapped_t = map_type(pnd.type_ann)
                     let is_mut_p = (pnd.flags & NF_MUT()) != 0
                     mut c_param = mapped_t + " " + pnd.name
-                    if is_mut_p && f1_is_scalar_c11(mapped_t) == false && ends_with(mapped_t, "*") == false {
+                    if is_mut_p && is_scalar_c11_type(mapped_t) == false && ends_with(mapped_t, "*") == false {
                         c_param = mapped_t + "* _nino_ptr_" + pnd.name
                     }
                     if pi > 0 {
@@ -2097,8 +2097,8 @@ fn build_mobile_bridges(source_path: string, pkg_name: string, class_name: strin
 
 fn print_usage() {
     print("\033[96m================================================================================\033[0m")
-    print("\033[93m[Nino Sovereign Self-Hosting Toolchain (ninoc)]\033[0m")
-    print("Self-Sovereign Systems Language with Deterministic Memory & Formal Contracts\n")
+    print("\033[93m[Nino Self-Hosting Compiler Toolchain (ninoc)]\033[0m")
+    print("Systems Programming Language with Deterministic Arena Memory & SMT Contracts\n")
     print("Usage:")
     print("  ninoc <command> [arguments...]\n")
     print("Commands:")
@@ -2121,17 +2121,17 @@ fn print_usage() {
     print("  asm <file.nino> [--arch=x86_64|aarch64] Emit native machine code & annotated assembly directly")
     print("  keygen [--seed <64-hex>]               Generate RFC 8032 Ed25519 keypair for asymmetric PCC signing")
     print("  test                                   Execute native test suite across examples")
-    print("  version                                Display sovereign toolchain version and architecture")
+    print("  version                                Display toolchain version and target architecture")
     print("  help                                   Display this command reference menu")
     print("\033[96m================================================================================\033[0m")
 }
 
 fn print_version() {
     let arch_t = is_host_windows() ? "x86_64-pc-windows-gnu" : "x86_64-unknown-linux-gnu"
-    print("Nino Sovereign Systems Language Toolchain v1.2.3")
-    print("Compiler Engine    : ninoc (Modular Self-Hosted Native Machine Code)")
+    print("Nino Systems Language Toolchain v1.2.4")
+    print("Compiler Engine    : ninoc (Self-Hosted Native Compiler)")
     print("Architecture Target: " + arch_t + " (Standalone Executable)")
-    print("Runtime Subsystem  : Morphic Deterministic Memory / Zero-Overhead Contracts")
+    print("Runtime Subsystem  : Deterministic Arena Memory / SMT Formal Contracts")
     print("Bootstrap Stage    : Stage-3 Fixed-Point Deterministic Convergence")
 }
 

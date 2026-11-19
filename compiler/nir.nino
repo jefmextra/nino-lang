@@ -740,7 +740,7 @@ fn nir_stats_summary(source: string, base_dir: string) -> string {
     return "ConstFold=" + int_to_str(stats.fold_c) + ", Ident=" + int_to_str(stats.ident_c) + ", DCE=" + int_to_str(stats.dce_c) + ", BCE=" + int_to_str(stats.bce_c) + ", VecLoop=" + int_to_str(stats.vec_c)
 }
 
-fn f1_ascii_lower(s: string) -> string {
+fn ascii_to_lower(s: string) -> string {
     let n = len(s)
     mut res = ""
     for i in 0..n {

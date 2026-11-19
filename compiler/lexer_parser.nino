@@ -197,23 +197,23 @@ fn lex_tokenize_mapped(eu: ExpandedUnit) -> TokStream {
                 let t = NinoTok { kind: TK_STR(), text: txt, file_id: fid, line: lno, col: col }
                 toks = push(toks, t)
                 last_kind = TK_STR()
-            } else if f1_is_digit(ch) {
+            } else if char_is_digit(ch) {
                 let start = i
                 let col = i + 1
                 mut k = TK_INT()
                 if ch == "0" && i + 1 < llen && (char_at(ln, i + 1) == "x" || char_at(ln, i + 1) == "X") {
                     i = i + 2
-                    while i < llen && f1_is_hex_digit(char_at(ln, i)) {
+                    while i < llen && char_is_hex_digit(char_at(ln, i)) {
                         i = i + 1
                     }
                 } else {
-                    while i < llen && f1_is_digit(char_at(ln, i)) {
+                    while i < llen && char_is_digit(char_at(ln, i)) {
                         i = i + 1
                     }
-                    if i + 1 < llen && char_at(ln, i) == "." && f1_is_digit(char_at(ln, i + 1)) {
+                    if i + 1 < llen && char_at(ln, i) == "." && char_is_digit(char_at(ln, i + 1)) {
                         k = TK_FLOAT()
                         i = i + 1
-                        while i < llen && f1_is_digit(char_at(ln, i)) {
+                        while i < llen && char_is_digit(char_at(ln, i)) {
                             i = i + 1
                         }
                         if i < llen && (char_at(ln, i) == "e" || char_at(ln, i) == "E") {
@@ -221,7 +221,7 @@ fn lex_tokenize_mapped(eu: ExpandedUnit) -> TokStream {
                             if i < llen && (char_at(ln, i) == "+" || char_at(ln, i) == "-") {
                                 i = i + 1
                             }
-                            while i < llen && f1_is_digit(char_at(ln, i)) {
+                            while i < llen && char_is_digit(char_at(ln, i)) {
                                 i = i + 1
                             }
                         }
@@ -231,7 +231,7 @@ fn lex_tokenize_mapped(eu: ExpandedUnit) -> TokStream {
                 let t = NinoTok { kind: k, text: txt, file_id: fid, line: lno, col: col }
                 toks = push(toks, t)
                 last_kind = k
-            } else if f1_is_ident_start(ch) {
+            } else if char_is_ident_start(ch) {
                 let start = i
                 let col = i + 1
                 while i < llen && is_alpha_num(char_at(ln, i)) {
@@ -239,7 +239,7 @@ fn lex_tokenize_mapped(eu: ExpandedUnit) -> TokStream {
                 }
                 let word = slice(ln, start, i - start)
                 mut k = TK_IDENT()
-                if f1_is_reserved_kw(word) {
+                if is_reserved_keyword(word) {
                     k = TK_KW()
                 }
                 let t = NinoTok { kind: k, text: word, file_id: fid, line: lno, col: col }

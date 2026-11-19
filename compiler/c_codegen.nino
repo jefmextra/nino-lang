@@ -250,8 +250,8 @@ fn lower_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx) -> string {
             lower_set_node_types(pool, nid, "string", "const char*")
             return "nino_dict_get(" + tgt_c + ", " + idx_c + ")"
         }
-        let elem_c11 = f1_c11_elem_type(t_nd.c11_type)
-        lower_set_node_types(pool, nid, f1_nino_elem_type(t_nd.inferred_type), elem_c11)
+        let elem_c11 = c11_array_elem_type(t_nd.c11_type)
+        lower_set_node_types(pool, nid, nino_array_elem_type(t_nd.inferred_type), elem_c11)
         if t_nd.kind == NK_IDENT() && i_nd.kind == NK_IDENT() && lower_has_bce_pair(ctx, t_nd.name, i_nd.name) {
             return "((" + tgt_c + ")[" + idx_c + "])"
         }
@@ -376,7 +376,7 @@ fn lower_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx) -> string {
             let a1_nd: AstNode = pool.nodes[arg_ids[1]]
             mut elem_c11 = a1_nd.c11_type
             if len(elem_c11) == 0 {
-                elem_c11 = f1_c11_elem_type(a0_nd.c11_type)
+                elem_c11 = c11_array_elem_type(a0_nd.c11_type)
             }
             mut res_t = a0_nd.c11_type
             if len(res_t) == 0 || res_t == "void*" {
@@ -396,16 +396,16 @@ fn lower_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx) -> string {
             let s1 = "    " + elem_c11 + " " + vname + " = (" + a1_c + ");\n"
             let s2 = "    " + res_t + " " + rname + " = (" + res_t + ")_nino_push_impl((void*)(" + a0_c + "), (const void*)&" + vname + ", sizeof(" + elem_c11 + "), sizeof(" + elem_c11 + "));\n"
             mut nxt_pre = ctx.pre_stmts
-            nxt_pre = m1_scat(nxt_pre, s1)
-            nxt_pre = m1_scat(nxt_pre, s2)
+            nxt_pre = str_cat2(nxt_pre, s1)
+            nxt_pre = str_cat2(nxt_pre, s2)
             ctx.pre_stmts = nxt_pre
             return rname
         }
         if fn_name == "arr_map" && acnt == 2 {
             let arr_c = lower_expr(pool, arg_ids[0], ctx)
             let arr_nd: AstNode = pool.nodes[arg_ids[0]]
-            let src_elem_c11 = f1_c11_elem_type(arr_nd.c11_type)
-            let src_elem_nt = f1_nino_elem_type(arr_nd.inferred_type)
+            let src_elem_c11 = c11_array_elem_type(arr_nd.c11_type)
+            let src_elem_nt = nino_array_elem_type(arr_nd.inferred_type)
             let lam_nd: AstNode = pool.nodes[arg_ids[1]]
             if lam_nd.kind == NK_LAMBDA() && lam_nd.child_count >= 1 {
                 let p_nd: AstNode = pool.nodes[pool.children[lam_nd.child_start]]
@@ -442,12 +442,12 @@ fn lower_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx) -> string {
                 loop_c = loop_c + "    void* _mout_" + sfx + " = _nino_alloc_arr((size_t)(_mn_" + sfx + " > 0 ? _mn_" + sfx + " : 1) * sizeof(" + out_elem + "));\n"
                 loop_c = loop_c + "    for (int64_t _mi_" + sfx + " = 0; _mi_" + sfx + " < _mn_" + sfx + "; _mi_" + sfx + "++) " + lb + "\n"
                 loop_c = loop_c + "        " + src_elem_c11 + " " + vname + " = _msrc_" + sfx + "[_mi_" + sfx + "];\n"
-                loop_c = m1_scat(loop_c, body_pre)
+                loop_c = str_cat2(loop_c, body_pre)
                 loop_c = loop_c + "        " + out_elem + " _mv_" + sfx + " = (" + body_c + ");\n"
                 loop_c = loop_c + "        _mout_" + sfx + " = _nino_push_impl(_mout_" + sfx + ", &_mv_" + sfx + ", sizeof(" + out_elem + "), sizeof(" + out_elem + "));\n"
                 loop_c = loop_c + "    " + rb + "\n"
                 loop_c = loop_c + "    " + out_elem + "* " + res_var + " = (" + out_elem + "*)_mout_" + sfx + ";\n"
-                ctx.pre_stmts = m1_scat(saved_pre, loop_c)
+                ctx.pre_stmts = str_cat2(saved_pre, loop_c)
                 lower_set_node_types(pool, nid, "[" + out_nt + "]", out_elem + "*")
                 return res_var
             }
@@ -455,8 +455,8 @@ fn lower_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx) -> string {
         if fn_name == "arr_filter" && acnt == 2 {
             let arr_c = lower_expr(pool, arg_ids[0], ctx)
             let arr_nd: AstNode = pool.nodes[arg_ids[0]]
-            let src_elem_c11 = f1_c11_elem_type(arr_nd.c11_type)
-            let src_elem_nt = f1_nino_elem_type(arr_nd.inferred_type)
+            let src_elem_c11 = c11_array_elem_type(arr_nd.c11_type)
+            let src_elem_nt = nino_array_elem_type(arr_nd.inferred_type)
             let lam_nd: AstNode = pool.nodes[arg_ids[1]]
             if lam_nd.kind == NK_LAMBDA() && lam_nd.child_count >= 1 {
                 let p_nd: AstNode = pool.nodes[pool.children[lam_nd.child_start]]
@@ -484,11 +484,11 @@ fn lower_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx) -> string {
                 loop_c = loop_c + "    void* _fout_" + sfx + " = _nino_alloc_arr((size_t)(_fn_" + sfx + " > 0 ? _fn_" + sfx + " : 1) * sizeof(" + src_elem_c11 + "));\n"
                 loop_c = loop_c + "    for (int64_t _fi_" + sfx + " = 0; _fi_" + sfx + " < _fn_" + sfx + "; _fi_" + sfx + "++) " + lb + "\n"
                 loop_c = loop_c + "        " + src_elem_c11 + " " + vname + " = _fsrc_" + sfx + "[_fi_" + sfx + "];\n"
-                loop_c = m1_scat(loop_c, body_pre)
+                loop_c = str_cat2(loop_c, body_pre)
                 loop_c = loop_c + "        if (" + cond_c + ") " + lb + " _fout_" + sfx + " = _nino_push_impl(_fout_" + sfx + ", &" + vname + ", sizeof(" + src_elem_c11 + "), sizeof(" + src_elem_c11 + ")); " + rb + "\n"
                 loop_c = loop_c + "    " + rb + "\n"
                 loop_c = loop_c + "    " + src_elem_c11 + "* " + res_var + " = (" + src_elem_c11 + "*)_fout_" + sfx + ";\n"
-                ctx.pre_stmts = m1_scat(saved_pre, loop_c)
+                ctx.pre_stmts = str_cat2(saved_pre, loop_c)
                 lower_set_node_types(pool, nid, arr_nd.inferred_type, src_elem_c11 + "*")
                 return res_var
             }
@@ -496,8 +496,8 @@ fn lower_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx) -> string {
         if fn_name == "arr_reduce" && acnt == 3 {
             let arr_c = lower_expr(pool, arg_ids[0], ctx)
             let arr_nd: AstNode = pool.nodes[arg_ids[0]]
-            let src_elem_c11 = f1_c11_elem_type(arr_nd.c11_type)
-            let src_elem_nt = f1_nino_elem_type(arr_nd.inferred_type)
+            let src_elem_c11 = c11_array_elem_type(arr_nd.c11_type)
+            let src_elem_nt = nino_array_elem_type(arr_nd.inferred_type)
             let init_c = lower_expr(pool, arg_ids[1], ctx)
             let init_nd: AstNode = pool.nodes[arg_ids[1]]
             mut acc_c11 = init_nd.c11_type
@@ -539,10 +539,10 @@ fn lower_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx) -> string {
                 loop_c = loop_c + "    for (int64_t _ri_" + sfx + " = 0; _ri_" + sfx + " < _rn_" + sfx + "; _ri_" + sfx + "++) " + lb + "\n"
                 loop_c = loop_c + "        " + acc_c11 + " " + acc_v + " = " + res_var + ";\n"
                 loop_c = loop_c + "        " + src_elem_c11 + " " + elem_v + " = _rsrc_" + sfx + "[_ri_" + sfx + "];\n"
-                loop_c = m1_scat(loop_c, body_pre)
+                loop_c = str_cat2(loop_c, body_pre)
                 loop_c = loop_c + "        " + res_var + " = (" + body_c + ");\n"
                 loop_c = loop_c + "    " + rb + "\n"
-                ctx.pre_stmts = m1_scat(saved_pre, loop_c)
+                ctx.pre_stmts = str_cat2(saved_pre, loop_c)
                 lower_set_node_types(pool, nid, init_nd.inferred_type, acc_c11)
                 return res_var
             }
@@ -642,11 +642,7 @@ fn lower_sealed_leak_check(pool: AstPool, nid: int, sym: SymTable) -> string {
     return ""
 }
 
-fn f1_scat(a: string, b: string) -> string {
-    return a + b
-}
-
-fn m3_hex_nib_val(ch: string) -> int {
+fn hex_nibble_val(ch: string) -> int {
     let c = char_code(ch)
     if c >= 48 && c <= 57 {
         return c - 48
@@ -661,7 +657,7 @@ fn m3_hex_nib_val(ch: string) -> int {
     return neg1
 }
 
-fn m3_decode_str_lit(raw_tok: string, mut ok_out: [bool]) -> [int] {
+fn decode_c_str_literal(raw_tok: string, mut ok_out: [bool]) -> [int] {
     mut out: [int] = []
     if len(raw_tok) < 2 || starts_with(raw_tok, "\"") == false || ends_with(raw_tok, "\"") == false {
         let f_false = false
@@ -708,8 +704,8 @@ fn m3_decode_str_lit(raw_tok: string, mut ok_out: [bool]) -> [int] {
                 out = push(out, b_sq)
                 i = i + 2
             } else if esc == "x" && i + 3 < n {
-                let h1 = m3_hex_nib_val(char_at(raw_tok, i + 2))
-                let h2 = m3_hex_nib_val(char_at(raw_tok, i + 3))
+                let h1 = hex_nibble_val(char_at(raw_tok, i + 2))
+                let h2 = hex_nibble_val(char_at(raw_tok, i + 3))
                 if h1 < 0 || h2 < 0 {
                     let f_false = false
                     ok_out[0] = f_false
@@ -734,9 +730,9 @@ fn m3_decode_str_lit(raw_tok: string, mut ok_out: [bool]) -> [int] {
     return out
 }
 
-fn m3_emit_sealed_str_lit(vname: string, raw_tok: string, seq: int) -> string {
+fn emit_sealed_str_literal(vname: string, raw_tok: string, seq: int) -> string {
     mut ok_flag: [bool] = [false]
-    let bytes = m3_decode_str_lit(raw_tok, ok_flag)
+    let bytes = decode_c_str_literal(raw_tok, ok_flag)
     if ok_flag[0] == false {
         return ""
     }
@@ -752,8 +748,8 @@ fn m3_emit_sealed_str_lit(vname: string, raw_tok: string, seq: int) -> string {
     mut m_arr = "    uint8_t " + mn + "[" + int_to_str(blen) + "] = {"
     for bi in 0..blen {
         let kp = (bi % 32) * 2
-        let h1 = m3_hex_nib_val(char_at(kh, kp))
-        let h2 = m3_hex_nib_val(char_at(kh, kp + 1))
+        let h1 = hex_nibble_val(char_at(kh, kp))
+        let h2 = hex_nibble_val(char_at(kh, kp + 1))
         mut kv = (h1 * 16 + h2) ^ ((bi * 131 + 37) % 256)
         if kv == 0 {
             kv = 0x5A
@@ -770,7 +766,7 @@ fn m3_emit_sealed_str_lit(vname: string, raw_tok: string, seq: int) -> string {
     m_arr = m_arr + "};\n"
     let call_s = "    const nino_sealed_t* " + vname + " = nino_seal_bytes(" + dn + ", " + int_to_str(blen) + ", " + mn + ", " + int_to_str(blen) + ");\n"
     let zero_s = "    _nino_secure_zero(" + dn + ", sizeof(" + dn + ")); _nino_secure_zero(" + mn + ", sizeof(" + mn + "));\n"
-    return f1_scat(f1_scat(d_arr, m_arr), f1_scat(call_s, zero_s))
+    return str_cat2(str_cat2(d_arr, m_arr), str_cat2(call_s, zero_s))
 }
 
 fn lower_vec_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx, iv: string, lane: int, ptr_pre: string) -> string {
@@ -794,7 +790,7 @@ fn lower_vec_expr(mut pool: AstPool, nid: int, mut ctx: LowerCtx, iv: string, la
             return "(" + ptr_pre + arr_name + "[" + idx_s + "])"
         }
         let sid = sym_lookup(ctx.sym, arr_name)
-        let elem_c11 = f1_c11_elem_type(ctx.sym.entries[sid].c11_type)
+        let elem_c11 = c11_array_elem_type(ctx.sym.entries[sid].c11_type)
         return "((" + elem_c11 + "*)(" + arr_name + "))[" + idx_s + "]"
     }
     if nd.kind == NK_UNARY_OP() {
@@ -844,9 +840,9 @@ fn lower_try_emit_vec_for(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_l
 
     mut out = ctx.body_code
     if emit_ldir {
-        out = f1_scat(out, ldir)
+        out = str_cat2(out, ldir)
     }
-    out = f1_scat(out, pre)
+    out = str_cat2(out, pre)
     out = out + "    int64_t " + vn + " = (int64_t)(" + hi_c + ");\n"
     out = out + "    if (" + vn + " > 0) " + lb + "\n"
     for ai in 0..len(all_arrs) {
@@ -871,7 +867,7 @@ fn lower_try_emit_vec_for(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_l
     for ai in 0..len(all_arrs) {
         let an = all_arrs[ai]
         let sid = sym_lookup(ctx.sym, an)
-        let elem_c11 = f1_c11_elem_type(ctx.sym.entries[sid].c11_type)
+        let elem_c11 = c11_array_elem_type(ctx.sym.entries[sid].c11_type)
         if nir_vec_str_in(w_arrs, an) {
             rdecls = rdecls + "        " + elem_c11 + " * restrict " + ptr_pre + an + " = (" + elem_c11 + "*)(" + an + ");\n"
         } else {
@@ -926,7 +922,7 @@ fn lower_try_emit_vec_for(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_l
             let lnd: AstNode = pool.nodes[snd.left]
             let wn = pool.nodes[lnd.left].name
             let sid_w = sym_lookup(ctx.sym, wn)
-            let w_elem = f1_c11_elem_type(ctx.sym.entries[sid_w].c11_type)
+            let w_elem = c11_array_elem_type(ctx.sym.entries[sid_w].c11_type)
             let rhs_t = lower_vec_expr(pool, snd.right, ctx, iv, -1, "")
             out = out + "        if (_nino_tx.depth > 0) { nino_tx_checkpoint((void*)&(((" + w_elem + "*)(" + wn + "))[" + iv + "]), sizeof(" + w_elem + ")); }\n"
             out = out + "        ((" + w_elem + "*)(" + wn + "))[" + iv + "] = " + rhs_t + ";\n"
@@ -1065,8 +1061,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         if len(nd.type_ann) > 0 {
             decl_nino = nd.type_ann
             decl_c11 = map_type(nd.type_ann)
-            if f1_is_arr_nino_type(nd.type_ann) {
-                elem_nino = f1_nino_elem_type(nd.type_ann)
+            if is_nino_array_type(nd.type_ann) {
+                elem_nino = nino_array_elem_type(nd.type_ann)
                 elem_c11 = map_type(elem_nino)
             }
         } else {
@@ -1109,7 +1105,7 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
                     let seq = ctx.temp_seq
                     let nseq = seq + 1
                     ctx.temp_seq = nseq
-                    emitted_obf = m3_emit_sealed_str_lit(nd.name, r_nd.str_val, seq)
+                    emitted_obf = emit_sealed_str_literal(nd.name, r_nd.str_val, seq)
                 }
                 if len(emitted_obf) > 0 {
                     stmt_c = emitted_obf
@@ -1136,10 +1132,10 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         }
         mut out_b = ctx.body_code
         if emit_ldir {
-            out_b = f1_scat(out_b, ldir)
+            out_b = str_cat2(out_b, ldir)
         }
-        out_b = f1_scat(out_b, pre)
-        out_b = f1_scat(out_b, stmt_c)
+        out_b = str_cat2(out_b, pre)
+        out_b = str_cat2(out_b, stmt_c)
         ctx.body_code = out_b
         let fl_false = false
         ctx.last_stmt_was_return = fl_false
@@ -1230,7 +1226,7 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
             if i_nd.c11_type == "const char*" || t_nd.c11_type == "NinoDict*" {
                 stmt_c = "    nino_dict_set_auto(" + tgt_c + ", " + idx_c + ", " + rhs_c + ");\n"
             } else {
-                let elem_c11 = f1_c11_elem_type(t_nd.c11_type)
+                let elem_c11 = c11_array_elem_type(t_nd.c11_type)
                 stmt_c = "    { " + elem_c11 + "* _nino_tx_tgt = (" + elem_c11 + "*)(" + tgt_c + "); int64_t _nino_tx_idx = (int64_t)(" + idx_c + "); nino_bounds_check((void*)_nino_tx_tgt, _nino_tx_idx); nino_tx_checkpoint_arr((void*)_nino_tx_tgt, (void*)&_nino_tx_tgt[_nino_tx_idx], sizeof(_nino_tx_tgt[_nino_tx_idx])); _nino_tx_tgt[_nino_tx_idx] = " + rhs_c + "; }\n"
             }
         } else {
@@ -1263,10 +1259,10 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
         if emit_ldir {
-            out_b = f1_scat(out_b, ldir)
+            out_b = str_cat2(out_b, ldir)
         }
-        out_b = f1_scat(out_b, pre)
-        out_b = f1_scat(out_b, stmt_c)
+        out_b = str_cat2(out_b, pre)
+        out_b = str_cat2(out_b, stmt_c)
         ctx.body_code = out_b
         let fl_false = false
         ctx.last_stmt_was_return = fl_false
@@ -1286,9 +1282,9 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
             }
             mut out_b = ctx.body_code
             if emit_ldir {
-                out_b = f1_scat(out_b, ldir)
+                out_b = str_cat2(out_b, ldir)
             }
-            out_b = f1_scat(out_b, stmt_c)
+            out_b = str_cat2(out_b, stmt_c)
             ctx.body_code = out_b
             let fl_true = true
             ctx.last_stmt_was_return = fl_true
@@ -1344,10 +1340,10 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
         if emit_ldir {
-            out_b = f1_scat(out_b, ldir)
+            out_b = str_cat2(out_b, ldir)
         }
-        out_b = f1_scat(out_b, pre)
-        out_b = f1_scat(out_b, stmt_c)
+        out_b = str_cat2(out_b, pre)
+        out_b = str_cat2(out_b, stmt_c)
         ctx.body_code = out_b
         let fl_true = true
         ctx.last_stmt_was_return = fl_true
@@ -1355,8 +1351,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
     }
     if nd.kind == NK_BREAK_STMT() {
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, lower_emit_loop_tx_commits(ctx))
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, lower_emit_loop_tx_commits(ctx))
         let ln = len(ctx.loop_match_bases)
         if ln > 0 && ctx.match_depth > ctx.loop_match_bases[ln - 1] {
             let blbl = ctx.loop_brk_lbls[ln - 1]
@@ -1375,8 +1371,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
     }
     if nd.kind == NK_CONTINUE_STMT() {
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, lower_emit_loop_tx_commits(ctx))
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, lower_emit_loop_tx_commits(ctx))
         out_b = out_b + "    continue;\n"
         ctx.body_code = out_b
         let fl_false = false
@@ -1389,8 +1385,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let empty_s = ""
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
         out_b = out_b + "    if (" + cond_c + ") " + lb + "\n"
         ctx.body_code = out_b
         let then_nd: AstNode = pool.nodes[nd.right]
@@ -1429,8 +1425,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let empty_s = ""
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
         out_b = out_b + "    while (" + cond_c + ") " + lb + "\n"
         ctx.body_code = out_b
         let sc_lp = SCOPE_LOOP()
@@ -1486,9 +1482,9 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
             hdr_c = "    for (int64_t " + nd.name + " = " + lo_c + "; " + nd.name + " < " + hi_c + "; " + nd.name + "++) " + lb + "\n"
         }
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
-        out_b = f1_scat(out_b, hdr_c)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
+        out_b = str_cat2(out_b, hdr_c)
         ctx.body_code = out_b
         let _lbl_fr = lower_push_loop_ctrl(ctx)
         if nd.child_count >= 1 {
@@ -1507,7 +1503,7 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
     if nd.kind == NK_FOR_IN() {
         let coll_c = lower_expr(pool, nd.left, ctx)
         let c_nd: AstNode = pool.nodes[nd.left]
-        let elem_c11 = f1_c11_elem_type(c_nd.c11_type)
+        let elem_c11 = c11_array_elem_type(c_nd.c11_type)
         mut pre = ctx.pre_stmts
         let empty_s = ""
         ctx.pre_stmts = empty_s
@@ -1515,7 +1511,7 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         sym_push_scope(ctx.sym, sc_lp, 0)
         mut vinfo = sym_info_empty()
         vinfo.kind = SK_VAR()
-        vinfo.nino_type = f1_nino_elem_type(c_nd.inferred_type)
+        vinfo.nino_type = nino_array_elem_type(c_nd.inferred_type)
         vinfo.c11_type = elem_c11
         sym_insert(ctx.sym, nd.name, vinfo)
         let v = nd.name
@@ -1530,9 +1526,9 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         }
         let loop_hdr = "    for (" + ptr_decl + " _fl_c_" + v + " < _fl_end_" + v + "; _fl_c_" + v + "++) " + lb + " " + item_decl + "\n"
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
-        out_b = f1_scat(out_b, loop_hdr)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
+        out_b = str_cat2(out_b, loop_hdr)
         ctx.body_code = out_b
         let _lbl_fi = lower_push_loop_ctrl(ctx)
         lower_stmt(pool, nd.right, ctx, emit_ldir)
@@ -1550,8 +1546,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let empty_s = ""
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
         out_b = out_b + "    switch (" + sc_c + ") " + lb + "\n"
         ctx.body_code = out_b
         let next_md = ctx.match_depth + 1
@@ -1583,8 +1579,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let empty_s = ""
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
         out_b = out_b + "    if (!(" + cond_c + ")) " + lb + "\n"
         ctx.body_code = out_b
         lower_stmt(pool, nd.right, ctx, emit_ldir)
@@ -1603,7 +1599,7 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let else_hdr = "    nino_tx_commit(); " + rb + " else " + lb + " _nino_tx.fn_depth = " + fnd_v + "; atomic_signal_fence(memory_order_seq_cst);\n"
 
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
         out_b = out_b + try_hdr
         ctx.body_code = out_b
         let next_td = ctx.tx_depth + 1
@@ -1626,7 +1622,7 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let asm_hdr = "    " + lb + " atomic_signal_fence(memory_order_seq_cst);\n"
 
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
         out_b = out_b + asm_hdr
         ctx.body_code = out_b
         for ci in 0..nd.child_count {
@@ -1651,7 +1647,7 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
     }
     if nd.kind == NK_COMPTIME() {
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
         out_b = out_b + "    " + lb + "\n"
         ctx.body_code = out_b
         lower_stmt(pool, nd.left, ctx, emit_ldir)
@@ -1667,8 +1663,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let empty_s = ""
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
         out_b = out_b + "    nino_abort(" + mc + ");\n"
         ctx.body_code = out_b
         let fl_false = false
@@ -1691,8 +1687,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let empty_s = ""
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
         out_b = out_b + "    " + cfn + "(" + cc + ", " + mc + ");\n"
         ctx.body_code = out_b
         let fl_false = false
@@ -1769,9 +1765,9 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
                     let empty_s = ""
                     ctx.pre_stmts = empty_s
                     mut out_b = ctx.body_code
-                    if emit_ldir { out_b = f1_scat(out_b, ldir) }
-                    out_b = f1_scat(out_b, pre)
-                    out_b = f1_scat(out_b, pcall)
+                    if emit_ldir { out_b = str_cat2(out_b, ldir) }
+                    out_b = str_cat2(out_b, pre)
+                    out_b = str_cat2(out_b, pcall)
                     ctx.body_code = out_b
                     let fl_false = false
                     ctx.last_stmt_was_return = fl_false
@@ -1790,8 +1786,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         let empty_s = ""
         ctx.pre_stmts = empty_s
         mut out_b = ctx.body_code
-        if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = f1_scat(out_b, pre)
+        if emit_ldir { out_b = str_cat2(out_b, ldir) }
+        out_b = str_cat2(out_b, pre)
         out_b = out_b + "    " + ec + ";\n"
         ctx.body_code = out_b
         let fl_false = false
@@ -1849,7 +1845,7 @@ fn lower_register_top_items(pool: AstPool, mut ctx: LowerCtx) {
                 let pnd: AstNode = pool.nodes[pid_n]
                 let p_c11 = map_type(pnd.type_ann)
                 let p_mut = (pnd.flags & NF_MUT()) != 0
-                let is_wb = p_mut && f1_is_scalar_c11(p_c11) == false && ends_with(p_c11, "*") == false
+                let is_wb = p_mut && is_scalar_c11_type(p_c11) == false && ends_with(p_c11, "*") == false
                 if is_wb {
                     has_wb = true
                 }
@@ -1985,7 +1981,7 @@ fn lower_item(mut pool: AstPool, iid: int, mut ctx: LowerCtx) {
         return
     }
     if nd.kind == NK_EXTERN_FN() {
-        let low_lib = f1_ascii_lower(nd.str_val)
+        let low_lib = ascii_to_lower(nd.str_val)
         if find_str(low_lib, "kernel32", 0) != -1 || find_str(low_lib, "user32", 0) != -1 || find_str(low_lib, "gdi32", 0) != -1 {
             return
         }
@@ -2007,8 +2003,8 @@ fn lower_item(mut pool: AstPool, iid: int, mut ctx: LowerCtx) {
             p_c = "void"
         }
         mut nxt_ex = ctx.extern_code
-        nxt_ex = f1_scat(nxt_ex, ldir)
-        nxt_ex = f1_scat(nxt_ex, ret_c) + " " + nd.name + "(" + p_c + ");\n"
+        nxt_ex = str_cat2(nxt_ex, ldir)
+        nxt_ex = str_cat2(nxt_ex, ret_c) + " " + nd.name + "(" + p_c + ");\n"
         ctx.extern_code = nxt_ex
         return
     }
@@ -2033,7 +2029,7 @@ fn lower_item(mut pool: AstPool, iid: int, mut ctx: LowerCtx) {
         let is_mut = (nd.flags & NF_MUT()) != 0
         mut gc = ""
         if is_mut || starts_with(g_c11, "const ") {
-            gc = f1_scat(ldir, g_c11)
+            gc = str_cat2(ldir, g_c11)
             gc = gc + " " + nd.name + " = " + rhs_c + ";\n"
         } else {
             gc = ldir + "const " + g_c11 + " " + nd.name + " = " + rhs_c + ";\n"
@@ -2101,7 +2097,7 @@ fn lower_item(mut pool: AstPool, iid: int, mut ctx: LowerCtx) {
             let pnd: AstNode = pool.nodes[pid_n]
             let p_c11 = map_type(pnd.type_ann)
             let p_mut = (pnd.flags & NF_MUT()) != 0
-            let is_wb = p_mut && f1_is_scalar_c11(p_c11) == false && ends_with(p_c11, "*") == false
+            let is_wb = p_mut && is_scalar_c11_type(p_c11) == false && ends_with(p_c11, "*") == false
             if pi > 0 {
                 c_params = c_params + ", "
             }
@@ -2115,8 +2111,8 @@ fn lower_item(mut pool: AstPool, iid: int, mut ctx: LowerCtx) {
             pinfo.kind = SK_PARAM()
             pinfo.nino_type = pnd.type_ann
             pinfo.c11_type = p_c11
-            if f1_is_arr_nino_type(pnd.type_ann) {
-                let en = f1_nino_elem_type(pnd.type_ann)
+            if is_nino_array_type(pnd.type_ann) {
+                let en = nino_array_elem_type(pnd.type_ann)
                 pinfo.elem_nino_type = en
                 pinfo.elem_c11_type = map_type(en)
             }
@@ -2135,7 +2131,7 @@ fn lower_item(mut pool: AstPool, iid: int, mut ctx: LowerCtx) {
                 fn_hdr = ldir + "int main(int argc, char** argv) " + lb + "\n    nino_init_args(argc, argv);\n" + ctx.actor_inits + "    const nino_fn_scope_t _nino_fn_tx_sc = nino_tx_fn_enter();\n"
             }
         } else {
-            fn_hdr = f1_scat(ldir, ctx.cur_fn_ret_c11)
+            fn_hdr = str_cat2(ldir, ctx.cur_fn_ret_c11)
             fn_hdr = fn_hdr + " " + nd.name + "(" + c_params + ") " + lb + "\n" + copy_in
             if ctx.is_no_std == false {
                 fn_hdr = fn_hdr + "    const nino_fn_scope_t _nino_fn_tx_sc = nino_tx_fn_enter();\n"
@@ -2183,30 +2179,186 @@ fn lower_item(mut pool: AstPool, iid: int, mut ctx: LowerCtx) {
 }
 
 fn get_nostd_runtime_header() -> string {
-    let lb = "{"
-    let rb = "}"
-    mut h = "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <iso646.h>\n\n"
-    h = h + "static char _nino_ns_heap[65536];\nstatic size_t _nino_ns_off = 0;\n"
-    h = h + "static inline void* _nino_ns_alloc(size_t n) " + lb + " size_t a = (n + 7U) & ~7U; if (a == 0) a = 8; if (_nino_ns_off + a > sizeof(_nino_ns_heap)) _nino_ns_off = 0; void* p = &_nino_ns_heap[_nino_ns_off]; _nino_ns_off += a; return p; " + rb + "\n"
-    h = h + "static inline int64_t nino_len_str(const void* s) " + lb + " if (!s) return 0; const char* p = (const char*)s; int64_t n = 0; while (p[n]) n++; return n; " + rb + "\n"
-    h = h + "static inline int64_t nino_str_len(const char* s) " + lb + " return nino_len_str(s); " + rb + "\n"
-    h = h + "static inline bool nino_str_eq(const char* a, const char* b) " + lb + " if (a == b) return true; if (!a || !b) return false; while (*a && *b && *a == *b) " + lb + " a++; b++; " + rb + " return *a == *b; " + rb + "\n"
-    h = h + "static inline char* nino_str_concat(const char* a, const char* b) " + lb + " if (!a) a = \"\"; if (!b) b = \"\"; int64_t la = nino_len_str(a), lb0 = nino_len_str(b); char* r = (char*)_nino_ns_alloc((size_t)(la + lb0 + 1)); for (int64_t i = 0; i < la; i++) r[i] = a[i]; for (int64_t i = 0; i < lb0; i++) r[la + i] = b[i]; r[la + lb0] = 0; return r; " + rb + "\n"
-    h = h + "static inline char* nino_str_concat_int(const char* a, int64_t v) " + lb + " char buf[32]; int i = 0; uint64_t uv = (v < 0) ? (uint64_t)(-(v + 1)) + 1ULL : (uint64_t)v; char tmp[32]; int ti = 0; if (uv == 0) tmp[ti++] = \'0\'; while (uv > 0) " + lb + " tmp[ti++] = (char)(\'0\' + (uv % 10ULL)); uv /= 10ULL; " + rb + " if (v < 0) buf[i++] = \'-\'; while (ti > 0) buf[i++] = tmp[--ti]; buf[i] = 0; return nino_str_concat(a, buf); " + rb + "\n"
-    h = h + "#define nino_auto_concat(A, B) _Generic((B), char*: nino_str_concat, const char*: nino_str_concat, default: nino_str_concat_int)((A), (B))\n"
-    h = h + "#define len(X) nino_len_str((X))\n"
-    h = h + "static inline void outb(uint16_t port, uint8_t val) " + lb + "\n#if defined(__x86_64__) || defined(__i386__)\n    __asm__ volatile(\"outb %0, %1\" : : \"a\"(val), \"Nd\"(port));\n#else\n    (void)port; (void)val;\n#endif\n" + rb + "\n"
-    h = h + "static inline uint8_t inb(uint16_t port) " + lb + "\n#if defined(__x86_64__) || defined(__i386__)\n    uint8_t r; __asm__ volatile(\"inb %1, %0\" : \"=a\"(r) : \"Nd\"(port)); return r;\n#else\n    (void)port; return 0;\n#endif\n" + rb + "\n"
-    h = h + "static inline void hlt(void) " + lb + "\n#if defined(__x86_64__) || defined(__i386__)\n    __asm__ volatile(\"hlt\");\n#endif\n" + rb + "\n"
-    h = h + "static inline void write_vga(int64_t row, int64_t col, const char* s, int64_t clr) " + lb + " if (!s || row < 0 || row >= 25 || col < 0 || col >= 80) return;\n#if defined(__x86_64__) || defined(__i386__)\n    volatile uint16_t* vga = (volatile uint16_t*)(uintptr_t)0xB8000;\n    int64_t off = row * 80 + col;\n    for (int64_t i = 0; s[i] && off + i < 2000; i++) vga[off + i] = (uint16_t)(((uint16_t)(clr & 0xFF) << 8) | (uint8_t)s[i]);\n#else\n    (void)clr;\n#endif\n" + rb + "\n"
-    h = h + "static inline void nino_panic(const char* m) " + lb + " (void)m; for(;;) hlt(); " + rb + "\n"
-    h = h + "static inline void nino_require(bool c, const char* m) " + lb + " if (!c) nino_panic(m); " + rb + "\n"
-    h = h + "static inline void nino_ensure(bool c, const char* m) " + lb + " if (!c) nino_panic(m); " + rb + "\n"
-    h = h + "#define nino_print(X) ((void)(X))\n#define print(X) ((void)(X))\n#define panic(M) nino_panic(M)\n"
-    h = h + "static inline int64_t nino_div(int64_t a, int64_t b, int line) " + lb + " (void)line; if (b == 0) nino_panic(\"div0\"); return a / b; " + rb + "\n"
-    h = h + "static inline void nino_tx_checkpoint(void* a, size_t s) " + lb + " (void)a; (void)s; " + rb + "\n"
-    h = h + "static inline void nino_tx_checkpoint_local(void* a, size_t s) " + lb + " (void)a; (void)s; " + rb + "\n"
-    return h
+    return str_join([
+        "#include <stdint.h>",
+        "#include <stdbool.h>",
+        "#include <stddef.h>",
+        "#include <iso646.h>",
+        "",
+        "static char _nino_ns_heap[65536];",
+        "static size_t _nino_ns_off = 0;",
+        "",
+        "static inline void* _nino_ns_alloc(size_t n) {",
+        "    size_t a = (n + 7U) & ~7U;",
+        "    if (a == 0) {",
+        "        a = 8;",
+        "    }",
+        "    if (_nino_ns_off + a > sizeof(_nino_ns_heap)) {",
+        "        _nino_ns_off = 0;",
+        "    }",
+        "    void* p = &_nino_ns_heap[_nino_ns_off];",
+        "    _nino_ns_off += a;",
+        "    return p;",
+        "}",
+        "",
+        "static inline int64_t nino_len_str(const void* s) {",
+        "    if (!s) {",
+        "        return 0;",
+        "    }",
+        "    const char* p = (const char*)s;",
+        "    int64_t n = 0;",
+        "    while (p[n]) {",
+        "        n++;",
+        "    }",
+        "    return n;",
+        "}",
+        "",
+        "static inline int64_t nino_str_len(const char* s) {",
+        "    return nino_len_str(s);",
+        "}",
+        "",
+        "static inline bool nino_str_eq(const char* a, const char* b) {",
+        "    if (a == b) {",
+        "        return true;",
+        "    }",
+        "    if (!a || !b) {",
+        "        return false;",
+        "    }",
+        "    while (*a && *b && *a == *b) {",
+        "        a++;",
+        "        b++;",
+        "    }",
+        "    return *a == *b;",
+        "}",
+        "",
+        "static inline char* nino_str_concat(const char* a, const char* b) {",
+        "    if (!a) {",
+        "        a = \"\";",
+        "    }",
+        "    if (!b) {",
+        "        b = \"\";",
+        "    }",
+        "    int64_t la = nino_len_str(a);",
+        "    int64_t lb0 = nino_len_str(b);",
+        "    char* r = (char*)_nino_ns_alloc((size_t)(la + lb0 + 1));",
+        "    for (int64_t i = 0; i < la; i++) {",
+        "        r[i] = a[i];",
+        "    }",
+        "    for (int64_t i = 0; i < lb0; i++) {",
+        "        r[la + i] = b[i];",
+        "    }",
+        "    r[la + lb0] = 0;",
+        "    return r;",
+        "}",
+        "",
+        "static inline char* nino_str_concat_int(const char* a, int64_t v) {",
+        "    char buf[32];",
+        "    int i = 0;",
+        "    uint64_t uv = (v < 0) ? (uint64_t)(-(v + 1)) + 1ULL : (uint64_t)v;",
+        "    char tmp[32];",
+        "    int ti = 0;",
+        "    if (uv == 0) {",
+        "        tmp[ti++] = '0';",
+        "    }",
+        "    while (uv > 0) {",
+        "        tmp[ti++] = (char)('0' + (uv % 10ULL));",
+        "        uv /= 10ULL;",
+        "    }",
+        "    if (v < 0) {",
+        "        buf[i++] = '-';",
+        "    }",
+        "    while (ti > 0) {",
+        "        buf[i++] = tmp[--ti];",
+        "    }",
+        "    buf[i] = 0;",
+        "    return nino_str_concat(a, buf);",
+        "}",
+        "",
+        "#define nino_auto_concat(A, B) _Generic((B), char*: nino_str_concat, const char*: nino_str_concat, default: nino_str_concat_int)((A), (B))",
+        "#define len(X) nino_len_str((X))",
+        "",
+        "static inline void outb(uint16_t port, uint8_t val) {",
+        "#if defined(__x86_64__) || defined(__i386__)",
+        "    __asm__ volatile(\"outb %0, %1\" : : \"a\"(val), \"Nd\"(port));",
+        "#else",
+        "    (void)port;",
+        "    (void)val;",
+        "#endif",
+        "}",
+        "",
+        "static inline uint8_t inb(uint16_t port) {",
+        "#if defined(__x86_64__) || defined(__i386__)",
+        "    uint8_t r;",
+        "    __asm__ volatile(\"inb %1, %0\" : \"=a\"(r) : \"Nd\"(port));",
+        "    return r;",
+        "#else",
+        "    (void)port;",
+        "    return 0;",
+        "#endif",
+        "}",
+        "",
+        "static inline void hlt(void) {",
+        "#if defined(__x86_64__) || defined(__i386__)",
+        "    __asm__ volatile(\"hlt\");",
+        "#endif",
+        "}",
+        "",
+        "static inline void write_vga(int64_t row, int64_t col, const char* s, int64_t clr) {",
+        "    if (!s || row < 0 || row >= 25 || col < 0 || col >= 80) {",
+        "        return;",
+        "    }",
+        "#if defined(__x86_64__) || defined(__i386__)",
+        "    volatile uint16_t* vga = (volatile uint16_t*)(uintptr_t)0xB8000;",
+        "    int64_t off = row * 80 + col;",
+        "    for (int64_t i = 0; s[i] && off + i < 2000; i++) {",
+        "        vga[off + i] = (uint16_t)(((uint16_t)(clr & 0xFF) << 8) | (uint8_t)s[i]);",
+        "    }",
+        "#else",
+        "    (void)clr;",
+        "#endif",
+        "}",
+        "",
+        "static inline void nino_panic(const char* m) {",
+        "    (void)m;",
+        "    for (;;) {",
+        "        hlt();",
+        "    }",
+        "}",
+        "",
+        "static inline void nino_require(bool c, const char* m) {",
+        "    if (!c) {",
+        "        nino_panic(m);",
+        "    }",
+        "}",
+        "",
+        "static inline void nino_ensure(bool c, const char* m) {",
+        "    if (!c) {",
+        "        nino_panic(m);",
+        "    }",
+        "}",
+        "",
+        "#define nino_print(X) ((void)(X))",
+        "#define print(X) ((void)(X))",
+        "#define panic(M) nino_panic(M)",
+        "",
+        "static inline int64_t nino_div(int64_t a, int64_t b, int line) {",
+        "    (void)line;",
+        "    if (b == 0) {",
+        "        nino_panic(\"div0\");",
+        "    }",
+        "    return a / b;",
+        "}",
+        "",
+        "static inline void nino_tx_checkpoint(void* a, size_t s) {",
+        "    (void)a;",
+        "    (void)s;",
+        "}",
+        "",
+        "static inline void nino_tx_checkpoint_local(void* a, size_t s) {",
+        "    (void)a;",
+        "    (void)s;",
+        "}"
+    ], "\n") + "\n"
 }
 
 fn lower_program_to_c(mut pool: AstPool, file_name: string, pcc_code: string, strict_c11: bool) -> string {

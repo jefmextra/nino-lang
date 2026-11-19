@@ -1,0 +1,218 @@
+// tools/sync_runtime_hdr.nino: Single-source-of-truth generator from runtime/nino_runtime.h -> compiler/runtime_hdr.nino
+
+fn str_find_substr(hay: string, needle: string, start: int) -> int {
+    let hn = len(hay)
+    let nn = len(needle)
+    if nn == 0 {
+        return start
+    }
+    if start < 0 || start + nn > hn {
+        return -1
+    }
+    let first_c = char_code_at(needle, 0)
+    mut i = start
+    let limit = hn - nn
+    while i <= limit {
+        if char_code_at(hay, i) == first_c {
+            if slice(hay, i, nn) == needle {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn has_close_brace_after(s: string, start: int) -> bool {
+    let n = len(s)
+    mut i = start
+    while i < n {
+        if char_code_at(s, i) == 125 {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn escape_c_line_to_nino_expr(line: string) -> string {
+    let n = len(line)
+    mut out = "\""
+    mut seg = 0
+    mut i = 0
+    while i < n {
+        let b = char_code_at(line, i)
+        if b == 92 || b == 34 || b == 9 || b == 13 || (b == 123 && has_close_brace_after(line, i + 1)) {
+            if i > seg {
+                out = out + slice(line, seg, i - seg)
+            }
+            if b == 92 {
+                out = out + "\\\\"
+            } else if b == 34 {
+                out = out + "\\\""
+            } else if b == 9 {
+                out = out + "\\t"
+            } else if b == 123 {
+                out = out + "{\" + \""
+            }
+            seg = i + 1
+        }
+        i = i + 1
+    }
+    if n > seg {
+        out = out + slice(line, seg, n - seg)
+    }
+    return out + "\""
+}
+
+fn pad2(n: int) -> string {
+    if n < 10 {
+        return "0" + int_to_str(n)
+    }
+    return int_to_str(n)
+}
+
+fn split_lines_lf(src: string) -> [string] {
+    mut lines: [string] = []
+    let n = len(src)
+    mut start = 0
+    mut i = 0
+    while i < n {
+        let b = char_code_at(src, i)
+        if b == 10 {
+            mut end = i
+            if end > start && char_code_at(src, end - 1) == 13 {
+                end = end - 1
+            }
+            lines = push(lines, slice(src, start, end - start))
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        mut end = n
+        if end > start && char_code_at(src, end - 1) == 13 {
+            end = end - 1
+        }
+        lines = push(lines, slice(src, start, end - start))
+    }
+    return lines
+}
+
+fn normalize_lf(src: string) -> string {
+    return str_join(split_lines_lf(src), "\n")
+}
+
+fn main() -> int {
+    mut check_only = false
+    let ac = argc()
+    mut ai = 1
+    while ai < ac {
+        if argv(ai) == "--check" {
+            check_only = true
+        }
+        ai = ai + 1
+    }
+
+    let hdr_path = "runtime/nino_runtime.h"
+    let out_path = "compiler/runtime_hdr.nino"
+    if file_exists(hdr_path) == false {
+        print("[sync_runtime_hdr] Error: missing " + hdr_path)
+        return 1
+    }
+    if file_exists(out_path) == false {
+        print("[sync_runtime_hdr] Error: missing " + out_path)
+        return 1
+    }
+
+    let hdr_raw = read_file(hdr_path)
+    let hdr_lines = split_lines_lf(hdr_raw)
+    mut line_cnt = len(hdr_lines)
+    while line_cnt > 0 && len(hdr_lines[line_cnt - 1]) == 0 {
+        line_cnt = line_cnt - 1
+    }
+
+    let cur_file = read_file(out_path)
+    let marker = "// === END GENERATED RUNTIME HEADER ==="
+    mut tail_pos = str_find_substr(cur_file, marker, 0)
+    mut tail_text = ""
+    if tail_pos != -1 {
+        let after = tail_pos + len(marker)
+        mut nl = after
+        while nl < len(cur_file) && (char_code_at(cur_file, nl) == 13 || char_code_at(cur_file, nl) == 10) {
+            nl = nl + 1
+        }
+        tail_text = slice(cur_file, nl, len(cur_file) - nl)
+    } else {
+        let fallback = "fn purge_depth("
+        let fb_pos = str_find_substr(cur_file, fallback, 0)
+        if fb_pos == -1 {
+            print("[sync_runtime_hdr] Error: could not locate compiler helpers marker in " + out_path)
+            return 1
+        }
+        tail_text = slice(cur_file, fb_pos, len(cur_file) - fb_pos)
+    }
+
+    let chunk_size = 150
+    let chunk_cnt = (line_cnt + chunk_size - 1) / chunk_size
+    mut out: [string] = []
+    out = push(out, "// compiler/runtime_hdr.nino: Embedded C11 runtime header (generated from runtime/nino_runtime.h)")
+    out = push(out, "// Regenerate with: ninoc run tools/sync_runtime_hdr.nino")
+    out = push(out, "")
+
+    mut ci = 0
+    while ci < chunk_cnt {
+        let s_idx = ci * chunk_size
+        mut e_idx = s_idx + chunk_size
+        if e_idx > line_cnt {
+            e_idx = line_cnt
+        }
+        out = push(out, "fn rt_hdr_chunk_" + pad2(ci) + "() -> string {")
+        out = push(out, "    return str_join([")
+        mut li = s_idx
+        while li < e_idx {
+            let expr = escape_c_line_to_nino_expr(hdr_lines[li])
+            if li + 1 < e_idx {
+                out = push(out, "        " + expr + ",")
+            } else {
+                out = push(out, "        " + expr)
+            }
+            li = li + 1
+        }
+        out = push(out, "    ], \"\\n\")")
+        out = push(out, "}")
+        out = push(out, "")
+        ci = ci + 1
+    }
+
+    out = push(out, "fn get_runtime_header() -> string {")
+    out = push(out, "    return str_join([")
+    mut gi = 0
+    while gi < chunk_cnt {
+        if gi + 1 < chunk_cnt {
+            out = push(out, "        rt_hdr_chunk_" + pad2(gi) + "(),")
+        } else {
+            out = push(out, "        rt_hdr_chunk_" + pad2(gi) + "()")
+        }
+        gi = gi + 1
+    }
+    out = push(out, "    ], \"\\n\") + \"\\n\\n\"")
+    out = push(out, "}")
+    out = push(out, "")
+    out = push(out, marker)
+    out = push(out, "")
+
+    let generated = str_join(out, "\n") + normalize_lf(tail_text) + "\n"
+    if check_only {
+        if normalize_lf(cur_file) == normalize_lf(generated) {
+            print("[sync_runtime_hdr] OK: " + out_path + " is in sync with " + hdr_path + " (" + int_to_str(line_cnt) + " C lines, " + int_to_str(chunk_cnt) + " chunks).")
+            return 0
+        }
+        print("[sync_runtime_hdr] DRIFT DETECTED: " + out_path + " differs from " + hdr_path + ". Run: ninoc run tools/sync_runtime_hdr.nino")
+        return 1
+    }
+
+    write_file(out_path, generated)
+    print("[sync_runtime_hdr] Synced " + hdr_path + " (" + int_to_str(line_cnt) + " C lines, " + int_to_str(chunk_cnt) + " chunks) -> " + out_path)
+    return 0
+}

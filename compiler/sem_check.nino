@@ -129,11 +129,11 @@ fn sem_param_needs_mut_arg(p_info: ParamInfo) -> bool {
         return true
     }
     let pt = sem_norm_nino_type(p_info.nino_type)
-    if f1_is_arr_nino_type(pt) || pt == "list" || pt == "dict" {
+    if is_nino_array_type(pt) || pt == "list" || pt == "dict" {
         return true
     }
     let ct = map_type(p_info.nino_type)
-    return pt != "any" && f1_is_scalar_c11(ct) == false && ends_with(ct, "*") == false
+    return pt != "any" && is_scalar_c11_type(ct) == false && ends_with(ct, "*") == false
 }
 
 fn sem_err(pool: AstPool, mut sctx: SemCtx, nd: AstNode, code: string, kind: string, msg: string, hlen: int, note: string) {

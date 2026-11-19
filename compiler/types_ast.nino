@@ -439,7 +439,7 @@ fn SCOPE_LOOP() -> int { return 3 }
 fn SCOPE_ACTOR() -> int { return 4 }
 fn SCOPE_TX() -> int { return 5 }
 
-fn f1_is_digit(ch: string) -> bool {
+fn char_is_digit(ch: string) -> bool {
     if len(ch) == 0 {
         return false
     }
@@ -447,7 +447,7 @@ fn f1_is_digit(ch: string) -> bool {
     return cc >= 48 && cc <= 57
 }
 
-fn f1_is_hex_digit(ch: string) -> bool {
+fn char_is_hex_digit(ch: string) -> bool {
     if len(ch) == 0 {
         return false
     }
@@ -464,7 +464,7 @@ fn f1_is_hex_digit(ch: string) -> bool {
     return ch == "_"
 }
 
-fn f1_is_ident_start(ch: string) -> bool {
+fn char_is_ident_start(ch: string) -> bool {
     if len(ch) == 0 {
         return false
     }
@@ -478,7 +478,7 @@ fn f1_is_ident_start(ch: string) -> bool {
     return cc == 95
 }
 
-fn f1_is_reserved_kw(w: string) -> bool {
+fn is_reserved_keyword(w: string) -> bool {
     if w == "fn" || w == "let" || w == "mut" || w == "sealed" || w == "morphic" || w == "struct" || w == "actor" || w == "receive" || w == "extern" || w == "import" {
         return true
     }
@@ -494,11 +494,11 @@ fn f1_is_reserved_kw(w: string) -> bool {
     return false
 }
 
-fn f1_is_scalar_c11(ct: string) -> bool {
+fn is_scalar_c11_type(ct: string) -> bool {
     return ct == "int64_t" || ct == "int32_t" || ct == "uint32_t" || ct == "uint64_t" || ct == "uint8_t" || ct == "double" || ct == "float" || ct == "bool" || ct == "const char*" || ct == "void" || ct == "int"
 }
 
-fn f1_c11_elem_type(arr_c11: string) -> string {
+fn c11_array_elem_type(arr_c11: string) -> string {
     if arr_c11 == "const char**" {
         return "const char*"
     }
@@ -511,7 +511,7 @@ fn f1_c11_elem_type(arr_c11: string) -> string {
     return "int64_t"
 }
 
-fn f1_nino_elem_type(nt: string) -> string {
+fn nino_array_elem_type(nt: string) -> string {
     let t = trim(nt)
     if starts_with(t, "[") && ends_with(t, "]") && len(t) >= 2 {
         return trim(slice(t, 1, len(t) - 2))
@@ -522,7 +522,7 @@ fn f1_nino_elem_type(nt: string) -> string {
     return ""
 }
 
-fn f1_is_arr_nino_type(nt: string) -> bool {
+fn is_nino_array_type(nt: string) -> bool {
     let t = trim(nt)
     return (starts_with(t, "[") && ends_with(t, "]")) || (starts_with(t, "Array<") && ends_with(t, ">"))
 }

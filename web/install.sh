@@ -16,7 +16,7 @@ echo " |  \| | | '_ \ / _ \  "
 echo " | |\  | | | | | (_) | "
 echo " |_| \_|_|_| |_|\___/  "
 echo ""
-echo "Installing The Nino Programming Language (v1.2.3)..."
+echo "Installing The Nino Programming Language (v1.2.4)..."
 echo "Platform: $OS ($ARCH)"
 
 mkdir -p "$BIN_DIR"
@@ -24,8 +24,8 @@ mkdir -p "$STD_DIR"
 mkdir -p "$EX_DIR"
 
 if [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
-    TAR_URL="https://github.com/jefmextra/nino-lang/releases/download/v1.2.3/nino-v1.2.3-linux-x64.tar.gz"
-    TMP_TAR="${TMPDIR:-/tmp}/nino-v1.2.3-linux-x64.tar.gz"
+    TAR_URL="https://github.com/jefmextra/nino-lang/releases/download/v1.2.4/nino-v1.2.4-linux-x64.tar.gz"
+    TMP_TAR="${TMPDIR:-/tmp}/nino-v1.2.4-linux-x64.tar.gz"
     echo "Downloading $TAR_URL..."
     curl -fL "$TAR_URL" -o "$TMP_TAR"
     tar -xzf "$TMP_TAR" -C "$NINO_DIR"
@@ -57,7 +57,7 @@ if [ -n "$PROFILE" ]; then
 fi
 
 echo ""
-echo "[SUCCESS] Nino v1.2.3 installed successfully in $NINO_DIR"
+echo "[SUCCESS] Nino v1.2.4 installed successfully in $NINO_DIR"
 echo "To get started, restart your shell or run:"
 echo '  export PATH="$HOME/.nino/bin:$PATH"'
 echo "  ninoc version"

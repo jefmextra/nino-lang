@@ -1160,3 +1160,6 @@ fn sem_is_single_call(ex: string, op_p: int) -> bool {
     return false
 }
 
+fn str_cat2(a: string, b: string) -> string {
+    return a + b
+}

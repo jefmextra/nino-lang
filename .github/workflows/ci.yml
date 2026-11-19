@@ -524,8 +524,8 @@ jobs:
                   Write-Error "$ExePath --verify-proof exited with $($p.ExitCode)"
                   exit 1
               }
-              if ($out -notmatch "Nino Sovereign Proof-Carrying Binary") {
-                  Write-Error "$ExePath --verify-proof missing 'Nino Sovereign Proof-Carrying Binary'"
+              if ($out -notmatch "Nino Proof-Carrying Binary") {
+                  Write-Error "$ExePath --verify-proof missing 'Nino Proof-Carrying Binary'"
                   exit 1
               }
               if ($out -notmatch "UNSAT Verified") {
@@ -594,8 +594,8 @@ jobs:
                   exit 1
               fi
               printf '%s\n' "$verify_out"
-              if ! printf '%s\n' "$verify_out" | grep -Fq "Nino Sovereign Proof-Carrying Binary"; then
-                  echo "ERROR: $out_bin --verify-proof missing 'Nino Sovereign Proof-Carrying Binary'" >&2
+              if ! printf '%s\n' "$verify_out" | grep -Fq "Nino Proof-Carrying Binary"; then
+                  echo "ERROR: $out_bin --verify-proof missing 'Nino Proof-Carrying Binary'" >&2
                   exit 1
               fi
               if ! printf '%s\n' "$verify_out" | grep -Fq "UNSAT Verified"; then

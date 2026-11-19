@@ -88,7 +88,7 @@ fn pkg_merge_lock_entry(existing: string, pkg_name: string, ver: string, src: st
     mut out = "{\n  \"lockfile_version\": \"1.0.0\",\n  \"generator\": \"ninoc pkg\",\n  \"packages\": {\n"
     let ecnt = len(entries)
     for i in 0..ecnt {
-        out = m1_scat(out, entries[i])
+        out = str_cat2(out, entries[i])
         if i + 1 < ecnt {
             out = out + ",\n"
         } else {
@@ -205,17 +205,17 @@ fn pkg_is_safe_ver(v: string) -> bool {
 fn handle_pkg_command(arg_count: int) -> int {
     if arg_count < 3 {
         print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Sovereign Decentralized Package Manager (ninoc pkg) v1.0.0]\033[0m")
+        print("\033[93m[Nino Package Manager (ninoc pkg) v1.0.0]\033[0m")
         print("Usage:")
         print("  ninoc pkg <command> [arguments...]\n")
         print("Commands:")
-        print("  init                Initialize a sovereign nino.pkg manifest in current directory")
-        print("  search [query]      Search sovereign package catalog across decentralized registry")
-        print("  add <package-name>  Install and link a decentralized module dependency")
+        print("  init                Initialize a nino.pkg manifest in current directory")
+        print("  search [query]      Search package catalog across decentralized registry")
+        print("  add <package-name>  Install and link a module dependency")
         print("  install             Verify and synchronize dependencies declared in nino.pkg")
         print("  list                List installed modules and cryptographic checksums")
-        print("  registry            Display sovereign registry endpoint and integrity protocol")
-        print("  publish             Validate and package module for sovereign decentralized distribution")
+        print("  registry            Display registry endpoint and integrity protocol")
+        print("  publish             Validate and package module for distribution")
         print("\033[96m================================================================================\033[0m\n")
         return 0
     }
@@ -226,7 +226,7 @@ fn handle_pkg_command(arg_count: int) -> int {
             q = argv(3)
         }
         print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Sovereign Decentralized Package Registry (ninoc pkg search)]\033[0m")
+        print("\033[93m[Nino Package Registry (ninoc pkg search)]\033[0m")
         print("Registry Index : https://ninosec.me/registry/index.json")
         if len(q) > 0 {
             print("Query Filter   : " + q)
@@ -234,94 +234,94 @@ fn handle_pkg_command(arg_count: int) -> int {
             print("Query Filter   : * (All Packages)")
         }
         print("--------------------------------------------------------------------------------")
-        print("Sovereign Packages Available:")
+        print("Packages Available:")
         mut matched = 0
         if len(q) == 0 || find_str("math3d", q, 0) != -1 || find_str("algebra vector matrix", q, 0) != -1 {
-            print("  * \033[92mmath3d\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mmath3d\033[0m (v1.0.0) [Verified]")
             print("    Description: 3D Linear Algebra, Vector & Quaternion Math")
             print("    Repository : https://github.com/jefmextra/nino-math3d | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("crypto", q, 0) != -1 || find_str("security cipher quantum", q, 0) != -1 {
-            print("  * \033[92mcrypto\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mcrypto\033[0m (v1.0.0) [Verified]")
             print("    Description: Post-Quantum Cryptography & Hardware CSPRNG")
             print("    Repository : https://github.com/jefmextra/nino-crypto | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("net", q, 0) != -1 || find_str("socket xdp network", q, 0) != -1 {
-            print("  * \033[92mnet\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mnet\033[0m (v1.0.0) [Verified]")
             print("    Description: High-Throughput Network Sockets & XDP eBPF")
             print("    Repository : https://github.com/jefmextra/nino-net | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("actor", q, 0) != -1 || find_str("concurrency raft raft-consensus", q, 0) != -1 {
-            print("  * \033[92mactor\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mactor\033[0m (v1.0.0) [Verified]")
             print("    Description: Fault-Tolerant Actor System & Raft Consensus")
             print("    Repository : https://github.com/jefmextra/nino-actor | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("gui", q, 0) != -1 || find_str("window canvas ui", q, 0) != -1 {
-            print("  * \033[92mgui\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mgui\033[0m (v1.0.0) [Verified]")
             print("    Description: Reactive Windowing & 2D Canvas Engine")
             print("    Repository : https://github.com/jefmextra/nino-gui | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("db", q, 0) != -1 || find_str("database acid storage", q, 0) != -1 {
-            print("  * \033[92mdb\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mdb\033[0m (v1.0.0) [Verified]")
             print("    Description: Embedded ACID Transactional Storage Engine")
             print("    Repository : https://github.com/jefmextra/nino-db | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("json", q, 0) != -1 || find_str("serde parser serializer", q, 0) != -1 {
-            print("  * \033[92mjson\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mjson\033[0m (v1.0.0) [Verified]")
             print("    Description: Zero-Allocation JSON Parser & Serializer (std/json.nino)")
             print("    Repository : https://github.com/jefmextra/nino-json | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("http", q, 0) != -1 || find_str("rest client web server", q, 0) != -1 {
-            print("  * \033[92mhttp\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mhttp\033[0m (v1.0.0) [Verified]")
             print("    Description: Native HTTP/1.1 REST Client & Server Builder (std/http.nino)")
             print("    Repository : https://github.com/jefmextra/nino-http | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("fs", q, 0) != -1 || find_str("path filesystem file", q, 0) != -1 {
-            print("  * \033[92mfs\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mfs\033[0m (v1.0.0) [Verified]")
             print("    Description: Cross-Platform Filesystem & Path Utilities (std/fs.nino)")
             print("    Repository : https://github.com/jefmextra/nino-fs | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("str", q, 0) != -1 || find_str("string text trim replace", q, 0) != -1 {
-            print("  * \033[92mstr\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mstr\033[0m (v1.0.0) [Verified]")
             print("    Description: Ergonomic String Manipulation Engine (std/str.nino)")
             print("    Repository : https://github.com/jefmextra/nino-str | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("uuid", q, 0) != -1 || find_str("base64 hex encoding", q, 0) != -1 {
-            print("  * \033[92muuid\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92muuid\033[0m (v1.0.0) [Verified]")
             print("    Description: RFC 4122 UUID v4, Base64 & Hex Codec (std/uuid.nino)")
             print("    Repository : https://github.com/jefmextra/nino-uuid | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("env", q, 0) != -1 || find_str("dotenv config environment", q, 0) != -1 {
-            print("  * \033[92menv\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92menv\033[0m (v1.0.0) [Verified]")
             print("    Description: Dotenv (.env) Configuration Parser & Env Loader (std/env.nino)")
             print("    Repository : https://github.com/jefmextra/nino-env | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("regex", q, 0) != -1 || find_str("pattern match regexp", q, 0) != -1 {
-            print("  * \033[92mregex\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mregex\033[0m (v1.0.0) [Verified]")
             print("    Description: NFA Regular Expression & Pattern Matching Engine (std/regex.nino)")
             print("    Repository : https://github.com/jefmextra/nino-regex | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("csv", q, 0) != -1 || find_str("table data spreadsheet", q, 0) != -1 {
-            print("  * \033[92mcsv\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mcsv\033[0m (v1.0.0) [Verified]")
             print("    Description: RFC 4180 CSV Tabular Parser & Serializer (std/csv.nino)")
             print("    Repository : https://github.com/jefmextra/nino-csv | License: MIT")
             matched = matched + 1
         }
         if len(q) == 0 || find_str("jwt", q, 0) != -1 || find_str("hmac auth token", q, 0) != -1 {
-            print("  * \033[92mjwt\033[0m (v1.0.0) [Sovereign Verified]")
+            print("  * \033[92mjwt\033[0m (v1.0.0) [Verified]")
             print("    Description: RFC 7519 JWT (HS256) & RFC 2104 HMAC-SHA256 Engine (std/jwt.nino)")
             print("    Repository : https://github.com/jefmextra/nino-jwt | License: MIT")
             matched = matched + 1
@@ -336,13 +336,13 @@ fn handle_pkg_command(arg_count: int) -> int {
     }
     if subcmd == "registry" {
         print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Sovereign Package Registry Configuration]\033[0m")
+        print("\033[93m[Nino Package Registry Configuration]\033[0m")
         print("  Primary Endpoint : https://ninosec.me/registry/index.json")
         print("  Fallback Mirror  : https://raw.githubusercontent.com/jefmextra/NinoLang/main/docs/registry/index.json")
-        print("  Registry Name    : Nino Sovereign Decentralized Registry")
+        print("  Registry Name    : Nino Decentralized Registry")
         print("  Protocol         : Decentralized Git Sparse Index / HTTPS (SHA-256 Checksums)")
         print("  Security Policy  : Cryptographically Hashed Packages (CSPRNG + SHA-256 Digest)")
-        print("  Sovereignty      : Zero Telemetry / Self-Governing Package Ecosystem")
+        print("  Telemetry        : None (Offline-Capable Verification)")
         print("\033[96m================================================================================\033[0m\n")
         return 0
     }
@@ -352,13 +352,12 @@ fn handle_pkg_command(arg_count: int) -> int {
             mut manifest = "{\n"
             manifest = manifest + "  \"name\": \"nino-project\",\n"
             manifest = manifest + "  \"version\": \"1.0.0\",\n"
-            manifest = manifest + "  \"sovereign\": true,\n"
             manifest = manifest + "  \"dependencies\": {\n"
             manifest = manifest + "    \"std\": \"1.0.0\"\n"
             manifest = manifest + "  }\n"
             manifest = manifest + "}\n"
             write_file(manifest_path, manifest)
-            print("\033[92m[✓ Manifest Initialized]\033[0m Created sovereign project manifest -> " + manifest_path)
+            print("\033[92m[✓ Manifest Initialized]\033[0m Created project manifest -> " + manifest_path)
         } else {
             print("\033[93m[Notice]\033[0m nino.pkg already exists in current workspace.")
         }
@@ -453,7 +452,7 @@ fn handle_pkg_command(arg_count: int) -> int {
         write_file("nino.lock", cur_lock)
         print("\033[92m[✓ Package Added]\033[0m Installed decentralized module '" + pkg_name + "' v" + pkg_ver)
         print("  Package Root : " + pkg_dir)
-        print("  Transport    : Sovereign Git/HTTPS Resolver (" + pkg_source + ")")
+        print("  Transport    : Git/HTTPS Resolver (" + pkg_source + ")")
         print("  Integrity SHA: " + h + " (Cryptographically Locked in nino.lock)")
         return 0
     }
@@ -481,7 +480,7 @@ fn handle_pkg_command(arg_count: int) -> int {
     }
     if subcmd == "list" {
         print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Sovereign Package Manager]\033[0m Installed Modules:")
+        print("\033[93m[Nino Package Manager]\033[0m Installed Modules:")
         print("  - std (v1.0.0, 31 Core Modules including JSON, HTTP, FS, Str, UUID, Env, Regex, CSV, JWT) [Built-in / Verified]")
         print("  - z3 (v5.4.1 64-bit Solver Engine) [Bundled / Verified]")
         if file_exists("nino.lock") {
@@ -492,17 +491,17 @@ fn handle_pkg_command(arg_count: int) -> int {
     }
     if subcmd == "publish" {
         print("\033[96m================================================================================\033[0m")
-        print("\033[93m[Nino Sovereign Package Publisher]\033[0m")
+        print("\033[93m[Nino Package Publisher]\033[0m")
         let manifest_exists = file_exists("nino.pkg")
         if !manifest_exists {
-            print("\033[91m[Error]\033[0m Cannot publish without sovereign manifest. Run 'ninoc pkg init' first.")
+            print("\033[91m[Error]\033[0m Cannot publish without nino.pkg manifest. Run 'ninoc pkg init' first.")
             return 1
         }
         let manifest_content = read_file("nino.pkg")
         let pkg_hash = sha256(manifest_content)
         print("  Package Manifest : nino.pkg (Valid)")
         print("  Package Digest   : " + pkg_hash)
-        print("  Distribution     : \033[92m[✓ Sovereign Package Bundle Ready for Decentralized Distribution]\033[0m")
+        print("  Distribution     : \033[92m[✓ Package Bundle Ready for Distribution]\033[0m")
         print("\033[96m================================================================================\033[0m\n")
         return 0
     }

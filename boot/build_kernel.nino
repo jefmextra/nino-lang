@@ -55,7 +55,7 @@ fn resolve_lld_bin() -> string {
 
 fn main() -> int {
     print("\033[96m================================================================================\033[0m")
-    print("\033[93m[Nino Sovereign OS Bare-Metal Kernel Builder]\033[0m")
+    print("\033[93m[Nino OS Bare-Metal Kernel Builder]\033[0m")
     print("Self-Hosted Bare-Metal Synthesis for 32-bit x86 Multiboot v1 Architecture\n")
 
     let boot_s = "boot/boot.s"
