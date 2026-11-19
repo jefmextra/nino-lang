@@ -1,15 +1,15 @@
-fn hidden_rb(m: int) {
-    arena_rollback(m)
+fn trigger_uar_bce_loop(arr: [int], m: int) {
+    for i in 0..len(arr) {
+        if i == 1 {
+            arena_rollback(m)
+        }
+        print(arr[i])
+    }
 }
 
 fn main() -> int {
     let m = arena_mark()
     mut arr: [int] = [10, 20, 30]
-    for i in 0..len(arr) {
-        if i == 1 {
-            hidden_rb(m)
-        }
-        print(arr[i])
-    }
+    trigger_uar_bce_loop(arr, m)
     return 0
 }

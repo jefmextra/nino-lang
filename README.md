@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://ninosec.me"><img src="https://img.shields.io/badge/Website-ninosec.me-f59e0b?style=flat-square" alt="Website"></a>
-  <a href="https://github.com/jefmextra/nino-lang/releases/tag/v1.2.4"><img src="https://img.shields.io/badge/Release-v1.2.4-38bdf8?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/jefmextra/nino-lang/releases/tag/v1.2.5"><img src="https://img.shields.io/badge/Release-v1.2.5-38bdf8?style=flat-square" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981?style=flat-square" alt="License"></a>
 </p>
 
@@ -37,7 +37,7 @@ Nino is an evolving engineering prototype. While core compiler passes, static ch
 3. **Hierarchical Arena Epochs & Transactional Memory**: Chained thread-local linear arena slabs, epoch-stamped array headers with deterministic Use-After-Rollback runtime traps, cross-mark heap promotion, nested atomic state rollback transactions, and OS guard-paged sealed entropy buffers with volatile zeroization.
 4. **NIR SSA Optimizer & Auto-Vectorization**: Single-pass expression lowering, constant folding, algebraic identity simplification, dead code elimination, proven bounds-check elision, affine loop dependency and non-aliasing analysis, ISO C11 `restrict` four-lane SIMD vector lowering, and LLVM vector loop metadata emission.
 5. **Multi-Backend Native & Self-Hosting Pipeline**: Strict ISO C11 code generation with C11 atomics, LLVM Clang backend (`--backend=llvm`) and fail-closed direct opaque-pointer SSA IR emission (`ninoc llvm`), Self-Hosted Direct Machine-Code Backend generating standalone Windows PE32+, Linux x86_64 ELF64, and Linux AArch64 ELF64 executables with zero host C compiler invocation, and deterministic Stage-3 fixed-point bootstrap convergence.
-6. **Formal Metatheory Proofs & Open RFC Standards**: Machine-verified Z3 inductive memory-model and vectorization soundness proofs in [formal/arena_soundness.smt2](formal/arena_soundness.smt2), open architecture RFC proposals in [rfcs/README.md](rfcs/README.md), and automated Clause-to-Test traceability across the 160-test E2E suite.
+6. **Formal Metatheory Proofs & Open RFC Standards**: Machine-verified Z3 inductive memory-model and vectorization soundness proofs in [formal/arena_soundness.smt2](formal/arena_soundness.smt2), open architecture RFC proposals in [rfcs/README.md](rfcs/README.md), and automated Clause-to-Test traceability across the 161-test E2E suite.
 7. **Systems Toolchain & Ecosystem**: Monomorphized generic structures, native Language Server Protocol 3.17 engine with real-time Z3 IDE diagnostics, theorem-driven counterexample witness synthesis, differential equivalence prover, MISRA/JPL architectural linter, DWARF source line mapping, SHA-256 flight recorder, C-header bindgen, Android NDK JNI and Apple Swift/ModuleMap mobile targets, CycloneDX v1.5 SBOM generation, and SHA-256 locked decentralized package management.
 8. **Standard Library & Subsystems**: 31 built-in modules covering native OS threading, dynamic FFI linking, TCP sockets, hybrid PostgreSQL v3 / SQLite / Redis database drivers, HTTP/1.1, JSON, CSV, JWT HS256, regex, SHA-256 / SHA-512 / Ed25519, RFC 9669 eBPF bytecode execution, WebAssembly stack VM, Feldman M61 MPC, and exploratory lattice KEM / Sigma ZK modules.
 
@@ -58,7 +58,7 @@ Full CLI options, proof flags, and usage examples are documented in [docs/docs.h
 
 ## Quick Start & Bootstrap
 
-Pre-built release bundles for Linux and Windows (`v1.2.4`) are published via [GitHub Releases](https://github.com/jefmextra/nino-lang/releases), or the toolchain can be built directly from the C11 seed:
+Pre-built release bundles for Linux and Windows (`v1.2.5`) are published via [GitHub Releases](https://github.com/jefmextra/nino-lang/releases), or the toolchain can be built directly from the C11 seed:
 
 ```cmd
 bootstrap\install.bat
@@ -73,7 +73,7 @@ bootstrap\install.bat
 ## Documentation, Governance & Standards
 
 - **[SPECIFICATION.md](SPECIFICATION.md)**: Formal Language Specification v1.2 and Normative Conformance Traceability Matrix
-- **[CHALLENGE.md](CHALLENGE.md)**: Public "Break the Prover & Sandbox" Adversarial Challenge (v1.2.4)
+- **[CHALLENGE.md](CHALLENGE.md)**: Public "Break the Prover & Sandbox" Adversarial Challenge (v1.2.5)
 - **[rfcs/README.md](rfcs/README.md)**: Accepted Architectural RFCs and Review Lifecycle
 - **[formal/arena_soundness.smt2](formal/arena_soundness.smt2)**: Machine-Checked Z3 Formal Proofs for Arena Epochs and Vectorization Soundness
 - **[GOVERNANCE.md](GOVERNANCE.md)**: Nino Open Foundation Charter and Working Groups

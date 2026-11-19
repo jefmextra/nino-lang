@@ -476,15 +476,6 @@ fn delete_temp_file(path: string) {
         return
     }
     file_delete(path)
-    if file_exists(path) {
-        if is_host_windows() {
-            let bs = "\\"
-            let win_p = replace_str(path, "/", bs)
-            exec_cmd("del /f /q \"" + win_p + "\" " + null_redir())
-        } else {
-            exec_cmd("rm -f \"" + path + "\" " + null_redir())
-        }
-    }
 }
 
 fn prepare_run_cmd(s: string) -> string {
@@ -730,56 +721,6 @@ fn resolve_import_path(imp: string, base_dir: string) -> string {
         }
     }
     return target
-}
-
-fn expand_all_imports(source: string, visited: string, base_dir: string) -> string {
-    mut accumulated = ""
-    mut mid_chunk = ""
-    mut sub_chunk = ""
-    mut lcnt = 0
-    mut cur_visited = visited
-    let slen = len(source)
-    mut pos = 0
-    while pos < slen {
-        mut line_end = pos
-        mut searching = true
-        while line_end < slen && searching {
-            let ch = char_at(source, line_end)
-            if ch == "\n" {
-                searching = false
-            } else {
-                line_end = line_end + 1
-            }
-        }
-        let line = trim(slice(source, pos, line_end - pos))
-        if starts_with(line, "import \"") && ends_with(line, "\"") {
-            let raw_path = slice(line, 8, len(line) - 9)
-            let actual_path = resolve_import_path(raw_path, base_dir)
-            let tag = "|" + actual_path + "|"
-            if find_str(cur_visited, tag, 0) == -1 {
-                cur_visited = cur_visited + tag
-                if file_exists(actual_path) {
-                    let imp_source = read_file(actual_path)
-                    let imp_base = get_directory_of(actual_path)
-                    let expanded_sub = expand_all_imports(imp_source, cur_visited, imp_base)
-                    sub_chunk = sub_chunk + expanded_sub + "\n"
-                }
-            }
-        } else {
-            sub_chunk = sub_chunk + line + "\n"
-        }
-        lcnt = lcnt + 1
-        if lcnt % 32 == 0 {
-            mid_chunk = mid_chunk + sub_chunk
-            sub_chunk = ""
-            if lcnt % 512 == 0 {
-                accumulated = accumulated + mid_chunk
-                mid_chunk = ""
-            }
-        }
-        pos = line_end + 1
-    }
-    return accumulated + mid_chunk + sub_chunk
 }
 
 fn strip_line_comment(raw_line: string) -> string {
@@ -1080,24 +1021,6 @@ fn find_top_binary_op(expr: string, op: string) -> int {
     return op_found
 }
 
-fn find_param_comma(s: string, start: int) -> int {
-    let slen = len(s)
-    mut depth = 0
-    for i in start..slen {
-        let ch = char_at(s, i)
-        if ch == "(" || ch == "[" || ch == "{" || ch == "<" {
-            depth = depth + 1
-        } else if ch == ")" || ch == "]" || ch == "}" || ch == ">" {
-            if depth > 0 {
-                depth = depth - 1
-            }
-        } else if ch == "," && depth == 0 {
-            return i
-        }
-    }
-    return -1
-}
-
 fn parse_int(s: string) -> int {
     let slen = len(s)
     mut n = 0
@@ -1109,55 +1032,6 @@ fn parse_int(s: string) -> int {
         }
     }
     return n
-}
-
-fn c11_sub_get_type(sub: string, vname: string) -> string {
-    let key = "|@c11t:" + vname + "="
-    let p = find_str(sub, key, 0)
-    if p == -1 {
-        return ""
-    }
-    let s = p + len(key)
-    let e = find_char(sub, "|", s)
-    if e == -1 {
-        return ""
-    }
-    return slice(sub, s, e - s)
-}
-
-fn sem_is_single_call(ex: string, op_p: int) -> bool {
-    let elen = len(ex)
-    if op_p < 0 || elen == 0 || char_at(ex, elen - 1) != ")" {
-        return false
-    }
-    mut pd = 0
-    mut in_q = false
-    mut i = op_p
-    while i < elen {
-        let ch = char_at(ex, i)
-        if ch == "\"" {
-            mut bc = 0
-            mut bj = i - 1
-            while bj >= op_p && char_at(ex, bj) == "\\" {
-                bc = bc + 1
-                bj = bj - 1
-            }
-            if bc % 2 == 0 {
-                in_q = !in_q
-            }
-        } else if in_q == false {
-            if ch == "(" {
-                pd = pd + 1
-            } else if ch == ")" {
-                pd = pd - 1
-                if pd == 0 {
-                    return i == elen - 1
-                }
-            }
-        }
-        i = i + 1
-    }
-    return false
 }
 
 fn str_cat2(a: string, b: string) -> string {

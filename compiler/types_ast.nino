@@ -436,9 +436,6 @@ fn SCOPE_GLOBAL() -> int { return 0 }
 fn SCOPE_FN() -> int { return 1 }
 fn SCOPE_BLOCK() -> int { return 2 }
 fn SCOPE_LOOP() -> int { return 3 }
-fn SCOPE_ACTOR() -> int { return 4 }
-fn SCOPE_TX() -> int { return 5 }
-
 fn char_is_digit(ch: string) -> bool {
     if len(ch) == 0 {
         return false

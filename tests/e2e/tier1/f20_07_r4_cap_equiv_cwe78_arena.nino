@@ -1,0 +1,78 @@
+import "std/str.nino"
+
+fn resolve_ninoc_cmd() -> string {
+    if is_windows() {
+        if file_exists("ninoc.exe") { return "ninoc.exe" }
+        return "ninoc.exe"
+    }
+    if file_exists("./ninoc") { return "./ninoc" }
+    return "ninoc"
+}
+
+fn main() -> int {
+    let ninoc = resolve_ninoc_cmd()
+    let lb = "{"
+    let rb = "}"
+    let q = "\""
+
+    let c5 = "temp_e2e_f20_07_cap5.nino"
+    write_file(c5, "fn f() -> int with capability [!exec] " + lb + "\n    return h1()\n" + rb + "\nfn h1() -> int " + lb + " return h2() " + rb + "\nfn h2() -> int " + lb + " return h3() " + rb + "\nfn h3() -> int " + lb + " return h4() " + rb + "\nfn h4() -> int " + lb + " return h5() " + rb + "\nfn h5() -> int " + lb + " return exec_cmd(" + q + "echo hi" + q + ") " + rb + "\nfn main() -> int " + lb + " return f() " + rb + "\n")
+    require(exec_cmd(ninoc + " check " + c5) != 0, "5-hop capability escape must be rejected")
+    file_delete(c5)
+
+    let cd = "temp_e2e_f20_07_dylib.nino"
+    write_file(cd, "fn f() -> int with capability [read_only, !exec, !network, !disk] " + lb + "\n    return dylib_open(" + q + "libc.so.6" + q + ")\n" + rb + "\nfn main() -> int " + lb + " return f() " + rb + "\n")
+    require(exec_cmd(ninoc + " check " + cd) != 0, "dylib_open in [!exec] must be rejected")
+    file_delete(cd)
+
+    let ce = "temp_e2e_f20_07_ebpf.nino"
+    write_file(ce, "fn f() -> int with capability [read_only, !exec, !io] " + lb + "\n    return ebpf_load_kernel(1)\n" + rb + "\nfn main() -> int " + lb + " return f() " + rb + "\n")
+    require(exec_cmd(ninoc + " check " + ce) != 0, "ebpf_load_kernel in [!exec] must be rejected")
+    file_delete(ce)
+
+    let cf = "temp_e2e_f20_07_falloc.nino"
+    write_file(cf, "fn f() -> int with capability [read_only] " + lb + "\n    return foreign_alloc(64, " + q + "tag" + q + ")\n" + rb + "\nfn main() -> int " + lb + " return f() " + rb + "\n")
+    require(exec_cmd(ninoc + " check " + cf) != 0, "foreign_alloc in [read_only] must be rejected")
+    file_delete(cf)
+
+    let ca = "temp_e2e_f20_07_asm.nino"
+    write_file(ca, "fn f() -> int with capability [read_only, !exec, !io] " + lb + "\n    inline_asm " + lb + "\n        rdtsc\n    " + rb + "\n    return 0\n" + rb + "\nfn main() -> int " + lb + " return f() " + rb + "\n")
+    require(exec_cmd(ninoc + " check " + ca) != 0, "inline_asm in [!exec] must be rejected")
+    file_delete(ca)
+
+    let ea = "temp_e2e_f20_07_ea.nino"
+    let eb = "temp_e2e_f20_07_eb.nino"
+    write_file(ea, "fn f(x: int) -> bool " + lb + "\n    return (x + 1) > x\n" + rb + "\n")
+    write_file(eb, "fn f(x: int) -> bool " + lb + "\n    return true\n" + rb + "\n")
+    require(exec_cmd(ninoc + " equiv " + ea + " " + eb) != 0, "equiv default 64-bit BV must refute (x+1)>x vs true")
+    require(exec_cmd(ninoc + " equiv " + ea + " " + eb + " --int-logic") == 0, "equiv --int-logic must verify unbounded (x+1)>x vs true")
+    write_file(ea, "fn f(x: int) -> int " + lb + "\n    return x ^ x\n" + rb + "\n")
+    write_file(eb, "fn f(x: int) -> int " + lb + "\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " equiv " + ea + " " + eb) == 0, "equiv default 64-bit BV must verify bitwise x^x == 0")
+    file_delete(ea)
+    file_delete(eb)
+
+    let log_p = "temp_e2e_f20_07_cwe78.log"
+    let rc_p = exec_cmd(ninoc + " prove " + q + "bad;path.nino" + q + " > " + log_p + " 2>&1")
+    let out_p = read_file(log_p)
+    file_delete(log_p)
+    require(rc_p != 0 && str_contains(out_p, "CWE-78"), "prove must reject CWE-78 metacharacters before file access")
+
+    let rc_e = exec_cmd(ninoc + " equiv " + q + "bad;a.nino" + q + " " + q + "b.nino" + q + " > " + log_p + " 2>&1")
+    let out_e = read_file(log_p)
+    file_delete(log_p)
+    require(rc_e != 0 && str_contains(out_e, "CWE-78"), "equiv must reject CWE-78 metacharacters before file access")
+
+    let cr = "temp_e2e_f20_07_inter_rb.nino"
+    write_file(cr, "fn do_rb(m: int) " + lb + "\n    arena_rollback(m)\n" + rb + "\nfn main() -> int " + lb + "\n    let m = arena_mark()\n    let s = " + q + "tmp_" + q + " + int_to_str(1)\n    do_rb(m)\n    print(s)\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + cr) != 0, "interprocedural arena_rollback helper UAF must be rejected")
+    file_delete(cr)
+
+    let cb = "temp_e2e_f20_07_bal_rb.nino"
+    write_file(cb, "fn local_work() -> int " + lb + "\n    let lm = arena_mark()\n    let tmp = " + q + "work_" + q + " + int_to_str(7)\n    let n = len(tmp)\n    arena_rollback(lm)\n    return n\n" + rb + "\nfn main() -> int " + lb + "\n    let om = arena_mark()\n    let keep = " + q + "outer_" + q + " + int_to_str(1)\n    let n = local_work()\n    require(n == 6 && len(keep) == 7, " + q + "balanced helper must not taint caller mark" + q + ")\n    arena_rollback(om)\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + cb) == 0, "balanced local arena_mark/rollback helper must not false-positive")
+    file_delete(cb)
+
+    print("T1-F20-07:PASS")
+    return 0
+}

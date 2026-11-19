@@ -63,6 +63,19 @@ fn rt_hdr_chunk_00() -> string {
         "static inline const char *sha512(const char *data);",
         "static inline const char *hmac_sha256(const char *key, const char *msg);",
         "",
+        "static inline bool _nino_is_safe_env_path(const char *s) {",
+        "    if (!s || !s[0])",
+        "        return false;",
+        "    for (size_t i = 0; s[i]; i++) {",
+        "        char c = s[i];",
+        "        if (c == ';' || c == '|' || c == '&' || c == '`' || c == '$' || c == '>' || c == '<' || c == '\"' ||",
+        "            c == '\\'' || c == '\\n' || c == '\\r') {",
+        "            return false;",
+        "        }",
+        "    }",
+        "    return true;",
+        "}",
+        "",
         "static inline bool _nino_ct_streq(const char *a, const char *b) {",
         "    if (!a || !b)",
         "        return false;",
@@ -139,7 +152,12 @@ fn rt_hdr_chunk_00() -> string {
         "        if (strlen(_NINO_PCC_ED25519_PUB) == 64 && strlen(_NINO_PCC_ED25519_SIG) == 128) {",
         "            bool pk_pin_ok = true;",
         "            if (user_pubkey && user_pubkey[0] != 0) {",
-        "                pk_pin_ok = _nino_ct_streq(user_pubkey, _NINO_PCC_ED25519_PUB);",
+        "                pk_pin_ok = _nino_ct_streq(user_pubkey, _NINO_PCC_ED25519_PUB);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_01() -> string {
+    return str_join([
         "            }",
         "            if (pk_pin_ok) {",
         "                uint8_t ed_pk[32];",
@@ -152,12 +170,7 @@ fn rt_hdr_chunk_00() -> string {
         "                                          _nino_hex_nib(_NINO_PCC_ED25519_SIG[i * 2 + 1]));",
         "                ed_match = _nino_ed25519_verify_raw((const uint8_t *)mac_payload, strlen(mac_payload), ed_pk,",
         "                                                    ed_sig);",
-        "            }"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_01() -> string {
-    return str_join([
+        "            }",
         "        }",
         "#endif",
         "        bool z3_reverify_ok = true;",
@@ -185,7 +198,7 @@ fn rt_hdr_chunk_01() -> string {
         "                    z3_rc = system(cmd_buf);",
         "                    if (z3_rc != 0) {",
         "                        const char *nh = getenv(\"NINO_HOME\");",
-        "                        if (nh && nh[0]) {",
+        "                        if (_nino_is_safe_env_path(nh)) {",
         "                            snprintf(cmd_buf, sizeof(cmd_buf),",
         "                                     \"\\\"\\\"%s\\\\tools\\\\z3.exe\\\" -T:15 -t:10000 -smt2 \\\"%s\\\" > \\\"%s\\\" 2>&1\\\"\",",
         "                                     nh, tmp_smt, tmp_out);",
@@ -198,7 +211,7 @@ fn rt_hdr_chunk_01() -> string {
         "                    z3_rc = system(cmd_buf);",
         "                    if (z3_rc != 0) {",
         "                        const char *nh = getenv(\"NINO_HOME\");",
-        "                        if (nh && nh[0]) {",
+        "                        if (_nino_is_safe_env_path(nh)) {",
         "                            snprintf(cmd_buf, sizeof(cmd_buf),",
         "                                     \"\\\"%s/tools/z3\\\" -T:15 -t:10000 -smt2 \\\"%s\\\" > \\\"%s\\\" 2>&1\", nh, tmp_smt,",
         "                                     tmp_out);",
@@ -294,7 +307,12 @@ fn rt_hdr_chunk_01() -> string {
         "}",
         "static inline const char *get_env(const char *name) {",
         "    if (!name)",
-        "        return \"\";",
+        "        return \"\";"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_02() -> string {
+    return str_join([
         "    const char *v = getenv(name);",
         "    return v ? v : \"\";",
         "}",
@@ -307,12 +325,7 @@ fn rt_hdr_chunk_01() -> string {
         "    return (int64_t)((unsigned char)s[0]);",
         "}",
         "static inline void _nino_trace_auto_dump(void);",
-        "static inline void nino_require(bool cond, const char *msg) {"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_02() -> string {
-    return str_join([
+        "static inline void nino_require(bool cond, const char *msg) {",
         "    if (!cond) {",
         "        fprintf(stderr, \"[Nino Precondition Violation] require() failed: %s\\n\", msg ? msg : \"\");",
         "        _nino_trace_auto_dump();",
@@ -449,7 +462,12 @@ fn rt_hdr_chunk_02() -> string {
         "        return;",
         "    if (_nino_tx.entry_count >= _nino_tx.capacity) {",
         "        int new_cap = _nino_tx.capacity == 0 ? 32 : _nino_tx.capacity * 2;",
-        "        nino_tx_entry_t *new_entries =",
+        "        nino_tx_entry_t *new_entries ="
+    ], "\n")
+}
+
+fn rt_hdr_chunk_03() -> string {
+    return str_join([
         "            (nino_tx_entry_t *)realloc(_nino_tx.entries, (size_t)new_cap * sizeof(nino_tx_entry_t));",
         "        if (!new_entries)",
         "            return;",
@@ -462,12 +480,7 @@ fn rt_hdr_chunk_02() -> string {
         "    memcpy(backup, addr, sz);",
         "    int idx = _nino_tx.entry_count++;",
         "    _nino_tx.entries[idx].addr = addr;",
-        "    _nino_tx.entries[idx].container = container;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_03() -> string {
-    return str_join([
+        "    _nino_tx.entries[idx].container = container;",
         "    _nino_tx.entries[idx].size = sz;",
         "    _nino_tx.entries[idx].orig_bytes = backup;",
         "    _nino_tx.entries[idx].fn_depth = _nino_tx.fn_depth;",
@@ -604,7 +617,12 @@ fn rt_hdr_chunk_03() -> string {
         "        free(ns);",
         "        return malloc(sz);",
         "    }",
-        "    ns->cap = slab_cap;",
+        "    ns->cap = slab_cap;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_04() -> string {
+    return str_join([
         "    ns->used = asz;",
         "    ns->base_offset = g_nino_arena.total_offset;",
         "    ns->prev = s;",
@@ -617,12 +635,7 @@ fn rt_hdr_chunk_03() -> string {
         "        NinoArenaSlab *p = g_nino_arena.tail->prev;",
         "        if (g_nino_arena.tail->data)",
         "            free(g_nino_arena.tail->data);",
-        "        free(g_nino_arena.tail);"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_04() -> string {
-    return str_join([
+        "        free(g_nino_arena.tail);",
         "        g_nino_arena.tail = p;",
         "    }",
         "    if (g_nino_arena.tail)",
@@ -719,7 +732,10 @@ fn rt_hdr_chunk_04() -> string {
         "    char num_buf[64];",
         "    snprintf(num_buf, sizeof(num_buf), \"%g\", b);",
         "    if (!strchr(num_buf, '.') && !strchr(num_buf, 'e') && !strchr(num_buf, 'E')) {",
-        "        strcat(num_buf, \".0\");",
+        "        size_t nl = strlen(num_buf);",
+        "        if (nl + 2 < sizeof(num_buf)) {",
+        "            memcpy(num_buf + nl, \".0\", 3);",
+        "        }",
         "    }",
         "    return nino_str_concat(a, num_buf);",
         "}",
@@ -727,7 +743,10 @@ fn rt_hdr_chunk_04() -> string {
         "    char num_buf[64];",
         "    snprintf(num_buf, sizeof(num_buf), \"%g\", a);",
         "    if (!strchr(num_buf, '.') && !strchr(num_buf, 'e') && !strchr(num_buf, 'E')) {",
-        "        strcat(num_buf, \".0\");",
+        "        size_t nl = strlen(num_buf);",
+        "        if (nl + 2 < sizeof(num_buf)) {",
+        "            memcpy(num_buf + nl, \".0\", 3);",
+        "        }",
         "    }",
         "    return nino_str_concat(num_buf, b);",
         "}",
@@ -753,7 +772,12 @@ fn rt_hdr_chunk_04() -> string {
         "}",
         "static inline char *nino_concat_double_r(double a, const char *b) {",
         "    return nino_double_concat_str(a, b);",
-        "}",
+        "}"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_05() -> string {
+    return str_join([
         "static inline char *nino_concat_bool_r(bool a, const char *b) {",
         "    return nino_str_concat(a ? \"true\" : \"false\", b);",
         "}",
@@ -772,12 +796,7 @@ fn rt_hdr_chunk_04() -> string {
         "        long: nino_concat_int,                                                                               \\",
         "        unsigned long: nino_concat_int,                                                                      \\",
         "        long long: nino_concat_int,                                                                          \\",
-        "        unsigned long long: nino_concat_int,                                                                 \\"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_05() -> string {
-    return str_join([
+        "        unsigned long long: nino_concat_int,                                                                 \\",
         "        double: nino_concat_double,                                                                          \\",
         "        float: nino_concat_double,                                                                           \\",
         "        bool: nino_concat_bool,                                                                              \\",
@@ -908,7 +927,12 @@ fn rt_hdr_chunk_05() -> string {
         "    FILE *f = fopen(path, \"wb\");",
         "    if (!f)",
         "        return 0;",
-        "    if (nbytes > 0) {",
+        "    if (nbytes > 0) {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_06() -> string {
+    return str_join([
         "        uint8_t *raw = (uint8_t *)malloc(nbytes);",
         "        if (!raw) {",
         "            fclose(f);",
@@ -927,12 +951,7 @@ fn rt_hdr_chunk_05() -> string {
         "static inline int64_t nino_write_file(const char *path, const char *content) {",
         "    if (!path || !content)",
         "        return 0;",
-        "    FILE *f = fopen(path, \"wb\");"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_06() -> string {
-    return str_join([
+        "    FILE *f = fopen(path, \"wb\");",
         "    if (!f)",
         "        return 0;",
         "    size_t len = strlen(content);",
@@ -973,7 +992,10 @@ fn rt_hdr_chunk_06() -> string {
         "    char num_buf[64];",
         "    snprintf(num_buf, sizeof(num_buf), \"%g\", d);",
         "    if (!strchr(num_buf, '.') && !strchr(num_buf, 'e') && !strchr(num_buf, 'E')) {",
-        "        strcat(num_buf, \".0\");",
+        "        size_t nl = strlen(num_buf);",
+        "        if (nl + 2 < sizeof(num_buf)) {",
+        "            memcpy(num_buf + nl, \".0\", 3);",
+        "        }",
         "    }",
         "    printf(\"%s\\n\", num_buf);",
         "}",
@@ -1060,7 +1082,12 @@ fn rt_hdr_chunk_06() -> string {
         "static inline void _nino_harr_acq(void) {",
         "    while (atomic_flag_test_and_set_explicit(&_nino_harr_lock, memory_order_acquire)) {" + "}",
         "}",
-        "static inline void _nino_harr_rel(void) {",
+        "static inline void _nino_harr_rel(void) {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_07() -> string {
+    return str_join([
         "    atomic_flag_clear_explicit(&_nino_harr_lock, memory_order_release);",
         "}",
         "static inline size_t _nino_harr_hash(const void *p) {",
@@ -1082,12 +1109,7 @@ fn rt_hdr_chunk_06() -> string {
         "            while (ns[idx])",
         "                idx = (idx + 1) & (new_cap - 1);",
         "            ns[idx] = v;",
-        "            ncnt++;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_07() -> string {
-    return str_join([
+        "            ncnt++;",
         "        }",
         "    }",
         "    free(_nino_harr_slots);",
@@ -1215,7 +1237,12 @@ fn rt_hdr_chunk_07() -> string {
         "    return hdr->len;",
         "}",
         "static inline void *nino_bounds_check(void *arr, int64_t idx) {",
-        "    if (!arr) {",
+        "    if (!arr) {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_08() -> string {
+    return str_join([
         "        fprintf(stderr, \"[Nino Bounds Violation CWE-119] Dereferencing null array\\n\");",
         "        exit(1);",
         "    }",
@@ -1237,12 +1264,7 @@ fn rt_hdr_chunk_07() -> string {
         "    if (b == 0) {",
         "        fprintf(stderr, \"[Nino Arithmetic Guard - Line %d] Division by zero attempted\\n\", line);",
         "        exit(1);",
-        "    }"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_08() -> string {
-    return str_join([
+        "    }",
         "    if (a == (-9223372036854775807LL - 1) && b == -1) {",
         "        fprintf(stderr, \"[Nino Arithmetic Guard - Line %d] Signed 64-bit division overflow\\n\", line);",
         "        exit(1);",
@@ -1370,7 +1392,12 @@ fn rt_hdr_chunk_08() -> string {
         "    return (int64_t)c;",
         "#else",
         "    int c = accept((int)server_fd, NULL, NULL);",
-        "    if (c < 0)",
+        "    if (c < 0)"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_09() -> string {
+    return str_join([
         "        return -1;",
         "    return (int64_t)c;",
         "#endif",
@@ -1392,12 +1419,7 @@ fn rt_hdr_chunk_08() -> string {
         "        buf[0] = '\\0';",
         "        return \"\";",
         "    }",
-        "    buf[n] = '\\0';"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_09() -> string {
-    return str_join([
+        "    buf[n] = '\\0';",
         "    return buf;",
         "}",
         "static inline int64_t tcp_write(int64_t client_fd, const char *data) {",
@@ -1525,7 +1547,12 @@ fn rt_hdr_chunk_09() -> string {
         "static inline int64_t foreign_alloc(int64_t sz, const char *abi) {",
         "    (void)abi;",
         "    return (int64_t)(uintptr_t)malloc((size_t)sz);",
-        "}",
+        "}"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_10() -> string {
+    return str_join([
         "static inline void foreign_free(int64_t ptr) {",
         "    if (ptr)",
         "        free((void *)(uintptr_t)ptr);",
@@ -1547,12 +1574,7 @@ fn rt_hdr_chunk_09() -> string {
         "    uint32_t head_canary;",
         "    uint32_t tail_canary;",
         "    bool mlocked;",
-        "    bool page_guarded;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_10() -> string {
-    return str_join([
+        "    bool page_guarded;",
         "} nino_sealed_t;",
         "typedef struct {",
         "    int64_t cipher;",
@@ -1680,7 +1702,12 @@ fn rt_hdr_chunk_10() -> string {
         "    for (size_t i = 0; i < l; i++) {",
         "        if ((i & 7) == 0)",
         "            ks = _nino_entropy_u64();",
-        "        uint8_t pb = (uint8_t)((ks >> ((i & 7) * 8)) & 0xFF);",
+        "        uint8_t pb = (uint8_t)((ks >> ((i & 7) * 8)) & 0xFF);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_11() -> string {
+    return str_join([
         "        if (pb == 0)",
         "            pb = 0xA5;",
         "        uint8_t b = raw ? raw[i] : 0;",
@@ -1702,12 +1729,7 @@ fn rt_hdr_chunk_10() -> string {
         "static inline nino_sealed_t *nino_seal_str(const char *raw) {",
         "    if (!raw)",
         "        return nino_seal_bytes(NULL, 0, NULL, 0);",
-        "    return nino_seal_bytes((const uint8_t *)raw, strlen(raw), NULL, 0);"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_11() -> string {
-    return str_join([
+        "    return nino_seal_bytes((const uint8_t *)raw, strlen(raw), NULL, 0);",
         "}",
         "static inline nino_sealed_i64_t nino_seal_i64(int64_t val) {",
         "    int64_t m = (int64_t)_nino_entropy_u64();",
@@ -1835,7 +1857,12 @@ fn rt_hdr_chunk_11() -> string {
         "#ifdef _WIN32",
         "                VirtualUnlock(s->cipher, s->len + 1);",
         "#else",
-        "                munlock(s->cipher, s->len + 1);",
+        "                munlock(s->cipher, s->len + 1);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_12() -> string {
+    return str_join([
         "#endif",
         "            }",
         "            free(s->cipher);",
@@ -1857,12 +1884,7 @@ fn rt_hdr_chunk_11() -> string {
         "    _nino_secure_zero(s, sizeof(nino_sealed_t));",
         "    free(s);",
         "    _nino_seal_rel();",
-        "}"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_12() -> string {
-    return str_join([
+        "}",
         "static inline int64_t unseal_i64(nino_sealed_i64_t s) {",
         "    return s.cipher ^ s.mask;",
         "}",
@@ -1990,7 +2012,12 @@ fn rt_hdr_chunk_12() -> string {
         "    if (n <= 0)",
         "        return \"\";",
         "    char *buf = (char *)nino_arena_alloc((size_t)n + 1);",
-        "    if (!buf)",
+        "    if (!buf)"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_13() -> string {
+    return str_join([
         "        return \"\";",
         "    size_t total = 0;",
         "    while (total < (size_t)n) {",
@@ -2012,12 +2039,7 @@ fn rt_hdr_chunk_12() -> string {
         "        fwrite(s, 1, l, stdout);",
         "    fflush(stdout);",
         "}",
-        "static inline void print_raw(const char *s) {"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_13() -> string {
-    return str_join([
+        "static inline void print_raw(const char *s) {",
         "    stdout_write_raw(s);",
         "}",
         "static inline const char *int_to_str(int64_t v) {",
@@ -2145,7 +2167,12 @@ fn rt_hdr_chunk_13() -> string {
         "    if (!p)",
         "        return \"\";",
         "    if (len > 0)",
-        "        memcpy(p, data, len);",
+        "        memcpy(p, data, len);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_14() -> string {
+    return str_join([
         "    p[len] = 0x80;",
         "    for (int i = 0; i < 8; ++i)",
         "        p[plen - 1 - i] = (uint8_t)(blen >> (i * 8));",
@@ -2167,12 +2194,7 @@ fn rt_hdr_chunk_13() -> string {
         "        0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,",
         "        0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,",
         "        0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,",
-        "        0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_14() -> string {
-    return str_join([
+        "        0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,",
         "        0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,",
         "        0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,",
         "        0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,",
@@ -2300,7 +2322,12 @@ fn rt_hdr_chunk_14() -> string {
         "    for (int i = 0; i < 16; i++)",
         "        r->w[i] = (r->w[i] & ~mask) | (sub.w[i] & mask);",
         "}",
-        "static inline void _nino_fe_add(nino_fe25519 *r, const nino_fe25519 *a, const nino_fe25519 *b) {",
+        "static inline void _nino_fe_add(nino_fe25519 *r, const nino_fe25519 *a, const nino_fe25519 *b) {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_15() -> string {
+    return str_join([
         "    for (int i = 0; i < 16; i++)",
         "        r->w[i] = a->w[i] + b->w[i];",
         "    _nino_fe_reduce(r);",
@@ -2322,12 +2349,7 @@ fn rt_hdr_chunk_14() -> string {
         "        bw = nb;",
         "    }",
         "    _nino_fe_reduce(r);",
-        "}"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_15() -> string {
-    return str_join([
+        "}",
         "static inline void _nino_fe_mul(nino_fe25519 *r, const nino_fe25519 *a, const nino_fe25519 *b) {",
         "    uint64_t acc[32];",
         "    memset(acc, 0, sizeof(acc));",
@@ -2455,7 +2477,12 @@ fn rt_hdr_chunk_15() -> string {
         "    _nino_fe_sub(&f, &d, &c);",
         "    _nino_fe_add(&g, &d, &c);",
         "    _nino_fe_add(&h, &b, &a);",
-        "    _nino_fe_mul(&r->X, &e, &f);",
+        "    _nino_fe_mul(&r->X, &e, &f);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_16() -> string {
+    return str_join([
         "    _nino_fe_mul(&r->Y, &g, &h);",
         "    _nino_fe_mul(&r->Z, &f, &g);",
         "    _nino_fe_mul(&r->T, &e, &h);",
@@ -2477,12 +2504,7 @@ fn rt_hdr_chunk_15() -> string {
         "        q->T.w[i] ^= tt;",
         "    }",
         "}",
-        "static inline void _nino_ed_mul(nino_edpt *r, const nino_edpt *p, const uint8_t s[32]) {"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_16() -> string {
-    return str_join([
+        "static inline void _nino_ed_mul(nino_edpt *r, const nino_edpt *p, const uint8_t s[32]) {",
         "    nino_edpt r0, r1;",
         "    _nino_ed_ident(&r0);",
         "    r1 = *p;",
@@ -2610,7 +2632,12 @@ fn rt_hdr_chunk_16() -> string {
         "    d[31] &= 127;",
         "    d[31] |= 64;",
         "    nino_edpt A;",
-        "    _nino_ed_mul(&A, &_nino_ed_base, d);",
+        "    _nino_ed_mul(&A, &_nino_ed_base, d);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_17() -> string {
+    return str_join([
         "    _nino_ed_encode(pk, &A);",
         "    memcpy(sk, seed, 32);",
         "    memcpy(sk + 32, pk, 32);",
@@ -2632,12 +2659,7 @@ fn rt_hdr_chunk_16() -> string {
         "        memcpy(tmp + 64, m, n);",
         "    _nino_sha512_raw(tmp + 32, n + 32, r_hash);",
         "    _nino_sc_reduce(r, r_hash);",
-        "    nino_edpt R;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_17() -> string {
-    return str_join([
+        "    nino_edpt R;",
         "    _nino_ed_mul(&R, &_nino_ed_base, r);",
         "    _nino_ed_encode(sig, &R);",
         "    memcpy(tmp, sig, 32);",
@@ -2765,7 +2787,12 @@ fn rt_hdr_chunk_17() -> string {
         "    for (int i = 0; i < 32; i++)",
         "        pk[i] = (uint8_t)((_nino_hex_nib(pk_hex[i * 2]) << 4) | _nino_hex_nib(pk_hex[i * 2 + 1]));",
         "    for (int i = 0; i < 64; i++)",
-        "        sig[i] = (uint8_t)((_nino_hex_nib(sig_hex[i * 2]) << 4) | _nino_hex_nib(sig_hex[i * 2 + 1]));",
+        "        sig[i] = (uint8_t)((_nino_hex_nib(sig_hex[i * 2]) << 4) | _nino_hex_nib(sig_hex[i * 2 + 1]));"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_18() -> string {
+    return str_join([
         "    return _nino_ed25519_verify_raw((const uint8_t *)msg, strlen(msg), pk, sig);",
         "}",
         "typedef struct {",
@@ -2787,12 +2814,7 @@ fn rt_hdr_chunk_17() -> string {
         "static inline void trace_record(const char *label, int64_t val) {",
         "    if (!label)",
         "        label = \"state\";",
-        "    int64_t step = ++_nino_trace_total;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_18() -> string {
-    return str_join([
+        "    int64_t step = ++_nino_trace_total;",
         "    char msg[256];",
         "    snprintf(msg, sizeof(msg), \"%s:%s:%lld\", _nino_trace_hash, label, (long long)val);",
         "    const char *next_h = sha256(msg);",
@@ -2920,7 +2942,12 @@ fn rt_hdr_chunk_18() -> string {
         "        return \"\";",
         "    typedef const char *(*fn_t)(const char *);",
         "    fn_t f = (fn_t)(uintptr_t)fn_ptr;",
-        "    const char *r = f(s ? s : \"\");",
+        "    const char *r = f(s ? s : \"\");"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_19() -> string {
+    return str_join([
         "    return r ? nino_str_concat(r, \"\") : \"\";",
         "}",
         "static inline int64_t dylib_call_jni_i64(int64_t fn_ptr, int64_t a, int64_t b) {",
@@ -2942,12 +2969,7 @@ fn rt_hdr_chunk_18() -> string {
         "    if (!handle)",
         "        return;",
         "#ifdef _WIN32",
-        "    FreeLibrary((HMODULE)(uintptr_t)handle);"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_19() -> string {
-    return str_join([
+        "    FreeLibrary((HMODULE)(uintptr_t)handle);",
         "#else",
         "    dlclose((void *)(uintptr_t)handle);",
         "#endif",
@@ -3075,7 +3097,12 @@ fn rt_hdr_chunk_19() -> string {
         "        cls_reg = 1;",
         "    }",
         "    nino_win_t *win = (nino_win_t *)calloc(1, sizeof(nino_win_t));",
-        "    if (!win)",
+        "    if (!win)"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_20() -> string {
+    return str_join([
         "        return NULL;",
         "    win->width = w;",
         "    win->height = ht;",
@@ -3097,12 +3124,7 @@ fn rt_hdr_chunk_19() -> string {
         "    ReleaseDC(win->hwnd, hdc);",
         "    HBRUSH bg = CreateSolidBrush(RGB(15, 23, 42));",
         "    RECT bg_rc;",
-        "    memset(&bg_rc, 0, sizeof(bg_rc));"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_20() -> string {
-    return str_join([
+        "    memset(&bg_rc, 0, sizeof(bg_rc));",
         "    bg_rc.right = w;",
         "    bg_rc.bottom = ht;",
         "    FillRect(win->mem_dc, &bg_rc, bg);",
@@ -3230,7 +3252,12 @@ fn rt_hdr_chunk_20() -> string {
         "        TranslateMessage(&msg);",
         "        DispatchMessageA(&msg);",
         "    }",
-        "}",
+        "}"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_21() -> string {
+    return str_join([
         "#else",
         "static inline void *create_window(const char *t, int32_t w, int32_t ht) {",
         "    (void)t;",
@@ -3252,12 +3279,7 @@ fn rt_hdr_chunk_20() -> string {
         "    (void)x;",
         "    (void)y;",
         "    (void)w;",
-        "    (void)ht;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_21() -> string {
-    return str_join([
+        "    (void)ht;",
         "    (void)r;",
         "    (void)c;",
         "    (void)o;",
@@ -3385,7 +3407,12 @@ fn rt_hdr_chunk_21() -> string {
         "    if (orig == -1) {",
         "        base = (NinoArrHdr *)realloc(cur, tot);",
         "        if (!base)",
-        "            return arr;",
+        "            return arr;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_22() -> string {
+    return str_join([
         "        if ((void *)(base + 1) != old_ptr) {",
         "            _nino_heap_arr_unreg(old_ptr);",
         "        }",
@@ -3407,12 +3434,7 @@ fn rt_hdr_chunk_21() -> string {
         "    }",
         "    _nino_stamp_arr(base, new_orig, (int64_t)new_cap, old_len + 1);",
         "    void *new_items = (void *)(base + 1);",
-        "    if (new_orig == -1)"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_22() -> string {
-    return str_join([
+        "    if (new_orig == -1)",
         "        _nino_heap_arr_reg(new_items);",
         "    memcpy((char *)new_items + (old_len * sz), p_item, elem_sz < sz ? elem_sz : sz);",
         "    return new_items;",
@@ -3486,7 +3508,7 @@ fn rt_hdr_chunk_22() -> string {
         "    NinoDict *d = (NinoDict *)nino_arena_alloc(sizeof(NinoDict));",
         "    if (d) {",
         "        memset(d->summary, 0, 64);",
-        "        strcpy(d->summary, \"[NinoDict]\");",
+        "        memcpy(d->summary, \"[NinoDict]\", 11);",
         "        d->magic = 0xD1C70001;",
         "        d->head = NULL;",
         "        d->count = 0;",
@@ -3540,7 +3562,12 @@ fn rt_hdr_chunk_22() -> string {
         "    return b;",
         "}",
         "static inline const char *_nino_auto_to_str_s(const char *s) {",
-        "    return s ? s : \"\";",
+        "    return s ? s : \"\";"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_23() -> string {
+    return str_join([
         "}",
         "static inline const char *_nino_auto_to_str_c(char *s) {",
         "    return s ? s : \"\";",
@@ -3562,12 +3589,7 @@ fn rt_hdr_chunk_22() -> string {
         "static inline NinoDict *_nino_dict_kv(NinoDict *d, const char *k, const char *v) {",
         "    nino_dict_set(d, k, v);",
         "    return d;",
-        "}"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_23() -> string {
-    return str_join([
+        "}",
         "#define nino_dict_chain(D, K, V) _nino_dict_kv((D), _nino_auto_str(K), _nino_auto_str(V))",
         "static inline const char *nino_dict_get(const void *ptr, const char *k) {",
         "    if (!k || !ptr)",
@@ -3695,7 +3717,12 @@ fn rt_hdr_chunk_23() -> string {
         "    a->count++;",
         "    _NINO_ACT_UNLOCK();",
         "    return true;",
-        "}",
+        "}"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_24() -> string {
+    return str_join([
         "static inline int64_t actor_inbox_len(int32_t pid) {",
         "    _NINO_ACT_LOCK();",
         "    int64_t r = (pid > 0 && pid <= _nino_actor_cnt && _nino_actors[pid] && _nino_actors[pid]->alive)",
@@ -3717,12 +3744,7 @@ fn rt_hdr_chunk_23() -> string {
         "        a->msgs[a->head] = NULL;",
         "        a->head = (a->head + 1) % a->cap;",
         "        a->count--;",
-        "    }"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_24() -> string {
-    return str_join([
+        "    }",
         "    char beh[64];",
         "    memcpy(beh, a->behavior, 64);",
         "    NinoActorHandlerFn hfn = NULL;",
@@ -3850,7 +3872,12 @@ fn rt_hdr_chunk_24() -> string {
         "    uint64_t res = 0;",
         "    a %= mod;",
         "    b %= mod;",
-        "    for (int i = 0; i < 64; i++) {",
+        "    for (int i = 0; i < 64; i++) {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_25() -> string {
+    return str_join([
         "        uint64_t mask = 0ULL - (b & 1ULL);",
         "        uint64_t added = _nino_ct_add_mod(res, a, mod);",
         "        res = (added & mask) | (res & (~mask));",
@@ -3872,12 +3899,7 @@ fn rt_hdr_chunk_24() -> string {
         "        exp >>= 1;",
         "    }",
         "    return res;",
-        "}"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_25() -> string {
-    return str_join([
+        "}",
         "static inline uint64_t _nino_mod_inv_p(uint64_t a, uint64_t p) {",
         "    return _nino_mod_pow(a, p - 2ULL, p);",
         "}",
@@ -4005,7 +4027,12 @@ fn rt_hdr_chunk_25() -> string {
         "    _rlwe64_mul(a, s, b);",
         "    for (int i = 0; i < 64; i++)",
         "        b[i] = (b[i] + _rlwe_trit(i < 32 ? e_lo : e_hi, i) + 33290) % 3329;",
-        "    char *pk = (char *)nino_arena_alloc(280);",
+        "    char *pk = (char *)nino_arena_alloc(280);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_26() -> string {
+    return str_join([
         "    char *sk = (char *)nino_arena_alloc(128);",
         "    snprintf(pk, 280, \"RLWE64_PK:%016llx:%016llx:\", (unsigned long long)seed, (unsigned long long)dsa_y);",
         "    size_t off = strlen(pk);",
@@ -4027,12 +4054,7 @@ fn rt_hdr_chunk_25() -> string {
         "        unsigned long long seed = 0, dsa_y = 0;",
         "        int pkn = 0;",
         "        if (sscanf(pk + 12, \"%016llx:%016llx:%n\", &seed, &dsa_y, &pkn) != 2 || pkn != 34)",
-        "            return d;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_26() -> string {
-    return str_join([
+        "            return d;",
         "        const char *th = pk + 46;",
         "        int32_t A[2][2][256], tv[2][256], rv[2][256], u[2][256], v[256];",
         "        uint64_t rb[2][8], e1b[2][8], e2b[8], m[4];",
@@ -4068,7 +4090,7 @@ fn rt_hdr_chunk_26() -> string {
         "        for (int r = 0; r < 2; r++)",
         "            _mlkem_poly_mul_acc(tv[r], rv[r], v);",
         "        char *ct = (char *)nino_arena_alloc(2360);",
-        "        strcpy(ct, \"MLKEM512_CT:\");",
+        "        memcpy(ct, \"MLKEM512_CT:\", 13);",
         "        size_t co = 12;",
         "        for (int c = 0; c < 2; c++)",
         "            for (int i = 0; i < 256; i++) {",
@@ -4110,7 +4132,7 @@ fn rt_hdr_chunk_26() -> string {
         "    _rlwe64_mul(a, r, u);",
         "    _rlwe64_mul(b, r, v);",
         "    char *ct = (char *)nino_arena_alloc(420);",
-        "    strcpy(ct, \"RLWE64_CT:\");",
+        "    memcpy(ct, \"RLWE64_CT:\", 11);",
         "    size_t off = 10;",
         "    for (int i = 0; i < 64; i++) {",
         "        int e1 = _rlwe_trit(i < 32 ? e1_lo : e1_hi, i), e2 = _rlwe_trit(i < 32 ? e2_lo : e2_hi, i);",
@@ -4160,7 +4182,12 @@ fn rt_hdr_chunk_26() -> string {
         "            unsigned int vv = 0;",
         "            if (sscanf(ch + (512 + i) * 3, \"%03x\", &vv) != 1)",
         "                return \"\";",
-        "            v[i] = (int32_t)vv;",
+        "            v[i] = (int32_t)vv;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_27() -> string {
+    return str_join([
         "        }",
         "        for (int c = 0; c < 2; c++)",
         "            _mlkem_poly_mul_acc(svec[c], u[c], su);",
@@ -4182,12 +4209,7 @@ fn rt_hdr_chunk_26() -> string {
         "    unsigned long long seed = 0, dsa_y = 0, dsa_x = 0, s_lo = 0, s_hi = 0;",
         "    if (sscanf(sk + 10, \"%016llx:%016llx:%016llx:%016llx%016llx\", &seed, &dsa_y, &dsa_x, &s_lo, &s_hi) != 5)",
         "        return \"\";",
-        "    int s[64], u[64], v[64], su[64];"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_27() -> string {
-    return str_join([
+        "    int s[64], u[64], v[64], su[64];",
         "    const char *uv = ct + 10;",
         "    for (int i = 0; i < 64; i++) {",
         "        s[i] = _rlwe_trit(i < 32 ? (uint64_t)s_lo : (uint64_t)s_hi, i);",
@@ -4315,7 +4337,12 @@ fn rt_hdr_chunk_27() -> string {
         "    uint64_t p = _NINO_SP_P, q = _NINO_SP_Q;",
         "    int64_t sm = s % (int64_t)q;",
         "    if (sm < 0)",
-        "        sm += (int64_t)q;",
+        "        sm += (int64_t)q;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_28() -> string {
+    return str_join([
         "    uint64_t s_mod = (uint64_t)sm;",
         "    uint64_t r_bits[48], r_sum = 0;",
         "    for (int i = 0; i < 48; i++) {",
@@ -4337,12 +4364,7 @@ fn rt_hdr_chunk_27() -> string {
         "        nino_dict_set(d, \"proof_tag\", \"INVALID\");",
         "        return d;",
         "    }",
-        "    if (is_eq) {"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_28() -> string {
-    return str_join([
+        "    if (is_eq) {",
         "        uint64_t k = (_nino_entropy_u64() % (q - 3ULL)) + 2ULL;",
         "        uint64_t tv = _nino_mod_pow(_NINO_GEN_H, k, p);",
         "        char fs[128];",
@@ -4470,7 +4492,12 @@ fn rt_hdr_chunk_28() -> string {
         "                                   _nino_mod_inv_p((uint64_t)C_sec, p), p);",
         "    uint64_t g_inv = _nino_mod_inv_p(_NINO_GEN_G, p), prod = 1;",
         "    char *fs = (char *)nino_arena_alloc(48 * 48 + 128);",
-        "    int fpos = snprintf(fs, 128, \"RNG:%016llx:%d:%s:%s:\", C_sec, dir, op, th_s);",
+        "    int fpos = snprintf(fs, 128, \"RNG:%016llx:%d:%s:%s:\", C_sec, dir, op, th_s);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_29() -> string {
+    return str_join([
         "    for (int i = 0; i < 48; i++) {",
         "        unsigned long long ci = 0, e0v = 0, z0v = 0, z1v = 0;",
         "        if (sscanf(hex + i * 64, \"%016llx%016llx%016llx%016llx\", &ci, &e0v, &z0v, &z1v) != 4)",
@@ -4492,12 +4519,7 @@ fn rt_hdr_chunk_28() -> string {
         "        return false;",
         "    return _nino_hash_u64(fs) == (uint64_t)root_e;",
         "}",
-        "static inline const char *_nino_merkle_set_root(void *set, int64_t s, bool *out_found) {"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_29() -> string {
-    return str_join([
+        "static inline const char *_nino_merkle_set_root(void *set, int64_t s, bool *out_found) {",
         "    if (out_found)",
         "        *out_found = false;",
         "    if (!set)",
@@ -4625,7 +4647,12 @@ fn rt_hdr_chunk_29() -> string {
         "    int fp = snprintf(fs, fsz, \"ZKMEM:%s:%016llx:\", expected_root, (unsigned long long)C);",
         "    uint64_t esum = 0;",
         "    for (int64_t i = 0; i < n; i++) {",
-        "        unsigned long long ei = 0, zi = 0;",
+        "        unsigned long long ei = 0, zi = 0;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_30() -> string {
+    return str_join([
         "        if (sscanf(hex + (size_t)i * 32U, \"%016llx%016llx\", &ei, &zi) != 2)",
         "            return false;",
         "        if (ei >= q || zi >= q)",
@@ -4647,12 +4674,7 @@ fn rt_hdr_chunk_29() -> string {
         "static inline const char *sanitize(const char *s) {",
         "    if (!s)",
         "        return \"\";",
-        "    size_t l = strlen(s);"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_30() -> string {
-    return str_join([
+        "    size_t l = strlen(s);",
         "    char *b = (char *)nino_arena_alloc(l * 6 + 1);",
         "    if (!b)",
         "        return s;",
@@ -4780,7 +4802,12 @@ fn rt_hdr_chunk_30() -> string {
         "    _nino_sql_step_fn step;",
         "    _nino_sql_colcnt_fn col_cnt;",
         "    _nino_sql_coltxt_fn col_txt;",
-        "    _nino_sql_colname_fn col_name;",
+        "    _nino_sql_colname_fn col_name;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_31() -> string {
+    return str_join([
         "    _nino_sql_fin_fn fin;",
         "    _nino_sql_close_fn close;",
         "    _nino_sql_chg_fn changes;",
@@ -4802,12 +4829,7 @@ fn rt_hdr_chunk_30() -> string {
         "#ifdef _WIN32",
         "    FARPROC p = GetProcAddress((HMODULE)lib, nm);",
         "    if (!p)",
-        "        return false;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_31() -> string {
-    return str_join([
+        "        return false;",
         "    memcpy(dst, &p, sz);",
         "    return true;",
         "#else",
@@ -4935,7 +4957,12 @@ fn rt_hdr_chunk_31() -> string {
         "        const char *pv = pvals[i] ? pvals[i] : \"\";",
         "        cap += strlen(pv) * 2 + 4;",
         "    }",
-        "    char *out = (char *)nino_arena_alloc(cap);",
+        "    char *out = (char *)nino_arena_alloc(cap);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_32() -> string {
+    return str_join([
         "    if (!out)",
         "        return q;",
         "    size_t oi = 0;",
@@ -4957,12 +4984,7 @@ fn rt_hdr_chunk_31() -> string {
         "                    out[oi++] = 39;",
         "                    out[oi++] = 39;",
         "                } else {",
-        "                    out[oi++] = pv[k];"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_32() -> string {
-    return str_join([
+        "                    out[oi++] = pv[k];",
         "                }",
         "            }",
         "            out[oi++] = 39;",
@@ -5090,7 +5112,12 @@ fn rt_hdr_chunk_32() -> string {
         "    }",
         "    const char *ins = _nino_strcasestr(eq, \"INSERT INTO\");",
         "    if (ins) {",
-        "        const char *p = ins + 11;",
+        "        const char *p = ins + 11;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_33() -> string {
+    return str_join([
         "        while (*p == ' ' || *p == '\\t')",
         "            p++;",
         "        char tname[64];",
@@ -5112,12 +5139,7 @@ fn rt_hdr_chunk_32() -> string {
         "                    tbl->row_cap = nrc;",
         "                }",
         "                NinoDbRow *r = &tbl->rows[tbl->row_count++];",
-        "                memset(r, 0, sizeof(NinoDbRow));"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_33() -> string {
-    return str_join([
+        "                memset(r, 0, sizeof(NinoDbRow));",
         "                const char *cur = lp + 1;",
         "                while (*cur && *cur != ')') {",
         "                    while (*cur == ' ' || *cur == ',')",
@@ -5245,7 +5267,12 @@ fn rt_hdr_chunk_33() -> string {
         "                set_cols[scnt] = cidx;",
         "                snprintf(set_vals[scnt], 256, \"%s\", val);",
         "                scnt++;",
-        "            }",
+        "            }"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_34() -> string {
+    return str_join([
         "        }",
         "        int ucnt = 0;",
         "        for (int k = 0; k < tbl->row_count; k++) {",
@@ -5267,12 +5294,7 @@ fn rt_hdr_chunk_33() -> string {
         "                ucnt++;",
         "            }",
         "        }",
-        "        return ucnt;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_34() -> string {
-    return str_join([
+        "        return ucnt;",
         "    }",
         "    const char *delp = _nino_strcasestr(eq, \"DELETE FROM\");",
         "    if (delp) {",
@@ -5400,7 +5422,12 @@ fn rt_hdr_chunk_34() -> string {
         "           cti < 63)",
         "        col_tok[cti++] = *cur++;",
         "    col_tok[cti] = 0;",
-        "    int col_idx = -1;",
+        "    int col_idx = -1;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_35() -> string {
+    return str_join([
         "    if (tbl && cti > 0) {",
         "        for (int ci = 0; ci < tbl->col_name_cnt && ci < r->col_count; ci++) {",
         "            if (_nino_strncasecmp(tbl->col_names[ci], col_tok, 64) == 0) {",
@@ -5422,12 +5449,7 @@ fn rt_hdr_chunk_34() -> string {
         "        val_p += 1;",
         "    } else if ((val_p = strstr(wp, \"<\"))) {",
         "        op_mode = 3;",
-        "        val_p += 1;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_35() -> string {
-    return str_join([
+        "        val_p += 1;",
         "    } else if ((val_p = strstr(wp, \"=\"))) {",
         "        op_mode = 5;",
         "        val_p += 1;",
@@ -5555,7 +5577,12 @@ fn rt_hdr_chunk_35() -> string {
         "    NinoDbConn *dc = _nino_find_db_conn(db);",
         "    if (!dc)",
         "        return;",
-        "    if (dc->is_native && dc->sqlite_db) {",
+        "    if (dc->is_native && dc->sqlite_db) {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_36() -> string {
+    return str_join([
         "        _nino_sq.close(dc->sqlite_db);",
         "        dc->sqlite_db = NULL;",
         "    }",
@@ -5577,12 +5604,7 @@ fn rt_hdr_chunk_35() -> string {
         "    dst[0] = (uint8_t)(v >> 24);",
         "    dst[1] = (uint8_t)(v >> 16);",
         "    dst[2] = (uint8_t)(v >> 8);",
-        "    dst[3] = (uint8_t)v;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_36() -> string {
-    return str_join([
+        "    dst[3] = (uint8_t)v;",
         "}",
         "static inline uint32_t _nino_rd_u32(const uint8_t *src) {",
         "    return ((uint32_t)src[0] << 24) | ((uint32_t)src[1] << 16) | ((uint32_t)src[2] << 8) | (uint32_t)src[3];",
@@ -5710,7 +5732,12 @@ fn rt_hdr_chunk_36() -> string {
         "        u_long nb = 1;",
         "        ioctlsocket(s, FIONBIO, &nb);",
         "        connect(s, rp->ai_addr, (int)rp->ai_addrlen);",
-        "        fd_set wfds;",
+        "        fd_set wfds;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_37() -> string {
+    return str_join([
         "        FD_ZERO(&wfds);",
         "        FD_SET(s, &wfds);",
         "        struct timeval tv;",
@@ -5732,12 +5759,7 @@ fn rt_hdr_chunk_36() -> string {
         "#else",
         "        int s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);",
         "        if (s < 0)",
-        "            continue;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_37() -> string {
-    return str_join([
+        "            continue;",
         "        int fl = fcntl(s, F_GETFL, 0);",
         "        fcntl(s, F_SETFL, fl | O_NONBLOCK);",
         "        int cr = connect(s, rp->ai_addr, rp->ai_addrlen);",
@@ -5865,7 +5887,12 @@ fn rt_hdr_chunk_37() -> string {
         "                    rp[0] = 'p';",
         "                    _nino_be_u32(rp + 1, rl);",
         "                    memcpy(rp + 5, pass_b, pl);",
-        "                    ok_send = _nino_pg_send_all(fd, rp, 1 + rl);",
+        "                    ok_send = _nino_pg_send_all(fd, rp, 1 + rl);"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_38() -> string {
+    return str_join([
         "                    free(rp);",
         "                } else",
         "                    ok_send = false;",
@@ -5887,12 +5914,7 @@ fn rt_hdr_chunk_37() -> string {
         "                _nino_md5_hex(outer_in, 36, outer_hex);",
         "                char resp_pw[40];",
         "                snprintf(resp_pw, sizeof(resp_pw), \"md5%s\", outer_hex);",
-        "                size_t pl = strlen(resp_pw) + 1;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_38() -> string {
-    return str_join([
+        "                size_t pl = strlen(resp_pw) + 1;",
         "                uint32_t rl = (uint32_t)(4 + pl);",
         "                uint8_t *rp = (uint8_t *)malloc(1 + rl);",
         "                if (rp) {",
@@ -6020,7 +6042,12 @@ fn rt_hdr_chunk_38() -> string {
         "                    fcntl(s, F_SETFL, fl);",
         "                    struct timeval rto;",
         "                    rto.tv_sec = 0;",
-        "                    rto.tv_usec = 500000;",
+        "                    rto.tv_usec = 500000;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_39() -> string {
+    return str_join([
         "                    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));",
         "                    const char *png = \"*1\\r\\n$4\\r\\nPING\\r\\n\";",
         "                    if (send(s, png, strlen(png), 0) > 0) {",
@@ -6042,12 +6069,7 @@ fn rt_hdr_chunk_38() -> string {
         "}",
         "static inline const char *db_redis_connect(const char *h, int64_t p) {",
         "    if (!_nino_redis_kv)",
-        "        _nino_redis_kv = nino_dict_create();"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_39() -> string {
-    return str_join([
+        "        _nino_redis_kv = nino_dict_create();",
         "    const char *host = (h && h[0]) ? h : \"127.0.0.1\";",
         "    if (strcmp(host, \":memory:\") == 0) {",
         "        int id = ++_nino_db_conn_seq;",
@@ -6175,7 +6197,12 @@ fn rt_hdr_chunk_39() -> string {
         "                uint32_t ufl = _nino_rd_u32(pay + pos);",
         "                pos += 4;",
         "                int32_t flen = (int32_t)ufl;",
-        "                if (flen < 0) {",
+        "                if (flen < 0) {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_40() -> string {
+    return str_join([
         "                    vals[ci] = \"NULL\";",
         "                } else if (pos + (size_t)flen <= bl) {",
         "                    char *vs = (char *)nino_arena_alloc((size_t)flen + 1);",
@@ -6197,12 +6224,7 @@ fn rt_hdr_chunk_39() -> string {
         "                    j_out = nino_str_concat(j_out, \",\");",
         "                j_out = nino_str_concat(j_out, \"{\");",
         "                for (int ci = 0; ci < ufc; ci++) {",
-        "                    const char *cn = (ci < ncols && cols[ci][0]) ? cols[ci] : \"col\";"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_40() -> string {
-    return str_join([
+        "                    const char *cn = (ci < ncols && cols[ci][0]) ? cols[ci] : \"col\";",
         "                    char *kv = (char *)nino_arena_alloc(strlen(cn) + strlen(vals[ci]) * 2 + 32);",
         "                    if (kv) {",
         "                        snprintf(kv, strlen(cn) + strlen(vals[ci]) * 2 + 32, \"%s\\\"%s\\\":\\\"%s\\\"\",",
@@ -6330,7 +6352,12 @@ fn rt_hdr_chunk_40() -> string {
         "#else",
         "                        ssize_t rn = recv((int)fd, rbuf + hgot, sizeof(rbuf) - 1 - hgot, 0);",
         "#endif",
-        "                        if (rn <= 0)",
+        "                        if (rn <= 0)"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_41() -> string {
+    return str_join([
         "                            break;",
         "                        hgot += (size_t)rn;",
         "                        rbuf[hgot] = 0;",
@@ -6345,19 +6372,15 @@ fn rt_hdr_chunk_40() -> string {
         "                                cr = strchr(rbuf, '\\n');",
         "                            if (cr)",
         "                                *cr = 0;",
-        "                            char *out = (char *)nino_arena_alloc(strlen(rbuf + 1) + 1);",
+        "                            size_t rlen = strlen(rbuf + 1);",
+        "                            char *out = (char *)nino_arena_alloc(rlen + 1);",
         "                            if (out)",
-        "                                strcpy(out, rbuf + 1);",
+        "                                memcpy(out, rbuf + 1, rlen + 1);",
         "                            return out ? out : \"\";",
         "                        } else if (rbuf[0] == '$') {",
         "                            char *endp = NULL;",
         "                            long long blen = strtoll(rbuf + 1, &endp, 10);",
-        "                            char *nl = strchr(rbuf, '\\n');"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_41() -> string {
-    return str_join([
+        "                            char *nl = strchr(rbuf, '\\n');",
         "                            if (nl && endp != rbuf + 1 && blen >= 0 && blen <= 1048576LL) {",
         "                                char *pay = nl + 1;",
         "                                size_t have = (size_t)(rbuf + hgot - pay);",
@@ -6484,7 +6507,12 @@ fn rt_hdr_chunk_41() -> string {
         "                    break;",
         "                }",
         "            }",
-        "        }",
+        "        }"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_42() -> string {
+    return str_join([
         "    }",
         "    return (const char *)b->data;",
         "}",
@@ -6507,12 +6535,7 @@ fn rt_hdr_chunk_41() -> string {
         "    nino_guard_t *g = (nino_guard_t *)((uint8_t *)h - offsetof(nino_guard_t, payload));",
         "    if (off >= 0 && off < g->size)",
         "        return (int64_t)g->payload[off];",
-        "    return 0;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_42() -> string {
-    return str_join([
+        "    return 0;",
         "}",
         "static inline bool verify_canaries(void *h) {",
         "    if (!h)",
@@ -6639,7 +6662,12 @@ fn rt_hdr_chunk_42() -> string {
         "    if (c && _nino_z3_load())",
         "        _nino_z3.del_cfg((void *)(uintptr_t)c);",
         "}",
-        "static inline int64_t Z3_mk_context(int64_t c) {",
+        "static inline int64_t Z3_mk_context(int64_t c) {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_43() -> string {
+    return str_join([
         "    return (c && _nino_z3_load()) ? (int64_t)(uintptr_t)_nino_z3.mk_ctx((void *)(uintptr_t)c) : 0;",
         "}",
         "static inline void Z3_del_context(int64_t ctx) {",
@@ -6662,12 +6690,7 @@ fn rt_hdr_chunk_42() -> string {
         "        return 0;",
         "    return (int32_t)_nino_z3.chk((void *)(uintptr_t)c, (void *)(uintptr_t)s);",
         "}",
-        "static inline int64_t Z3_mk_int_symbol(int64_t c, int32_t i) {"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_43() -> string {
-    return str_join([
+        "static inline int64_t Z3_mk_int_symbol(int64_t c, int32_t i) {",
         "    return (c && _nino_z3_load()) ? (int64_t)(uintptr_t)_nino_z3.isym((void *)(uintptr_t)c, (int)i) : 0;",
         "}",
         "static inline int64_t Z3_mk_string_symbol(int64_t c, const char *s) {",
@@ -6794,7 +6817,12 @@ fn rt_hdr_chunk_43() -> string {
         "            expect_k = false;",
         "            p = ke;",
         "            if (at_k && ke > ks) {",
-        "                const char *q = p;",
+        "                const char *q = p;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_44() -> string {
+    return str_join([
         "                while (*q == ' ' || *q == '\\t' || *q == '\\r' || *q == '\\n')",
         "                    q++;",
         "                if (*q == ':') {",
@@ -6817,12 +6845,7 @@ fn rt_hdr_chunk_43() -> string {
         "}",
         "static inline const char *_nino_jget_str(const char *j, const char *k) {",
         "    const char *p = _nino_jfind_val(j, k);",
-        "    if (!p || *p != 34)"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_44() -> string {
-    return str_join([
+        "    if (!p || *p != 34)",
         "        return \"\";",
         "    p++;",
         "    size_t ml = strlen(p);",
@@ -6949,7 +6972,12 @@ fn rt_hdr_chunk_44() -> string {
         "    uint8_t out_dig[32];",
         "    _nino_sha256_raw(out_buf, 96, out_dig);",
         "    char *hex = (char *)nino_arena_alloc(65);",
-        "    if (!hex)",
+        "    if (!hex)"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_45() -> string {
+    return str_join([
         "        return \"\";",
         "    for (int i = 0; i < 32; i++)",
         "        snprintf(hex + i * 2, 3, \"%02x\", (unsigned int)out_dig[i]);",
@@ -6972,12 +7000,7 @@ fn rt_hdr_chunk_44() -> string {
         "        int64_t sh = dylib_open(\"sqlite3.dll\");",
         "        return sh ? sh : dylib_open(\"msvcrt.dll\");",
         "    }",
-        "    return dylib_open(name);"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_45() -> string {
-    return str_join([
+        "    return dylib_open(name);",
         "#else",
         "    if (strcmp(name, \"libc\") == 0 || strcmp(name, \"c\") == 0) {",
         "        int64_t sh = dylib_open(\"libc.so.6\");",
@@ -7104,7 +7127,12 @@ fn rt_hdr_chunk_45() -> string {
         "        atomic_store(&s->active, false);",
         "        return -1;",
         "    }",
-        "#endif",
+        "#endif"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_46() -> string {
+    return str_join([
         "    return (int64_t)id;",
         "}",
         "#define thread_spawn(FN, ARG) _nino_thread_spawn((NinoThreadFn)(FN), (int64_t)(ARG))",
@@ -7127,12 +7155,7 @@ fn rt_hdr_chunk_45() -> string {
         "}",
         "static inline int64_t thread_os_id(int64_t id) {",
         "    if (id <= 0 || id >= 256)",
-        "        return 0;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_46() -> string {
-    return str_join([
+        "        return 0;",
         "    return _nino_threads[id].os_tid;",
         "}",
         "static inline const char **str_split(const char *s, const char *delim) {",
@@ -7259,7 +7282,12 @@ fn rt_hdr_chunk_46() -> string {
         "    for (; s[i]; i++) {",
         "        if (s[i] >= '0' && s[i] <= '9') {",
         "            has_d = true;",
-        "        } else if (s[i] == '.' && !has_dot && has_d && s[i + 1] >= '0' && s[i + 1] <= '9') {",
+        "        } else if (s[i] == '.' && !has_dot && has_d && s[i + 1] >= '0' && s[i + 1] <= '9') {"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_47() -> string {
+    return str_join([
         "            has_dot = true;",
         "        } else",
         "            return false;",
@@ -7282,12 +7310,7 @@ fn rt_hdr_chunk_46() -> string {
         "        void *stmt = NULL;",
         "        if (_nino_sq.prep(dc->sqlite_db, q, -1, &stmt, NULL) == 0 && stmt) {",
         "            const char *out = \"[\";",
-        "            int emitted = 0;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_47() -> string {
-    return str_join([
+        "            int emitted = 0;",
         "            int nc = _nino_sq.col_cnt(stmt);",
         "            while (_nino_sq.step(stmt) == 100) {",
         "                if (emitted > 0)",
@@ -7414,7 +7437,12 @@ fn rt_hdr_chunk_47() -> string {
         "}",
         "static inline int64_t ebpf_exec_packet(int64_t pid, const char *pkt_hex) {",
         "    if (pid <= 0 || pid >= 16 || !pkt_hex)",
-        "        return 1;",
+        "        return 1;"
+    ], "\n")
+}
+
+fn rt_hdr_chunk_48() -> string {
+    return str_join([
         "    NinoEbpfProg *p = &_nino_ebpf_progs[pid];",
         "    uint8_t pkt[1536];",
         "    int hlen = (int)strlen(pkt_hex);",
@@ -7437,12 +7465,7 @@ fn rt_hdr_chunk_47() -> string {
         "        else if (ins.code == 0xbf)",
         "            reg[dst] = reg[src];",
         "        else if (ins.code == 0x07)",
-        "            reg[dst] += (uint64_t)(int64_t)ins.imm;"
-    ], "\n")
-}
-
-fn rt_hdr_chunk_48() -> string {
-    return str_join([
+        "            reg[dst] += (uint64_t)(int64_t)ins.imm;",
         "        else if (ins.code == 0x57)",
         "            reg[dst] &= (uint64_t)(uint32_t)ins.imm;",
         "        else if (ins.code == 0x71) {",
@@ -7564,30 +7587,6 @@ fn get_runtime_header() -> string {
 }
 
 // === END GENERATED RUNTIME HEADER ===
-fn purge_depth(scope_str: string, target_depth: int) -> string {
-    mut res = "|"
-    let slen = len(scope_str)
-    mut pos = 0
-    while pos < slen {
-        let nxt_pos = find_char(scope_str, "|", pos + 1)
-        if nxt_pos == -1 {
-            pos = slen
-        } else {
-            let entry = slice(scope_str, pos + 1, nxt_pos - pos - 1)
-            let col = find_char(entry, ":", 0)
-            if col != -1 {
-                let d_str = slice(entry, 0, col)
-                let d_val = parse_int(d_str)
-                if d_val < target_depth {
-                    res = res + entry + "|"
-                }
-            }
-            pos = nxt_pos
-        }
-    }
-    return res
-}
-
 fn mono_emit_type_rec(raw_t: string, mut seen: [string], mut out: [string]) {
     let t = trim(raw_t)
     let lt = find_char(t, "<", 0)
@@ -7774,21 +7773,5 @@ fn emit_single_struct_helpers(sname: string, fnames: string, ftypes: string, fco
     from_j = from_j + "    return _s;\n" + rb + "\n"
     eq_fn = eq_fn + "    return true;\n" + rb + "\n"
     return to_j + from_j + eq_fn
-}
-
-fn c11_sub_set_type(sub: string, vname: string, ctype: string) -> string {
-    if len(ctype) == 0 {
-        return sub
-    }
-    let key = "|@c11t:" + vname + "="
-    let p = find_str(sub, key, 0)
-    if p == -1 {
-        return sub + "@c11t:" + vname + "=" + ctype + "|"
-    }
-    let e = find_char(sub, "|", p + 1)
-    if e == -1 {
-        return sub
-    }
-    return slice(sub, 0, p) + "|@c11t:" + vname + "=" + ctype + slice(sub, e, len(sub) - e)
 }
 

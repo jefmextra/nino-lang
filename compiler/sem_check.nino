@@ -7,7 +7,8 @@ struct SemCtx {
     mut cur_fn_cap: string,
     mut arena_depth: int,
     mut mark_names: [string],
-    mut mark_depths: [int]
+    mut mark_depths: [int],
+    mut allow_rb_probe: bool
 }
 
 fn sem_norm_nino_type(raw_t: string) -> string {
@@ -416,19 +417,19 @@ fn sem_cap_allows(cap_spec: string, op_cat: string) -> bool {
 }
 
 fn sem_builtin_cap_cat(fnm: string) -> string {
-    if fnm == "tcp_connect" || fnm == "tcp_listen" || fnm == "tcp_accept" || fnm == "tcp_read" || fnm == "tcp_write" || fnm == "tcp_close" || fnm == "http_get" || fnm == "http_post" || fnm == "http_put" || fnm == "http_delete" || fnm == "http_listen" || fnm == "http_serve" || fnm == "db_postgres_connect" || fnm == "db_postgres_query" || fnm == "db_postgres_exec" || fnm == "db_redis_connect" || fnm == "db_redis_cmd" {
+    if fnm == "tcp_connect" || fnm == "tcp_listen" || fnm == "tcp_accept" || fnm == "tcp_read" || fnm == "tcp_write" || fnm == "tcp_close" || fnm == "http_get" || fnm == "http_post" || fnm == "http_put" || fnm == "http_delete" || fnm == "http_listen" || fnm == "http_serve" || fnm == "db_postgres_connect" || fnm == "db_postgres_query" || fnm == "db_postgres_exec" || fnm == "db_redis_connect" || fnm == "db_redis_cmd" || fnm == "db_redis_command" || fnm == "mesh_send" || fnm == "mesh_broadcast" {
         return "network"
     }
-    if fnm == "write_file" || fnm == "file_write" || fnm == "nino_write_file" || fnm == "nino_write_hex_file" || fnm == "file_delete" || fnm == "nino_file_delete" || fnm == "fs_write_text" || fnm == "fs_append_text" || fnm == "fs_mkdir" || fnm == "fs_remove" || fnm == "db_exec" || fnm == "db_sqlite_exec" {
+    if fnm == "write_file" || fnm == "file_write" || fnm == "nino_write_file" || fnm == "nino_write_hex_file" || fnm == "file_delete" || fnm == "nino_file_delete" || fnm == "fs_write_text" || fnm == "fs_append_text" || fnm == "fs_mkdir" || fnm == "fs_remove" || fnm == "db_exec" || fnm == "db_sqlite_exec" || fnm == "db_sqlite_open" {
         return "disk_write"
     }
-    if fnm == "read_file" || fnm == "file_read" || fnm == "nino_read_file" || fnm == "file_exists" || fnm == "nino_file_exists" || fnm == "fs_read_text" || fnm == "fs_list_dir" || fnm == "db_sqlite_open" || fnm == "db_sqlite_query" || fnm == "db_query" || fnm == "db_query_json" {
+    if fnm == "read_file" || fnm == "file_read" || fnm == "nino_read_file" || fnm == "file_exists" || fnm == "nino_file_exists" || fnm == "fs_read_text" || fnm == "fs_list_dir" || fnm == "db_sqlite_query" || fnm == "db_query" || fnm == "db_query_json" {
         return "disk_read"
     }
-    if fnm == "exec_cmd" || fnm == "nino_exec_cmd" {
+    if fnm == "exec_cmd" || fnm == "nino_exec_cmd" || fnm == "dylib_open" || fnm == "dylib_sym" || fnm == "dylib_close" || fnm == "dylib_call_i64" || fnm == "dylib_call_str" || fnm == "dylib_call_c_strlen" || fnm == "dylib_call_jni_i64" || fnm == "dylib_call_jni_str" || fnm == "ebpf_load_kernel" || fnm == "outb" || fnm == "inb" || fnm == "hlt" || fnm == "thread_spawn" || fnm == "spawn_actor" || fnm == "actor_patch" {
         return "exec"
     }
-    if fnm == "alloc_memory" || fnm == "free_memory" || fnm == "write_byte" || fnm == "write_i32" {
+    if fnm == "alloc_memory" || fnm == "free_memory" || fnm == "nino_free_memory" || fnm == "write_byte" || fnm == "write_i32" || fnm == "foreign_alloc" || fnm == "foreign_free" || fnm == "alloc_guarded_memory" || fnm == "alloc_parity_buffer" || fnm == "guarded_write_byte" || fnm == "parity_write_string" || fnm == "write_vga" || fnm == "arr_free" {
         return "mem_write"
     }
     return ""
@@ -443,15 +444,84 @@ fn sem_cap_tag_for_cat(cat: string) -> string {
     return ""
 }
 
-fn sem_collect_node_cap_effects(pool: AstPool, nid: int, sym: SymTable) -> string {
+fn sem_merge_cap_effects(dst: string, src: string) -> string {
+    if len(src) == 0 {
+        return dst
+    }
+    mut eff = dst
+    if find_str(src, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
+    if find_str(src, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
+    if find_str(src, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
+    if find_str(src, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
+    if find_str(src, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
+    if find_str(src, "|arena_rb|", 0) != -1 { eff = sem_pipe_add(eff, "arena_rb") }
+    return eff
+}
+
+fn sem_collect_local_marks(pool: AstPool, nid: int) -> string {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return "|"
+    }
+    let nd: AstNode = pool.nodes[nid]
+    mut marks = "|"
+    if nd.kind == NK_LET_STMT() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let rhs: AstNode = pool.nodes[nd.left]
+        if rhs.kind == NK_CALL() && rhs.left >= 0 && rhs.left < len(pool.nodes) {
+            let cal: AstNode = pool.nodes[rhs.left]
+            if cal.kind == NK_IDENT() && cal.name == "arena_mark" {
+                marks = sem_pipe_add(marks, nd.name)
+            }
+        }
+    }
+    if nd.left != -1 {
+        let ml = sem_collect_local_marks(pool, nd.left)
+        if len(ml) > 1 { marks = marks + slice(ml, 1, len(ml) - 1) }
+    }
+    if nd.right != -1 {
+        let mr = sem_collect_local_marks(pool, nd.right)
+        if len(mr) > 1 { marks = marks + slice(mr, 1, len(mr) - 1) }
+    }
+    if nd.extra != -1 {
+        let me = sem_collect_local_marks(pool, nd.extra)
+        if len(me) > 1 { marks = marks + slice(me, 1, len(me) - 1) }
+    }
+    for ci in 0..nd.child_count {
+        let cid = pool.children[nd.child_start + ci]
+        let mc = sem_collect_local_marks(pool, cid)
+        if len(mc) > 1 { marks = marks + slice(mc, 1, len(mc) - 1) }
+    }
+    return marks
+}
+
+fn sem_collect_node_cap_effects(pool: AstPool, nid: int, sym: SymTable, local_marks: string) -> string {
     if nid < 0 || nid >= len(pool.nodes) {
         return ""
     }
     let nd: AstNode = pool.nodes[nid]
     mut eff = "|"
+    if nd.kind == NK_INLINE_ASM() {
+        eff = sem_pipe_add(eff, "exec")
+    }
     if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
         let cal: AstNode = pool.nodes[nd.left]
         if cal.kind == NK_IDENT() {
+            if cal.name == "arena_reset" {
+                eff = sem_pipe_add(eff, "arena_rb")
+            } else if cal.name == "arena_rollback" {
+                mut is_local_m = false
+                if nd.child_count >= 1 {
+                    let a0_id = pool.children[nd.child_start]
+                    if a0_id >= 0 && a0_id < len(pool.nodes) {
+                        let a0: AstNode = pool.nodes[a0_id]
+                        if a0.kind == NK_IDENT() && find_str(local_marks, "|" + a0.name + "|", 0) != -1 {
+                            is_local_m = true
+                        }
+                    }
+                }
+                if is_local_m == false {
+                    eff = sem_pipe_add(eff, "arena_rb")
+                }
+            }
             let bcat = sem_builtin_cap_cat(cal.name)
             if len(bcat) > 0 {
                 eff = sem_pipe_add(eff, sem_cap_tag_for_cat(bcat))
@@ -459,56 +529,25 @@ fn sem_collect_node_cap_effects(pool: AstPool, nid: int, sym: SymTable) -> strin
             let csid = sym_lookup(sym, cal.name)
             if csid != -1 {
                 let ce: SymbolInfo = sym.entries[csid]
-                if len(ce.cap_effects) > 0 {
-                    if find_str(ce.cap_effects, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
-                    if find_str(ce.cap_effects, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
-                    if find_str(ce.cap_effects, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
-                    if find_str(ce.cap_effects, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
-                    if find_str(ce.cap_effects, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
+                if ce.kind == SK_EXTERN_FN() {
+                    eff = sem_pipe_add(eff, "exec")
                 }
+                eff = sem_merge_cap_effects(eff, ce.cap_effects)
             }
         }
     }
     if nd.left != -1 {
-        let el = sem_collect_node_cap_effects(pool, nd.left, sym)
-        if len(el) > 0 {
-            if find_str(el, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
-            if find_str(el, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
-            if find_str(el, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
-            if find_str(el, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
-            if find_str(el, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
-        }
+        eff = sem_merge_cap_effects(eff, sem_collect_node_cap_effects(pool, nd.left, sym, local_marks))
     }
     if nd.right != -1 {
-        let er = sem_collect_node_cap_effects(pool, nd.right, sym)
-        if len(er) > 0 {
-            if find_str(er, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
-            if find_str(er, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
-            if find_str(er, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
-            if find_str(er, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
-            if find_str(er, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
-        }
+        eff = sem_merge_cap_effects(eff, sem_collect_node_cap_effects(pool, nd.right, sym, local_marks))
     }
     if nd.extra != -1 {
-        let ee = sem_collect_node_cap_effects(pool, nd.extra, sym)
-        if len(ee) > 0 {
-            if find_str(ee, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
-            if find_str(ee, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
-            if find_str(ee, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
-            if find_str(ee, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
-            if find_str(ee, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
-        }
+        eff = sem_merge_cap_effects(eff, sem_collect_node_cap_effects(pool, nd.extra, sym, local_marks))
     }
     for ci in 0..nd.child_count {
         let cid = pool.children[nd.child_start + ci]
-        let ec = sem_collect_node_cap_effects(pool, cid, sym)
-        if len(ec) > 0 {
-            if find_str(ec, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
-            if find_str(ec, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
-            if find_str(ec, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
-            if find_str(ec, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
-            if find_str(ec, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
-        }
+        eff = sem_merge_cap_effects(eff, sem_collect_node_cap_effects(pool, cid, sym, local_marks))
     }
     return eff
 }
@@ -559,7 +598,7 @@ fn sem_check_expr(mut pool: AstPool, nid: int, mut sctx: SemCtx) -> string {
             return ""
         }
         let e: SymbolInfo = sctx.sym.entries[sid]
-        if e.is_rolled_back {
+        if e.is_rolled_back && sctx.allow_rb_probe == false {
             sem_err(pool, sctx, nd, "E0515", "memory_safety", "Use of region-bound value '" + nd.name + "' after arena_rollback()", len(nd.name), "pin escaping values with region_pin(" + nd.name + ") before rolling back the arena mark")
             return ""
         }
@@ -888,12 +927,20 @@ fn sem_check_expr(mut pool: AstPool, nid: int, mut sctx: SemCtx) -> string {
             lower_set_node_types(pool, nid, init_t, map_type(init_t))
             return init_t
         }
+        let prev_rb_probe = sctx.allow_rb_probe
+        if fn_name == "arena_ptr_valid" {
+            sctx.allow_rb_probe = true
+        }
         mut arg_ts: [string] = []
         for ai in 0..acnt {
             let at = sem_check_expr(pool, arg_ids[ai], sctx)
-            if sctx.has_error { return "" }
+            if sctx.has_error {
+                sctx.allow_rb_probe = prev_rb_probe
+                return ""
+            }
             arg_ts = push(arg_ts, at)
         }
+        sctx.allow_rb_probe = prev_rb_probe
         if sem_is_io_sink(fn_name) {
             for ai in 0..acnt {
                 let sv = sem_expr_has_sealed(pool, arg_ids[ai], sctx.sym)
@@ -956,6 +1003,10 @@ fn sem_check_expr(mut pool: AstPool, nid: int, mut sctx: SemCtx) -> string {
             return srt
         }
         let fe: SymbolInfo = sctx.sym.entries[fn_sid]
+        if len(sctx.cur_fn_cap) > 0 && fe.kind == SK_EXTERN_FN() && sem_cap_allows(sctx.cur_fn_cap, "exec") == false {
+            sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids calling extern FFI '" + fn_name + "()'", len(fn_name), "remove extern FFI call or relax capability constraints")
+            return ""
+        }
         if len(sctx.cur_fn_cap) > 0 && len(fe.cap_effects) > 0 {
             if find_str(fe.cap_effects, "|net|", 0) != -1 && sem_cap_allows(sctx.cur_fn_cap, "network") == false {
                 sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids calling '" + fn_name + "()' (uses network)", len(fn_name), "callee uses network operations forbidden by capability matrix")
@@ -1442,6 +1493,10 @@ fn sem_check_stmt(mut pool: AstPool, nid: int, mut sctx: SemCtx) {
         return
     }
     if nd.kind == NK_INLINE_ASM() {
+        if len(sctx.cur_fn_cap) > 0 && sem_cap_allows(sctx.cur_fn_cap, "exec") == false {
+            sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids inline_asm execution", 10, "remove inline_asm or grant exec capability")
+            return
+        }
         for ci in 0..nd.child_count {
             sem_check_stmt(pool, pool.children[nd.child_start + ci], sctx)
             if sctx.has_error { return }
@@ -1489,6 +1544,25 @@ fn sem_check_stmt(mut pool: AstPool, nid: int, mut sctx: SemCtx) {
                     sem_apply_rollback(sctx, rb_d)
                 } else if cal.kind == NK_IDENT() && cal.name == "arena_reset" {
                     sem_apply_rollback(sctx, 1)
+                } else if cal.kind == NK_IDENT() {
+                    let rsid = sym_lookup(sctx.sym, cal.name)
+                    if rsid != -1 {
+                        let rfe: SymbolInfo = sctx.sym.entries[rsid]
+                        if find_str(rfe.cap_effects, "|arena_rb|", 0) != -1 {
+                            mut rb_d2 = 1
+                            if e_nd.child_count >= 1 {
+                                let a0_id = pool.children[e_nd.child_start]
+                                let a0_nd: AstNode = pool.nodes[a0_id]
+                                if a0_nd.kind == NK_IDENT() {
+                                    let md_found = sem_mark_find_depth(sctx, a0_nd.name)
+                                    if md_found > 0 {
+                                        rb_d2 = md_found
+                                    }
+                                }
+                            }
+                            sem_apply_rollback(sctx, rb_d2)
+                        }
+                    }
                 }
             }
         }
@@ -1513,7 +1587,8 @@ fn ast_semantic_check(mut pool: AstPool, file_name: string) -> bool {
         cur_fn_cap: "",
         arena_depth: 0,
         mark_names: mnames,
-        mark_depths: mdepths
+        mark_depths: mdepths,
+        allow_rb_probe: false
     }
     if pool.root < 0 || pool.root >= len(pool.nodes) {
         return true
@@ -1603,8 +1678,11 @@ fn ast_semantic_check(mut pool: AstPool, file_name: string) -> bool {
             sym_insert(sctx.sym, nd.name, ainfo)
         }
     }
-    for cap_pass in 0..3 {
-        let ignore_cp = cap_pass
+    mut cap_changed = true
+    mut cap_iter = 0
+    while cap_changed && cap_iter < 64 {
+        cap_changed = false
+        cap_iter = cap_iter + 1
         for ci_c in 0..root_nd.child_count {
             let iid_c = pool.children[root_nd.child_start + ci_c]
             let nd_c: AstNode = pool.nodes[iid_c]
@@ -1612,8 +1690,13 @@ fn ast_semantic_check(mut pool: AstPool, file_name: string) -> bool {
                 let csid_f = sym_lookup(sctx.sym, nd_c.name)
                 if csid_f != -1 {
                     mut f_e: SymbolInfo = sctx.sym.entries[csid_f]
-                    f_e.cap_effects = sem_collect_node_cap_effects(pool, nd_c.left, sctx.sym)
-                    sym_update(sctx.sym, csid_f, f_e)
+                    let loc_m = sem_collect_local_marks(pool, nd_c.left)
+                    let next_eff = sem_collect_node_cap_effects(pool, nd_c.left, sctx.sym, loc_m)
+                    if next_eff != f_e.cap_effects {
+                        f_e.cap_effects = next_eff
+                        sym_update(sctx.sym, csid_f, f_e)
+                        cap_changed = true
+                    }
                 }
             }
         }

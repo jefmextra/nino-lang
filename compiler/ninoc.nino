@@ -331,7 +331,15 @@ fn cmd_lint(arg_count: int) -> int {
         }
         li = li + 1
     }
-    if len(target_src) == 0 || file_exists(target_src) == false {
+    if len(target_src) == 0 {
+        print("\033[91m[Error]\033[0m Missing source file for 'lint' command.")
+        return 1
+    }
+    if is_safe_cli_path(target_src) == false {
+        print("\033[91m[Nino Security Error CWE-78]\033[0m Rejected unsafe shell metacharacters in file path.")
+        return 1
+    }
+    if file_exists(target_src) == false {
         print("\033[91m[Error]\033[0m File not found: " + target_src)
         return 1
     }
@@ -342,14 +350,36 @@ fn cmd_lint(arg_count: int) -> int {
 fn cmd_equiv(arg_count: int) -> int {
     if arg_count < 4 {
         print("\033[91m[Error]\033[0m Missing source files for 'equiv' command.")
-        print("Usage: ninoc equiv <fileA.nino> <fileB.nino> [fn_name]")
+        print("Usage: ninoc equiv <fileA.nino> <fileB.nino> [fn_name] [--bv|--int-logic]")
         return 1
     }
-    let file_a = argv(2)
-    let file_b = argv(3)
+    mut file_a = ""
+    mut file_b = ""
     mut target_fn = ""
-    if arg_count >= 5 {
-        target_fn = trim(argv(4))
+    mut bv_mode = true
+    mut ei = 2
+    while ei < arg_count {
+        let ea = argv(ei)
+        if ea == "--bv" || ea == "-bv" {
+            bv_mode = true
+        } else if ea == "--int-logic" || ea == "--unbounded" {
+            bv_mode = false
+        } else if len(file_a) == 0 {
+            file_a = ea
+        } else if len(file_b) == 0 {
+            file_b = ea
+        } else if len(target_fn) == 0 {
+            target_fn = trim(ea)
+        }
+        ei = ei + 1
+    }
+    if len(file_a) == 0 || len(file_b) == 0 {
+        print("\033[91m[Error]\033[0m Missing source files for 'equiv' command.")
+        return 1
+    }
+    if is_safe_cli_path(file_a) == false || is_safe_cli_path(file_b) == false {
+        print("\033[91m[Nino Security Error CWE-78]\033[0m Rejected unsafe shell metacharacters in file path.")
+        return 1
     }
     if file_exists(file_a) == false || file_exists(file_b) == false {
         print("\033[91m[Error]\033[0m Both comparison source files must exist.")
@@ -357,13 +387,18 @@ fn cmd_equiv(arg_count: int) -> int {
     }
     let src_a = read_file(file_a)
     let src_b = read_file(file_b)
-    let smt_eq = synthesize_equiv_smt_ex(src_a, src_b, target_fn)
+    let smt_eq = synthesize_equiv_smt_ex(src_a, src_b, target_fn, bv_mode)
     let smt_path = file_a + ".equiv.smt2"
     write_file(smt_path, smt_eq)
     print("\033[96m================================================================================\033[0m")
     print("\033[93m[Nino Mathematical Differential Equivalence Prover (ninoc equiv)]\033[0m")
     print("  Baseline Unit : " + file_a)
     print("  Candidate Unit: " + file_b)
+    if bv_mode {
+        print("  Logic Profile : QF_BV (64-Bit Signed Two's-Complement)")
+    } else {
+        print("  Logic Profile : ALL (Unbounded Mathematical Integers)")
+    }
     if len(target_fn) > 0 {
         print("  Target Fn     : " + target_fn)
     } else {
@@ -901,7 +936,15 @@ fn cmd_prove(arg_count: int) -> int {
         }
         pi = pi + 1
     }
-    if len(target_src) == 0 || file_exists(target_src) == false {
+    if len(target_src) == 0 {
+        print("\033[91m[Error]\033[0m Missing source file for 'prove' command.")
+        return 1
+    }
+    if is_safe_cli_path(target_src) == false {
+        print("\033[91m[Nino Security Error CWE-78]\033[0m Rejected unsafe shell metacharacters in file path.")
+        return 1
+    }
+    if file_exists(target_src) == false {
         print("\033[91m[Error]\033[0m File not found: " + target_src)
         return 1
     }
@@ -1017,7 +1060,15 @@ fn cmd_asm(arg_count: int) -> int {
         }
         ai = ai + 1
     }
-    if len(target_src) == 0 || file_exists(target_src) == false {
+    if len(target_src) == 0 {
+        print("\033[91m[Error]\033[0m Missing source file for 'asm' command.")
+        return 1
+    }
+    if is_safe_cli_path(target_src) == false {
+        print("\033[91m[Nino Security Error CWE-78]\033[0m Rejected unsafe shell metacharacters in file path.")
+        return 1
+    }
+    if file_exists(target_src) == false {
         print("\033[91m[Error]\033[0m File not found: " + target_src)
         return 1
     }

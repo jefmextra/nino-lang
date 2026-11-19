@@ -1,11 +1,11 @@
-fn hidden_rb(m: int) {
+fn trigger_uar_index(arr: [int], m: int) {
     arena_rollback(m)
+    print(arr[0])
 }
 
 fn main() -> int {
     let m = arena_mark()
     mut arr: [int] = [10, 20, 30]
-    hidden_rb(m)
-    print(arr[0])
+    trigger_uar_index(arr, m)
     return 0
 }

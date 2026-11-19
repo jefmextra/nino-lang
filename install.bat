@@ -56,7 +56,7 @@ if errorlevel 1 (
 
 echo.
 echo ========================================================
-echo   [OK] Nino Language v1.2.1 installed successfully!
+echo   [OK] Nino Language v1.2.5 installed successfully!
 echo   Open a new terminal and type: ninoc version
 echo ========================================================
 echo.

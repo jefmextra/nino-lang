@@ -338,7 +338,7 @@ fn handle_pkg_command(arg_count: int) -> int {
         print("\033[96m================================================================================\033[0m")
         print("\033[93m[Nino Package Registry Configuration]\033[0m")
         print("  Primary Endpoint : https://ninosec.me/registry/index.json")
-        print("  Fallback Mirror  : https://raw.githubusercontent.com/jefmextra/NinoLang/main/docs/registry/index.json")
+        print("  Fallback Mirror  : https://raw.githubusercontent.com/jefmextra/nino-lang/main/docs/registry/index.json")
         print("  Registry Name    : Nino Decentralized Registry")
         print("  Protocol         : Decentralized Git Sparse Index / HTTPS (SHA-256 Checksums)")
         print("  Security Policy  : Cryptographically Hashed Packages (CSPRNG + SHA-256 Digest)")

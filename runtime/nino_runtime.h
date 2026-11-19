@@ -58,6 +58,19 @@ static inline const char *sha256(const char *data);
 static inline const char *sha512(const char *data);
 static inline const char *hmac_sha256(const char *key, const char *msg);
 
+static inline bool _nino_is_safe_env_path(const char *s) {
+    if (!s || !s[0])
+        return false;
+    for (size_t i = 0; s[i]; i++) {
+        char c = s[i];
+        if (c == ';' || c == '|' || c == '&' || c == '`' || c == '$' || c == '>' || c == '<' || c == '"' ||
+            c == '\'' || c == '\n' || c == '\r') {
+            return false;
+        }
+    }
+    return true;
+}
+
 static inline bool _nino_ct_streq(const char *a, const char *b) {
     if (!a || !b)
         return false;
@@ -175,7 +188,7 @@ static inline void nino_init_args(int argc, char **argv) {
                     z3_rc = system(cmd_buf);
                     if (z3_rc != 0) {
                         const char *nh = getenv("NINO_HOME");
-                        if (nh && nh[0]) {
+                        if (_nino_is_safe_env_path(nh)) {
                             snprintf(cmd_buf, sizeof(cmd_buf),
                                      "\"\"%s\\tools\\z3.exe\" -T:15 -t:10000 -smt2 \"%s\" > \"%s\" 2>&1\"",
                                      nh, tmp_smt, tmp_out);
@@ -188,7 +201,7 @@ static inline void nino_init_args(int argc, char **argv) {
                     z3_rc = system(cmd_buf);
                     if (z3_rc != 0) {
                         const char *nh = getenv("NINO_HOME");
-                        if (nh && nh[0]) {
+                        if (_nino_is_safe_env_path(nh)) {
                             snprintf(cmd_buf, sizeof(cmd_buf),
                                      "\"%s/tools/z3\" -T:15 -t:10000 -smt2 \"%s\" > \"%s\" 2>&1", nh, tmp_smt,
                                      tmp_out);
@@ -694,7 +707,10 @@ static inline char *nino_str_concat_double(const char *a, double b) {
     char num_buf[64];
     snprintf(num_buf, sizeof(num_buf), "%g", b);
     if (!strchr(num_buf, '.') && !strchr(num_buf, 'e') && !strchr(num_buf, 'E')) {
-        strcat(num_buf, ".0");
+        size_t nl = strlen(num_buf);
+        if (nl + 2 < sizeof(num_buf)) {
+            memcpy(num_buf + nl, ".0", 3);
+        }
     }
     return nino_str_concat(a, num_buf);
 }
@@ -702,7 +718,10 @@ static inline char *nino_double_concat_str(double a, const char *b) {
     char num_buf[64];
     snprintf(num_buf, sizeof(num_buf), "%g", a);
     if (!strchr(num_buf, '.') && !strchr(num_buf, 'e') && !strchr(num_buf, 'E')) {
-        strcat(num_buf, ".0");
+        size_t nl = strlen(num_buf);
+        if (nl + 2 < sizeof(num_buf)) {
+            memcpy(num_buf + nl, ".0", 3);
+        }
     }
     return nino_str_concat(num_buf, b);
 }
@@ -938,7 +957,10 @@ static inline void nino_print_double(double d) {
     char num_buf[64];
     snprintf(num_buf, sizeof(num_buf), "%g", d);
     if (!strchr(num_buf, '.') && !strchr(num_buf, 'e') && !strchr(num_buf, 'E')) {
-        strcat(num_buf, ".0");
+        size_t nl = strlen(num_buf);
+        if (nl + 2 < sizeof(num_buf)) {
+            memcpy(num_buf + nl, ".0", 3);
+        }
     }
     printf("%s\n", num_buf);
 }
@@ -3371,7 +3393,7 @@ static inline NinoDict *nino_dict_create(void) {
     NinoDict *d = (NinoDict *)nino_arena_alloc(sizeof(NinoDict));
     if (d) {
         memset(d->summary, 0, 64);
-        strcpy(d->summary, "[NinoDict]");
+        memcpy(d->summary, "[NinoDict]", 11);
         d->magic = 0xD1C70001;
         d->head = NULL;
         d->count = 0;
@@ -3933,7 +3955,7 @@ static inline void *pq_encapsulate(const char *pk) {
         for (int r = 0; r < 2; r++)
             _mlkem_poly_mul_acc(tv[r], rv[r], v);
         char *ct = (char *)nino_arena_alloc(2360);
-        strcpy(ct, "MLKEM512_CT:");
+        memcpy(ct, "MLKEM512_CT:", 13);
         size_t co = 12;
         for (int c = 0; c < 2; c++)
             for (int i = 0; i < 256; i++) {
@@ -3975,7 +3997,7 @@ static inline void *pq_encapsulate(const char *pk) {
     _rlwe64_mul(a, r, u);
     _rlwe64_mul(b, r, v);
     char *ct = (char *)nino_arena_alloc(420);
-    strcpy(ct, "RLWE64_CT:");
+    memcpy(ct, "RLWE64_CT:", 11);
     size_t off = 10;
     for (int i = 0; i < 64; i++) {
         int e1 = _rlwe_trit(i < 32 ? e1_lo : e1_hi, i), e2 = _rlwe_trit(i < 32 ? e2_lo : e2_hi, i);
@@ -6140,9 +6162,10 @@ static inline const char *db_redis_cmd(const char *c, const char *cmd, const voi
                                 cr = strchr(rbuf, '\n');
                             if (cr)
                                 *cr = 0;
-                            char *out = (char *)nino_arena_alloc(strlen(rbuf + 1) + 1);
+                            size_t rlen = strlen(rbuf + 1);
+                            char *out = (char *)nino_arena_alloc(rlen + 1);
                             if (out)
-                                strcpy(out, rbuf + 1);
+                                memcpy(out, rbuf + 1, rlen + 1);
                             return out ? out : "";
                         } else if (rbuf[0] == '$') {
                             char *endp = NULL;

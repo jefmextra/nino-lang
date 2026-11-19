@@ -1,32 +1,4 @@
 // compiler/tooling.nino: LSP 3.17 server, bindgen, formatter, shared/mobile targets, equiv, SBOM & linter
-fn lsp_temp_dir() -> string {
-    let t1 = get_env("TMPDIR")
-    if len(t1) > 0 {
-        if ends_with(t1, "/") || ends_with(t1, "\\") {
-            return slice(t1, 0, len(t1) - 1)
-        }
-        return t1
-    }
-    let t2 = get_env("TEMP")
-    if len(t2) > 0 {
-        if ends_with(t2, "/") || ends_with(t2, "\\") {
-            return slice(t2, 0, len(t2) - 1)
-        }
-        return t2
-    }
-    let t3 = get_env("TMP")
-    if len(t3) > 0 {
-        if ends_with(t3, "/") || ends_with(t3, "\\") {
-            return slice(t3, 0, len(t3) - 1)
-        }
-        return t3
-    }
-    if is_host_windows() {
-        return "."
-    }
-    return "/tmp"
-}
-
 fn to_lower_char(ch: string) -> string {
     if ch == "A" { return "a" }
     if ch == "B" { return "b" }
@@ -289,41 +261,6 @@ fn lsp_build_diag(ln_idx: int, col_idx: int, end_col_idx: int, sev_val: int, dia
     dg = dg + "\"severity\":" + sev_s + ",\"code\":\"" + diag_code + "\","
     dg = dg + "\"source\":\"ninoc\",\"message\":\"" + esc_msg + "\"}"
     return dg
-}
-
-fn lsp_find_ident_outside_str(line: string, ident: string) -> int {
-    let llen = len(line)
-    let ilen = len(ident)
-    if llen < ilen || ilen == 0 {
-        return -1
-    }
-    mut in_q = false
-    mut i = 0
-    while i <= llen - ilen {
-        let ch = char_at(line, i)
-        if ch == "\"" {
-            in_q = in_q == false
-            i = i + 1
-        } else if in_q == false {
-            if slice(line, i, ilen) == ident {
-                mut ch_before = " "
-                if i > 0 {
-                    ch_before = char_at(line, i - 1)
-                }
-                mut ch_after = " "
-                if i + ilen < llen {
-                    ch_after = char_at(line, i + ilen)
-                }
-                if is_alpha_num(ch_before) == false && is_alpha_num(ch_after) == false {
-                    return i
-                }
-            }
-            i = i + 1
-        } else {
-            i = i + 1
-        }
-    }
-    return -1
 }
 
 fn lsp_run_z3_fn(smt_script: string, seq: int) -> string {
@@ -843,7 +780,7 @@ fn run_lsp_server() -> int {
                         sid = "null"
                     }
                     let caps = "{\"textDocumentSync\":1,\"hoverProvider\":true}"
-                    let sinfo = "{\"name\":\"ninoc-lsp\",\"version\":\"1.2.4\"}"
+                    let sinfo = "{\"name\":\"ninoc-lsp\",\"version\":\"1.2.5\"}"
                     let res_obj = "{\"capabilities\":" + caps + ",\"serverInfo\":" + sinfo + "}"
                     let resp = "{\"jsonrpc\":\"2.0\",\"id\":" + sid + ",\"result\":" + res_obj + "}"
                     lsp_send(resp)
@@ -2128,7 +2065,7 @@ fn print_usage() {
 
 fn print_version() {
     let arch_t = is_host_windows() ? "x86_64-pc-windows-gnu" : "x86_64-unknown-linux-gnu"
-    print("Nino Systems Language Toolchain v1.2.4")
+    print("Nino Systems Language Toolchain v1.2.5")
     print("Compiler Engine    : ninoc (Self-Hosted Native Compiler)")
     print("Architecture Target: " + arch_t + " (Standalone Executable)")
     print("Runtime Subsystem  : Deterministic Arena Memory / SMT Formal Contracts")
@@ -2137,6 +2074,7 @@ fn print_version() {
 
 struct EqSmtCtx {
     pfx: string,
+    bv_mode: bool,
     mut sym_map: string,
     mut bool_syms: string,
     mut blk_decls: string,
@@ -2148,6 +2086,31 @@ struct EqSmtCtx {
     mut seq: int,
     mut unsupported: bool,
     mut always_returned: bool
+}
+
+fn eq_smt_is_int_type_ann(raw_t: string) -> bool {
+    let t = trim(raw_t)
+    return len(t) == 0 || t == "int" || t == "i64" || t == "i32" || t == "u64" || t == "u32" || t == "u8" || t == "byte"
+}
+
+fn eq_smt_int_sort(bv_mode: bool) -> string {
+    if bv_mode {
+        return "(_ BitVec 64)"
+    }
+    return "Int"
+}
+
+fn eq_smt_int_lit(lit: string, bv_mode: bool) -> string {
+    if bv_mode {
+        if starts_with(lit, "0x") || starts_with(lit, "0X") {
+            let v = parse_int(lit)
+            if v >= 0 {
+                return "(_ bv" + int_to_str(v) + " 64)"
+            }
+        }
+        return "(_ bv" + lit + " 64)"
+    }
+    return lit
 }
 
 fn eq_smt_map_get(sym_map: string, key: string) -> string {
@@ -2270,14 +2233,14 @@ fn eq_smt_is_bool_expr(pool: AstPool, nid: int, bool_syms: string) -> bool {
     return false
 }
 
-fn eq_smt_expr(pool: AstPool, nid: int, sym_map: string, mut ok_out: [int]) -> string {
+fn eq_smt_expr(pool: AstPool, nid: int, sym_map: string, bv_mode: bool, mut ok_out: [int]) -> string {
     if nid < 0 || nid >= len(pool.nodes) {
         ok_out[0] = 0
-        return "0"
+        return eq_smt_int_lit("0", bv_mode)
     }
     let nd: AstNode = pool.nodes[nid]
     if nd.kind == NK_INT_LIT() {
-        return nd.str_val
+        return eq_smt_int_lit(nd.str_val, bv_mode)
     }
     if nd.kind == NK_BOOL_LIT() {
         return nd.str_val
@@ -2286,57 +2249,68 @@ fn eq_smt_expr(pool: AstPool, nid: int, sym_map: string, mut ok_out: [int]) -> s
         let mapped = eq_smt_map_get(sym_map, nd.name)
         if len(mapped) == 0 {
             ok_out[0] = 0
-            return "0"
+            return eq_smt_int_lit("0", bv_mode)
         }
         return mapped
     }
     if nd.kind == NK_UNARY_OP() {
-        let sub = eq_smt_expr(pool, nd.left, sym_map, ok_out)
+        let sub = eq_smt_expr(pool, nd.left, sym_map, bv_mode, ok_out)
         if nd.op == "-" {
+            if bv_mode {
+                return "(bvneg " + sub + ")"
+            }
             return "(- " + sub + ")"
         }
         if nd.op == "!" {
             return "(not " + sub + ")"
         }
+        if nd.op == "~" && bv_mode {
+            return "(bvnot " + sub + ")"
+        }
         ok_out[0] = 0
-        return "0"
+        return eq_smt_int_lit("0", bv_mode)
     }
     if nd.kind == NK_TERNARY() {
-        let c = eq_smt_expr(pool, nd.left, sym_map, ok_out)
-        let t = eq_smt_expr(pool, nd.right, sym_map, ok_out)
-        let e = eq_smt_expr(pool, nd.extra, sym_map, ok_out)
+        let c = eq_smt_expr(pool, nd.left, sym_map, bv_mode, ok_out)
+        let t = eq_smt_expr(pool, nd.right, sym_map, bv_mode, ok_out)
+        let e = eq_smt_expr(pool, nd.extra, sym_map, bv_mode, ok_out)
         return "(ite " + c + " " + t + " " + e + ")"
     }
     if nd.kind == NK_BIN_OP() {
-        let l = eq_smt_expr(pool, nd.left, sym_map, ok_out)
-        let r = eq_smt_expr(pool, nd.right, sym_map, ok_out)
-        mut op = nd.op
-        if op == "+" || op == "-" || op == "*" || op == "<" || op == "<=" || op == ">" || op == ">=" {
-            return "(" + op + " " + l + " " + r + ")"
+        let l = eq_smt_expr(pool, nd.left, sym_map, bv_mode, ok_out)
+        let r = eq_smt_expr(pool, nd.right, sym_map, bv_mode, ok_out)
+        let op = nd.op
+        if bv_mode {
+            if op == "+" { return "(bvadd " + l + " " + r + ")" }
+            if op == "-" { return "(bvsub " + l + " " + r + ")" }
+            if op == "*" { return "(bvmul " + l + " " + r + ")" }
+            if op == "/" { return "(bvsdiv " + l + " " + r + ")" }
+            if op == "%" { return "(bvsrem " + l + " " + r + ")" }
+            if op == "<" { return "(bvslt " + l + " " + r + ")" }
+            if op == "<=" { return "(bvsle " + l + " " + r + ")" }
+            if op == ">" { return "(bvsgt " + l + " " + r + ")" }
+            if op == ">=" { return "(bvsge " + l + " " + r + ")" }
+            if op == "&" { return "(bvand " + l + " " + r + ")" }
+            if op == "|" { return "(bvor " + l + " " + r + ")" }
+            if op == "^" { return "(bvxor " + l + " " + r + ")" }
+            if op == "<<" { return "(bvshl " + l + " " + r + ")" }
+            if op == ">>" { return "(bvashr " + l + " " + r + ")" }
+        } else {
+            if op == "+" || op == "-" || op == "*" || op == "<" || op == "<=" || op == ">" || op == ">=" {
+                return "(" + op + " " + l + " " + r + ")"
+            }
+            if op == "/" { return "(div " + l + " " + r + ")" }
+            if op == "%" { return "(mod " + l + " " + r + ")" }
         }
-        if op == "/" {
-            return "(div " + l + " " + r + ")"
-        }
-        if op == "%" {
-            return "(mod " + l + " " + r + ")"
-        }
-        if op == "==" {
-            return "(= " + l + " " + r + ")"
-        }
-        if op == "!=" {
-            return "(distinct " + l + " " + r + ")"
-        }
-        if op == "&&" {
-            return "(and " + l + " " + r + ")"
-        }
-        if op == "||" {
-            return "(or " + l + " " + r + ")"
-        }
+        if op == "==" { return "(= " + l + " " + r + ")" }
+        if op == "!=" { return "(distinct " + l + " " + r + ")" }
+        if op == "&&" { return "(and " + l + " " + r + ")" }
+        if op == "||" { return "(or " + l + " " + r + ")" }
         ok_out[0] = 0
-        return "0"
+        return eq_smt_int_lit("0", bv_mode)
     }
     ok_out[0] = 0
-    return "0"
+    return eq_smt_int_lit("0", bv_mode)
 }
 
 fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
@@ -2361,7 +2335,7 @@ fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
     }
     if nd.kind == NK_CONTRACT_REQ() {
         mut ok = [1]
-        let c = eq_smt_expr(pool, nd.left, ctx.sym_map, ok)
+        let c = eq_smt_expr(pool, nd.left, ctx.sym_map, ctx.bv_mode, ok)
         if ok[0] == 1 {
             if len(ctx.path_cond) > 0 {
                 ctx.asserts = ctx.asserts + "(assert (=> " + ctx.path_cond + " " + c + "))\n"
@@ -2379,7 +2353,7 @@ fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
             let cnd: AstNode = pool.nodes[cid]
             if cnd.left >= 0 && cnd.left < len(pool.nodes) && pool.nodes[cnd.left].name == "require" && cnd.child_count >= 1 {
                 mut ok = [1]
-                let c = eq_smt_expr(pool, pool.children[cnd.child_start], ctx.sym_map, ok)
+                let c = eq_smt_expr(pool, pool.children[cnd.child_start], ctx.sym_map, ctx.bv_mode, ok)
                 if ok[0] == 1 {
                     if len(ctx.path_cond) > 0 {
                         ctx.asserts = ctx.asserts + "(assert (=> " + ctx.path_cond + " " + c + "))\n"
@@ -2398,12 +2372,12 @@ fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
             ctx.blk_decls = ctx.blk_decls + nd.name + "|"
         }
         mut ok = [1]
-        let rhs = eq_smt_expr(pool, nd.left, ctx.sym_map, ok)
+        let rhs = eq_smt_expr(pool, nd.left, ctx.sym_map, ctx.bv_mode, ok)
         if ok[0] == 0 {
             ctx.unsupported = true
             return
         }
-        mut sort = "Int"
+        mut sort = eq_smt_int_sort(ctx.bv_mode)
         if trim(nd.type_ann) == "bool" || eq_smt_is_bool_expr(pool, nd.left, ctx.bool_syms) {
             sort = "Bool"
             if find_str(ctx.bool_syms, "|" + nd.name + "|", 0) == -1 {
@@ -2424,12 +2398,12 @@ fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
         }
         let vname = pool.nodes[nd.left].name
         mut ok = [1]
-        let rhs = eq_smt_expr(pool, nd.right, ctx.sym_map, ok)
+        let rhs = eq_smt_expr(pool, nd.right, ctx.sym_map, ctx.bv_mode, ok)
         if ok[0] == 0 {
             ctx.unsupported = true
             return
         }
-        mut sort = "Int"
+        mut sort = eq_smt_int_sort(ctx.bv_mode)
         if find_str(ctx.bool_syms, "|" + vname + "|", 0) != -1 {
             sort = "Bool"
         }
@@ -2442,7 +2416,7 @@ fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
     }
     if nd.kind == NK_RETURN_STMT() {
         mut ok = [1]
-        let rv = eq_smt_expr(pool, nd.left, ctx.sym_map, ok)
+        let rv = eq_smt_expr(pool, nd.left, ctx.sym_map, ctx.bv_mode, ok)
         if ok[0] == 0 {
             ctx.unsupported = true
             return
@@ -2454,7 +2428,7 @@ fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
     }
     if nd.kind == NK_IF_STMT() {
         mut ok = [1]
-        let cond_s = eq_smt_expr(pool, nd.left, ctx.sym_map, ok)
+        let cond_s = eq_smt_expr(pool, nd.left, ctx.sym_map, ctx.bv_mode, ok)
         if ok[0] == 0 {
             ctx.unsupported = true
             return
@@ -2499,7 +2473,7 @@ fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
                     } else if then_ret == false && else_ret {
                         ctx.sym_map = eq_smt_map_set(ctx.sym_map, k, vt)
                     } else {
-                        mut sort = "Int"
+                        mut sort = eq_smt_int_sort(ctx.bv_mode)
                         if find_str(ctx.bool_syms, "|" + k + "|", 0) != -1 {
                             sort = "Bool"
                         }
@@ -2542,17 +2516,11 @@ fn eq_smt_find_fn_by_name(pool: AstPool, fns: [int], fn_name: string) -> int {
     return -1
 }
 
-fn eq_smt_first_fn(pool: AstPool) -> int {
-    let fns = eq_smt_collect_fns(pool)
-    if len(fns) > 0 { return fns[0] }
-    return -1
-}
-
 fn eq_smt_fail_closed_smt() -> string {
     return "(set-logic ALL)\n(declare-const _div_a Int)\n(declare-const _div_b Int)\n(assert (not (= _div_a _div_b)))\n(check-sat)\n(get-model)\n"
 }
 
-fn eq_smt_build_fn_pair(pa: AstPool, fa: int, pb: AstPool, fb: int, pair_idx: int, mut out_smt: [string], mut out_diff: [string]) -> bool {
+fn eq_smt_build_fn_pair(pa: AstPool, fa: int, pb: AstPool, fb: int, pair_idx: int, bv_mode: bool, mut out_smt: [string], mut out_diff: [string]) -> bool {
     let fnd_a: AstNode = pa.nodes[fa]
     let fnd_b: AstNode = pb.nodes[fb]
     if fnd_a.child_count != fnd_b.child_count {
@@ -2561,6 +2529,9 @@ fn eq_smt_build_fn_pair(pa: AstPool, fa: int, pb: AstPool, fb: int, pair_idx: in
     let ret_bool_a = (trim(fnd_a.type_ann) == "bool")
     let ret_bool_b = (trim(fnd_b.type_ann) == "bool")
     if ret_bool_a != ret_bool_b {
+        return false
+    }
+    if ret_bool_a == false && (eq_smt_is_int_type_ann(fnd_a.type_ann) == false || eq_smt_is_int_type_ann(fnd_b.type_ann) == false) {
         return false
     }
     let pid = "f" + int_to_str(pair_idx) + "_"
@@ -2576,8 +2547,11 @@ fn eq_smt_build_fn_pair(pa: AstPool, fa: int, pb: AstPool, fb: int, pair_idx: in
         if a_bool != b_bool {
             return false
         }
+        if a_bool == false && (eq_smt_is_int_type_ann(pan.type_ann) == false || eq_smt_is_int_type_ann(pbn.type_ann) == false) {
+            return false
+        }
         let psym = "_eq_" + pid + "p_" + int_to_str(pi)
-        mut psort = "Int"
+        mut psort = eq_smt_int_sort(bv_mode)
         if a_bool {
             psort = "Bool"
             bsyms = bsyms + pan.name + "|" + pbn.name + "|"
@@ -2586,8 +2560,8 @@ fn eq_smt_build_fn_pair(pa: AstPool, fa: int, pb: AstPool, fb: int, pair_idx: in
         map_a = eq_smt_map_set(map_a, pan.name, psym)
         map_b = eq_smt_map_set(map_b, pbn.name, psym)
     }
-    mut ca = EqSmtCtx { pfx: "a_" + pid, sym_map: map_a, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
-    mut cb = EqSmtCtx { pfx: "b_" + pid, sym_map: map_b, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
+    mut ca = EqSmtCtx { pfx: "a_" + pid, bv_mode: bv_mode, sym_map: map_a, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
+    mut cb = EqSmtCtx { pfx: "b_" + pid, bv_mode: bv_mode, sym_map: map_b, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
     if fnd_a.left != -1 {
         eq_smt_lower_stmt(pa, fnd_a.left, ca)
     }
@@ -2597,7 +2571,7 @@ fn eq_smt_build_fn_pair(pa: AstPool, fa: int, pb: AstPool, fb: int, pair_idx: in
     if ca.unsupported || cb.unsupported || len(ca.ret_vals) == 0 || len(cb.ret_vals) == 0 {
         return false
     }
-    let ret_sort = ret_bool_a ? "Bool" : "Int"
+    let ret_sort = ret_bool_a ? "Bool" : eq_smt_int_sort(bv_mode)
     let ra = "_ret_" + pid + "a"
     let rb = "_ret_" + pid + "b"
     mut chunk = param_decls + "(declare-const " + ra + " " + ret_sort + ")\n(declare-const " + rb + " " + ret_sort + ")\n"
@@ -2621,7 +2595,7 @@ fn eq_smt_build_fn_pair(pa: AstPool, fa: int, pb: AstPool, fb: int, pair_idx: in
     return true
 }
 
-fn synthesize_equiv_smt_ex(src_a: string, src_b: string, target_fn: string) -> string {
+fn synthesize_equiv_smt_ex(src_a: string, src_b: string, target_fn: string, bv_mode: bool) -> string {
     let pa = ast_parse_unit_ex(src_a, ".", "equiv_a.nino", false)
     let pb = ast_parse_unit_ex(src_b, ".", "equiv_b.nino", false)
     let fns_a = eq_smt_collect_fns(pa)
@@ -2657,7 +2631,7 @@ fn synthesize_equiv_smt_ex(src_a: string, src_b: string, target_fn: string) -> s
     mut body_smt: [string] = ["(set-logic ALL)\n"]
     mut diffs: [string] = []
     for pi in 0..len(pair_a) {
-        if eq_smt_build_fn_pair(pa, pair_a[pi], pb, pair_b[pi], pi, body_smt, diffs) == false {
+        if eq_smt_build_fn_pair(pa, pair_a[pi], pb, pair_b[pi], pi, bv_mode, body_smt, diffs) == false {
             return eq_smt_fail_closed_smt()
         }
     }
@@ -2670,10 +2644,6 @@ fn synthesize_equiv_smt_ex(src_a: string, src_b: string, target_fn: string) -> s
     }
     or_expr = or_expr + ")"
     return body_smt[0] + "(assert " + or_expr + ")\n(check-sat)\n(get-model)\n"
-}
-
-fn synthesize_equiv_smt(src_a: string, src_b: string) -> string {
-    return synthesize_equiv_smt_ex(src_a, src_b, "")
 }
 
 fn generate_cyclonedx_sbom(src_path: string, src_text: string) -> string {

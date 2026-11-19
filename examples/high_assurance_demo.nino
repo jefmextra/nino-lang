@@ -30,14 +30,14 @@ fn main() {
     print("================================================================================")
     print("")
 
-    print("[Feature 1] Post-Quantum Cryptography (NIST FIPS 203 & 204 Lattice Primitives)")
-    print("  Generating NIST ML-KEM-768 quantum-resistant lattice keypair...")
+    print("[Feature 1] Experimental Lattice KEM & Safe-Prime Schnorr Primitives")
+    print("  Generating experimental lattice KEM + safe-prime keypair...")
     let kp = pq_kem_new_session(768)
     let pubkey = kp["public_key"]
     let privkey = kp["private_key"]
     print("  -> Public Key:  " + pubkey)
 
-    print("  Client performing lattice key encapsulation (ML-KEM)...")
+    print("  Client performing lattice key encapsulation...")
     let handshake = pq_kem_client_handshake(pubkey)
     let ciphertext = handshake["ciphertext"]
     let alice_secret = handshake["shared_secret"]
@@ -49,16 +49,16 @@ fn main() {
     print("  -> Bob Secret:  " + bob_secret)
 
     if alice_secret == bob_secret {
-        print("  [PASS] Post-Quantum Shared Secret Derived Identically! Quantum-Proof.")
+        print("  [PASS] Lattice KEM Shared Secret Derived Identically!")
     }
 
-    print("  Signing sovereign contract with ML-DSA-65 lattice signature...")
+    print("  Signing contract with safe-prime Schnorr signature...")
     let contract = "DEFENSE_KERNEL_UPGRADE_AUTHORIZED_0x4A2F"
     let signature = pq_sign_payload(contract, privkey)
-    print("  -> Lattice Signature: " + signature)
+    print("  -> Schnorr Signature: " + signature)
     let is_verified = pq_verify_payload(contract, signature, pubkey)
     if is_verified {
-        print("  [PASS] ML-DSA-65 Lattice Signature Authenticated Successfully!")
+        print("  [PASS] Safe-Prime Schnorr Signature Authenticated Successfully!")
     }
     print("")
 

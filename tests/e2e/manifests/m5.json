@@ -1075,6 +1075,19 @@
         "T1-F20-06:PASS"
       ],
       "timeout_sec": 90
+    },
+    {
+      "id": "T1-F20-07",
+      "tier": 1,
+      "feature": "F20",
+      "mode": "build-run",
+      "source": "tier1/f20_07_r4_cap_equiv_cwe78_arena.nino",
+      "flags": [],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F20-07:PASS"
+      ],
+      "timeout_sec": 90
     }
   ]
 }

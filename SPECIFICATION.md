@@ -2,7 +2,7 @@
 
 **Document Identifier:** NINO-SPEC-1.2  
 **Language Version:** 1.2  
-**Toolchain Reference Baseline:** `ninoc` v1.2.4 (`compiler/ninoc.nino` + 11 modular units under `compiler/`; `runtime/nino_runtime.h`)  
+**Toolchain Reference Baseline:** `ninoc` v1.2.5 (`compiler/ninoc.nino` + 11 modular units under `compiler/`; `runtime/nino_runtime.h`)  
 **Status:** Normative Standard (v1.2)  
 **License:** MIT License (Copyright (c) 2026 The Nino Programming Language Project)
 
@@ -58,7 +58,7 @@ For the purposes of this specification, the following terms and definitions appl
 
 ### 1.4 Conformance Levels and Verification Boundaries
 
-A conforming NinoLang v1.2 toolchain (`ninoc v1.2.4`) targets freestanding-style C11 source output compiled into native machine executables via GCC (default), LLVM-Clang (`--backend=llvm`), or the self-hosted Direct Machine-Code Backend (`--backend=native`, `--backend=native-pe`, `--backend=native-elf`, `--backend=native-arm64`), supporting standard `//` and `/* ... */` comments with zero em/en dashes. Validated locally and in CI across 29 native test suites (including the 16-part conformance suite `tools/iso_conformance.nino`) and a 160-test cross-platform Tier 1-4 E2E suite (`tests/e2e/`).
+A conforming NinoLang v1.2 toolchain (`ninoc v1.2.5`) targets freestanding-style C11 source output compiled into native machine executables via GCC (default), LLVM-Clang (`--backend=llvm`), or the self-hosted Direct Machine-Code Backend (`--backend=native`, `--backend=native-pe`, `--backend=native-elf`, `--backend=native-arm64`), supporting standard `//` and `/* ... */` comments with zero em/en dashes. Validated locally and in CI across 29 native test suites (including the 16-part conformance suite `tools/iso_conformance.nino`) and a 161-test cross-platform Tier 1-4 E2E suite (`tests/e2e/`).
 
 #### 1.4.1 Normative Guarantees Enforced by Compiler and Runtime
 
@@ -970,7 +970,7 @@ To verify that the self-hosted compiler (`compiler/ninoc.nino`) compiles determi
    ```text
    SHA-256(stage2) == SHA-256(stage3)
    ```
-   Equality of the cryptographic SHA-256 digests of `stage2` and `stage3` demonstrates that the modular self-hosted compiler (`compiler/ninoc.nino` + 11 compiler modules under `compiler/`) has reached a bit-for-bit reproducible fixed point under the default GCC pipeline. (`ninoc version` reports `v1.2.4` and `"Stage-3 Fixed-Point Deterministic Convergence"`, while the operational CI invariant verifies `stage2 == stage3`.)
+   Equality of the cryptographic SHA-256 digests of `stage2` and `stage3` demonstrates that the modular self-hosted compiler (`compiler/ninoc.nino` + 11 compiler modules under `compiler/`) has reached a bit-for-bit reproducible fixed point under the default GCC pipeline. (`ninoc version` reports `v1.2.5` and `"Stage-3 Fixed-Point Deterministic Convergence"`, while the operational CI invariant verifies `stage2 == stage3`.)
 
 ### 8.2 Deterministic Compilation Pipelines and Flags
 

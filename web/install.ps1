@@ -8,7 +8,7 @@ Write-Host ""
 
 $InstallDir = Join-Path $HOME ".nino"
 $BinDir = Join-Path $InstallDir "bin"
-$ZipUrl = "https://github.com/jefmextra/nino-lang/releases/download/v1.2.4/nino-v1.2.4-windows-x64.zip"
+$ZipUrl = "https://github.com/jefmextra/nino-lang/releases/download/v1.2.5/nino-v1.2.5-windows-x64.zip"
 $TempZip = Join-Path $env:TEMP "nino-package.zip"
 
 Write-Host "[*] Target directory: $InstallDir" -ForegroundColor Yellow
@@ -16,7 +16,7 @@ if (-not (Test-Path $BinDir)) {
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 }
 
-Write-Host "[*] Downloading Nino v1.2.4 toolchain package..." -ForegroundColor Cyan
+Write-Host "[*] Downloading Nino v1.2.5 toolchain package..." -ForegroundColor Cyan
 Invoke-WebRequest -Uri $ZipUrl -OutFile $TempZip -UseBasicParsing
 
 Write-Host "[*] Extracting package files..." -ForegroundColor Cyan
@@ -60,7 +60,7 @@ if ($UserPath -notlike "*$BinDir*") {
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Green
-Write-Host "  [OK] Nino v1.2.4 installed successfully!" -ForegroundColor Green
+Write-Host "  [OK] Nino v1.2.5 installed successfully!" -ForegroundColor Green
 Write-Host "  Open a new PowerShell or CMD and type: ninoc version" -ForegroundColor White
 Write-Host "========================================================" -ForegroundColor Green
 Write-Host ""
