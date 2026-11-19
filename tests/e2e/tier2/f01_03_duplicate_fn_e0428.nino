@@ -1,0 +1,12 @@
+fn dup_calc(v: int) -> int {
+    return v + 1
+}
+
+fn dup_calc(v: int) -> int {
+    return v + 2
+}
+
+fn main() -> int {
+    print(dup_calc(5))
+    return 0
+}

@@ -1,0 +1,5 @@
+fn main() -> int {
+    let cfg = {"mode": "strict", "ver": "1.2.0"}
+    print(cfg["mode"])
+    return 0
+}

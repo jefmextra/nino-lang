@@ -1,0 +1,12 @@
+fn broken_pop(c: bool) -> int {
+    mut a = [1, 2, 3]
+    if c {
+        a = pop(a)
+    }
+    ensure(len(a) == 3, "pop must shrink array when branch executes")
+    return len(a)
+}
+
+fn main() -> int {
+    return broken_pop(true)
+}

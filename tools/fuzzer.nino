@@ -1,0 +1,137 @@
+fn fuzz_run_stage(subcmd: string, sample: string) -> int {
+    let temp_name = "temp_fuzz_case.nino"
+    write_file(temp_name, sample)
+    mut cmd = "./ninoc " + subcmd + " " + temp_name + " >/dev/null 2>&1"
+    if is_windows() {
+        cmd = "ninoc.exe " + subcmd + " " + temp_name + " >nul 2>&1"
+    }
+    let status = exec_cmd(cmd)
+    file_delete(temp_name)
+    if file_exists(temp_name + ".smt2") {
+        file_delete(temp_name + ".smt2")
+    }
+    if file_exists(temp_name + ".z3out") {
+        file_delete(temp_name + ".z3out")
+    }
+    if status == 0 || status == 1 || status == 256 {
+        return 0
+    }
+    return 1
+}
+
+fn fuzz_next_rng(state: int) -> int {
+    return (state * 1103515245 + 12345) & 2147483647
+}
+
+fn fuzz_mutate_sample(seed: string, round_idx: int, rng: int) -> string {
+    let slen = len(seed)
+    if slen < 4 {
+        return seed + " @@@ ;;"
+    }
+    let split_p = (rng + round_idx * 7 + 3) % slen
+    let prefix = slice(seed, 0, split_p)
+    let suffix = slice(seed, split_p, slen - split_p)
+    let ob = "{"
+    let cb = "}"
+    let mod_k = rng % 10
+    if mod_k == 0 {
+        return prefix + " ;; (( " + suffix
+    } else if mod_k == 1 {
+        return prefix + " \"unclosed " + suffix
+    } else if mod_k == 2 {
+        return suffix + prefix
+    } else if mod_k == 3 {
+        return prefix + " ensure (false, \"fuzz\") " + suffix
+    } else if mod_k == 4 {
+        return prefix + " if a > 0 " + ob + " ensure(false, \"f\") " + cb + " " + suffix
+    } else if mod_k == 5 {
+        return prefix + " let z = [1, 2]; z[0] = 9 " + suffix
+    } else if mod_k == 6 {
+        return prefix + " sealed q = \"s\"; return q " + suffix
+    } else if mod_k == 7 {
+        return prefix + " 999999999999999999999999 " + suffix
+    } else if mod_k == 8 {
+        return prefix + suffix + " " + prefix
+    }
+    return prefix + " while true " + ob + " break " + cb + " " + suffix
+}
+
+fn main() -> int {
+    print("================================================================================")
+    print("[Nino Native Continuous PRNG Mutation Fuzzing Engine]")
+    print("Fuzzing Lexer, AST Parser, Semantic Checker & SMT Prover Against Adversarial Mutations")
+    print("")
+
+    let ob = "{"
+    let cb = "}"
+    let seeds = [
+        "fn test( " + ob + " " + cb,
+        "fn test() " + ob,
+        "let a = [1, 2",
+        "let x = + * /",
+        "fn 123bad() -> int " + ob + " return 0 " + cb,
+        "fn test() -> int " + ob + " let s = 999 " + cb,
+        "struct Point " + ob + " x: int " + cb,
+        "fn test() -> int " + ob + " return 10 + " + cb,
+        "fn test() -> int " + ob + " let x = 10; let y = 20; return x / 0 " + cb,
+        "fn test() -> int " + ob + " require() " + cb,
+        "fn deep() " + ob + " (((( )))) " + cb,
+        "fn bad_operator() " + ob + " let x = 10 %%% 2 " + cb,
+        "fn empty_body() " + ob + " " + cb,
+        "mut 123_invalid = 99",
+        "sealed sec = \"TOP\"\nfn f() -> string " + ob + " return sec " + cb,
+        "fn trailing_comma(a: int,) -> int " + ob + " return a " + cb,
+        "for in 0..10 " + ob + " " + cb,
+        "while " + ob + " let x = 1 " + cb,
+        "fn bad_mut() -> int " + ob + "\n struct B " + ob + " x: int " + cb + "\n mut b = B " + ob + " x: 1 " + cb + "\n b.x = 2\n return 0\n" + cb,
+        "fn f(a: int) -> int " + ob + " if a > 0 " + ob + " ensure(a < 0, \"bad\") " + cb + " return a " + cb,
+        "fn phi(a: int) -> int " + ob + " mut x = 1; if a > 0 " + ob + " x = 2 " + cb + " else " + ob + " x = 3 " + cb + " ensure(x >= 2, \"phi\"); return x " + cb,
+        "fn imm() -> int " + ob + " let a = [1, 2]; a[0] = 5; return a[0] " + cb,
+        "fn cap() with capability [read_only, !disk] -> int " + ob + " file_write(\"x\", \"y\"); return 0 " + cb,
+        "fn ns() -> int " + ob + " let s = \"#no_std\"; return len(s) " + cb,
+        "fn div(a: int, b: int) -> int " + ob + " if b == 0 " + ob + " return 0 " + cb + " else if b > 0 " + ob + " return a / b " + cb + " return -a " + cb,
+        "fn sl(x: int) -> int " + ob + " ensure (x > 0, \"sp\"); return x " + cb
+    ]
+
+    mut total_runs = 0
+    mut mutated_cases = 0
+    mut crashes = 0
+    let seed_cnt = len(seeds)
+    mut rng = 20261119
+    for ri in 0..112 {
+        rng = fuzz_next_rng(rng)
+        let s = seeds[ri % seed_cnt]
+        let mut_s = fuzz_mutate_sample(s, ri, rng)
+        mutated_cases = mutated_cases + 1
+        let st_idx = ri % 4
+        mut stg = "lex"
+        if st_idx == 1 {
+            stg = "ast"
+        } else if st_idx == 2 {
+            stg = "check"
+        } else if st_idx == 3 {
+            stg = "prove"
+        }
+        crashes = crashes + fuzz_run_stage(stg, mut_s)
+        total_runs = total_runs + 1
+        if ri < seed_cnt {
+            crashes = crashes + fuzz_run_stage("check", s)
+            total_runs = total_runs + 1
+        }
+    }
+
+    print("  Seed Corpus Size         : " + seed_cnt)
+    print("  PRNG Mutated Test Cases  : " + mutated_cases)
+    print("  Total Fuzz Invocations   : " + total_runs)
+    print("  Fatal Crash Count        : " + crashes)
+
+    if crashes == 0 && mutated_cases > 100 {
+        print("  Fuzzing Resilience Status: [✓ 100% CRASH-FREE ZERO-DEFECT RESILIENCE]")
+        print("================================================================================")
+        return 0
+    }
+
+    print("  Fuzzing Resilience Status: [✗ CRASH DETECTED]")
+    print("================================================================================")
+    return 1
+}

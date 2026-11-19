@@ -1,0 +1,9 @@
+fn main() {
+    print("Testing Nino Memory Immutability Guard...")
+
+    let api_key = "SECRET_TOKEN_NINO_999"
+    print("Registered API Key: " + api_key)
+
+    api_key = "HACKED_TOKEN"
+    print("Token: " + api_key)
+}

@@ -1,0 +1,10 @@
+fn risky_div_shift(a: int, d: int, s: int) -> int {
+    require(a >= 0 && a <= 1000 && d >= 0 && s >= 0, "non-negative")
+    let q = (a / d) + (1 << s)
+    ensure(q >= 0, "requires non-zero divisor and shift < 64")
+    return q
+}
+
+fn main() -> int {
+    return risky_div_shift(10, 2, 1)
+}

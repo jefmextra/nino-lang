@@ -1,0 +1,63 @@
+import "std/tensor.nino"
+import "std/channel.nino"
+import "std/mesh.nino"
+import "std/honeypot.nino"
+
+fn main() {
+    print("================================================================================")
+    print("     NINO TENSOR, ASYNC CHANNEL & MESH NETWORKING DEMO")
+    print("================================================================================")
+
+    print("\n[1/4] HARDWARE AI TENSOR PRIMITIVES & SIMD MATMUL (std/tensor.nino)")
+    let inputs = tensor_from_array(1, 4, [1.5, -2.0, 3.0, 0.5])
+    let weights = tensor_from_array(4, 2, [
+        0.5, 1.0,
+        -0.5, 2.0,
+        1.2, -1.0,
+        0.1, 0.5
+    ])
+    let activations = tensor_matmul(inputs, weights)
+    print("  -> Raw MatMul Activations :", activations.data)
+    let activated = tensor_relu(activations)
+    print("  -> Post-ReLU Output       :", activated.data)
+    let best_class = tensor_argmax(activated)
+    print("  -> Predicted Class Index  :", best_class)
+    let quantized = tensor_quantize_int8(activated)
+    print("  -> INT8 Quantized Bytes   :", quantized.qdata, "| Scale:", quantized.scale)
+
+    print("\n[2/4] DEADLOCK-FREE FORMAL ASYNC CHANNELS (std/channel.nino)")
+    mut ch = channel_create(4)
+    ch.buffer = push(ch.buffer, "TELEMETRY_PACKET_A")
+    ch.buffer = push(ch.buffer, "TELEMETRY_PACKET_B")
+    print("  -> Channel Buffered Depth :", channel_len(ch), "/ 4")
+    let item1 = channel_recv(ch)
+    let item2 = channel_recv(ch)
+    print("  -> Received via Channel   :", item1, "|", item2)
+    print("  -> Channel Empty Status   :", channel_is_empty(ch))
+    channel_close(ch)
+
+    print("\n[3/4] ZERO-TRUST P2P MESH & GOSSIP NETWORKING (std/mesh.nino)")
+    mut local_node = mesh_node_init("NINO_SOVEREIGN_NODE_77", 9200, "PQC_KYBER_1024")
+    local_node.peers = push(local_node.peers, "192.168.1.105:9200")
+    local_node.peers = push(local_node.peers, "192.168.1.106:9200")
+    print("  -> Mesh Local Node ID     :", local_node.node_id, "on Port", local_node.port)
+    print("  -> Connected Mesh Peers   :", mesh_peers_count(local_node))
+    let fanout = mesh_broadcast(local_node, "BLOCK_CONSENSUS", "VALIDATED_HEADER_0x89F")
+    print("  -> PQC Gossip Broadcast   : Delivered to", fanout, "peers")
+    let received_pkt = mesh_receive(local_node)
+    print("  -> Mesh Packet Delivered  : Topic:", received_pkt.topic, "| Signature:", received_pkt.signature)
+
+    print("\n[4/4] ACTIVE CYBER DEFENSE & MEMORY HONEY-DECOYS (std/honeypot.nino)")
+    mut decoy = alloc_honey_buffer("CANARY_VAULT_DECOY_KEY_99", "CRITICAL_SYSTEM_MASTER_PASSWORD")
+    let is_clean = honey_verify_integrity(decoy)
+    print("  -> Honey-Decoy Armed      :", decoy.canary_id, "| Integrity:", is_clean)
+    let tripped = honey_trigger_alarm(decoy, "UNKNOWN_MEMORY_SCANNER_0x44")
+    if tripped {
+        decoy.is_tripped = true
+    }
+    print("  -> Honey-Decoy Status     : Tripped =", decoy.is_tripped)
+
+    print("\n================================================================================")
+    print("  [SUCCESS] Tensor, Channel & Mesh Networking Demo Completed!")
+    print("================================================================================")
+}

@@ -1,0 +1,15 @@
+fn main() -> int {
+    let a: int = 20
+    let b: int = 6
+    let arith: int = ((a + b) * 3 - (a / 2)) + (a % b)
+    let bits: int = ((1 << 4) | 3) ^ 5
+    let masked: int = bits & 15
+    let cmp_ok: bool = (a > b) && (b >= 6) && (a != b) && (10 <= 10) && (4 < 9)
+    let logic_ok: bool = (true and !false) or (false || not true)
+    require(arith == 70, "arith must be 70")
+    require(bits == 22, "bits must be 22")
+    require(masked == 6, "masked must be 6")
+    require(cmp_ok && logic_ok, "boolean logic check failed")
+    print("T1-F02-01:PASS")
+    return 0
+}

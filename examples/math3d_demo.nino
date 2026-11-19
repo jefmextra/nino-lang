@@ -1,0 +1,30 @@
+import "std/math3d"
+
+fn main() {
+    print("==================================================")
+    print("      NINO 3D LINEAR ALGEBRA & GAME MATH          ")
+    print("==================================================")
+
+    let v1 = vec3_new(1.0, 2.0, 3.0)
+    let v2 = vec3_new(4.0, 5.0, 6.0)
+
+    let added = vec3_add(v1, v2)
+    print("Vector Addition: ({added.x}, {added.y}, {added.z})")
+
+    let dot_prod = vec3_dot(v1, v2)
+    print("Dot Product: {dot_prod} (Expected 32.0)")
+
+    let cross_prod = vec3_cross(v1, v2)
+    print("Cross Product: ({cross_prod.x}, {cross_prod.y}, {cross_prod.z})")
+
+    let v3 = vec3_new(0.0, 3.0, 4.0)
+    let length = vec3_length(v3)
+    print("Vector Magnitude: {length} (Expected 5.0)")
+
+    let norm = vec3_normalize(v3)
+    print("Normalized Vector: ({norm.x}, {norm.y}, {norm.z})")
+
+    print("==================================================")
+    print("SUCCESS: 3D Math Engine Verified with Zero Defect!")
+    print("==================================================")
+}

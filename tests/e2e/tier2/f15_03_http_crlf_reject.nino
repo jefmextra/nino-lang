@@ -1,0 +1,7 @@
+import "std/http.nino"
+
+fn main() -> int {
+    let r = http_get("127.0.0.1", 80, "/\r\nX-Injected: true")
+    print(r)
+    return 0
+}

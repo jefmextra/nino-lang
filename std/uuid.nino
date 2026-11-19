@@ -1,0 +1,117 @@
+fn hex_encode(raw: string) -> string {
+    let rlen = len(raw)
+    let hex_chars = "0123456789abcdef"
+    mut out = ""
+    for i in 0..rlen {
+        let b = char_code_at(raw, i)
+        let hi = (b >> 4) & 15
+        let lo = b & 15
+        out = out + char_at(hex_chars, hi) + char_at(hex_chars, lo)
+    }
+    return out
+}
+
+fn hex_nibble_val(code_num: int) -> int {
+    if code_num >= 48 && code_num <= 57 {
+        return code_num - 48
+    }
+    if code_num >= 65 && code_num <= 70 {
+        return code_num - 55
+    }
+    if code_num >= 97 && code_num <= 102 {
+        return code_num - 87
+    }
+    return 0
+}
+
+fn hex_decode(hex_str: string) -> string {
+    let hlen = len(hex_str)
+    mut out = ""
+    mut i = 0
+    while i + 1 < hlen {
+        let hi = hex_nibble_val(char_code_at(hex_str, i))
+        let lo = hex_nibble_val(char_code_at(hex_str, i + 1))
+        let byte_val = (hi << 4) + lo
+        out = out + char_from_code(byte_val)
+        i = i + 2
+    }
+    return out
+}
+
+fn base64_encode(raw: string) -> string {
+    let tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let rlen = len(raw)
+    mut out = ""
+    mut i = 0
+    while i < rlen {
+        let b0 = char_code_at(raw, i)
+        mut b1 = 0
+        mut b2 = 0
+        mut rem = rlen - i
+        if rem > 1 {
+            b1 = char_code_at(raw, i + 1)
+        }
+        if rem > 2 {
+            b2 = char_code_at(raw, i + 2)
+        }
+        let triple = (b0 << 16) + (b1 << 8) + b2
+        let c0 = (triple >> 18) & 63
+        let c1 = (triple >> 12) & 63
+        let c2 = (triple >> 6) & 63
+        let c3 = triple & 63
+        out = out + char_at(tbl, c0) + char_at(tbl, c1)
+        if rem > 1 {
+            out = out + char_at(tbl, c2)
+        } else {
+            out = out + "="
+        }
+        if rem > 2 {
+            out = out + char_at(tbl, c3)
+        } else {
+            out = out + "="
+        }
+        i = i + 3
+    }
+    return out
+}
+
+fn uuid_v4_from_seed(seed_tag: string) -> string {
+    let r1 = csprng_u64()
+    let r2 = csprng_u64()
+    let t = time_now_ns()
+    let ent = int_to_str(r1) + ":" + int_to_str(r2) + ":" + int_to_str(t) + ":" + seed_tag
+    let h = sha256(ent)
+    let p1 = slice(h, 0, 8)
+    let p2 = slice(h, 8, 4)
+    let p3 = "4" + slice(h, 13, 3)
+    let v_nib_code = char_code_at(h, 16) & 3
+    mut v_nib = "8"
+    if v_nib_code == 1 {
+        v_nib = "9"
+    } else if v_nib_code == 2 {
+        v_nib = "a"
+    } else if v_nib_code == 3 {
+        v_nib = "b"
+    }
+    let p4 = v_nib + slice(h, 17, 3)
+    let p5 = slice(h, 20, 12)
+    return p1 + "-" + p2 + "-" + p3 + "-" + p4 + "-" + p5
+}
+
+fn uuid_v4() -> string {
+    return uuid_v4_from_seed("NINO_UUID_V4")
+}
+
+fn uuid_is_valid(u: string) -> bool {
+    if len(u) != 36 {
+        return false
+    }
+    if char_at(u, 8) != "-" || char_at(u, 13) != "-" || char_at(u, 18) != "-" || char_at(u, 23) != "-" {
+        return false
+    }
+    if char_at(u, 14) != "4" {
+        return false
+    }
+    let vc = char_at(u, 19)
+    return vc == "8" || vc == "9" || vc == "a" || vc == "b" || vc == "A" || vc == "B"
+}

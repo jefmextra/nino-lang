@@ -1,0 +1,22 @@
+struct ErrorCode {
+    code: int,
+    msg: string
+}
+
+fn expects_str_err(r: Result<int, string>) -> int {
+    if r.is_ok {
+        return r.ok_val
+    }
+    return -1
+}
+
+fn main() -> int {
+    let wrong: Result<int, ErrorCode> = (Result_int_ErrorCode){
+        .is_ok = false,
+        .ok_val = 0,
+        .err_val = ErrorCode { code: 400, msg: "bad" }
+    }
+    let out = expects_str_err(wrong)
+    print(out)
+    return 0
+}

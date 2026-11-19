@@ -1,0 +1,6 @@
+fn main() -> int {
+    let k: int = 42
+    let v = k[0]
+    print(v)
+    return 0
+}

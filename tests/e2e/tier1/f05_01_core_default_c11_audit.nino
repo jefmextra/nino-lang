@@ -1,0 +1,23 @@
+struct AuditBox {
+    mut count: int,
+    label: string
+}
+
+fn bump_box(mut b: AuditBox, delta: int) -> int {
+    b.count = b.count + delta
+    return b.count
+}
+
+fn main() -> int {
+    let base: int = 10
+    mut total = base
+    let items: [int] = [5, 10, 15, 20]
+    for v in items {
+        total = total + v
+    }
+    mut box = AuditBox { count: 4, label: "c11" }
+    let updated = bump_box(box, 6)
+    require(total == 60 && updated == 10 && box.count == 10, "core C11 semantics check failed")
+    print("T1-F05-01:PASS")
+    return 0
+}

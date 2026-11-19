@@ -1,0 +1,11 @@
+fn unsound_math(a: int, b: int) -> int {
+    require(a > 0, "a must be greater than zero")
+    require(b > 0, "b must be greater than zero")
+    let total = a + b
+    ensure(total > 1000, "falsely claiming total is always greater than 1000")
+    return total
+}
+
+fn main() {
+    print("This should never compile under PCC verification")
+}

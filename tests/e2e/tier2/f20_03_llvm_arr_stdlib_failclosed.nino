@@ -1,0 +1,8 @@
+import "std/crypto.nino"
+
+fn main() -> int {
+    let vals = [10, 20, 30]
+    let digest = sha256("v1.2.0")
+    print(digest)
+    return vals[0] - 10
+}

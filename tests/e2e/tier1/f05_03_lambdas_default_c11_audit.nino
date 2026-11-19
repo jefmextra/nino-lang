@@ -1,0 +1,9 @@
+fn main() -> int {
+    let nums: [int] = [1, 2, 3, 4, 5, 6]
+    let evens = arr_filter(nums, |x| x % 2 == 0)
+    let scaled = arr_map(evens, |x| x * 10)
+    let sum = arr_reduce(scaled, 0, |acc, x| acc + x)
+    require(len(evens) == 3 && sum == 120, "default C11 lambda result must be 120")
+    print("T1-F05-03:PASS")
+    return 0
+}

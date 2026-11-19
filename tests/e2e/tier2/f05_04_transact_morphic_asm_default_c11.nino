@@ -1,0 +1,17 @@
+fn main() -> int {
+    morphic mut bal = 500
+    bal = bal + 150
+    mut state = 10
+    transact {
+        state = 99
+        abort "force_rollback"
+    } compensate {
+        state = 25
+    }
+    inline_asm {
+        state = state + 5
+    }
+    require(bal == 650 && state == 30, "default mode transact/morphic/inline_asm check failed")
+    print("T2-F05-04:PASS")
+    return 0
+}

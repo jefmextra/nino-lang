@@ -1,0 +1,7 @@
+fn xdp_filter(ctx: any) -> i32 {
+    let ether_type = 2048
+    if ether_type == 2048 {
+        return 1
+    }
+    return 2
+}

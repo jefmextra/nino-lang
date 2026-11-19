@@ -1,0 +1,13 @@
+fn check_inline(a: int) -> int {
+    if a > 0 { ensure(false, "bypassed") }
+    return a
+}
+
+fn check_ws(a: int) -> int {
+    if a > 0 { ensure (false, "space_bypass") }
+    return a
+}
+
+fn main() -> int {
+    return check_inline(1) + check_ws(1)
+}

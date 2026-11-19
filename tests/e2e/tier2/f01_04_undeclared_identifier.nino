@@ -1,0 +1,5 @@
+fn main() -> int {
+    let r: int = 10 + missing_var * 2
+    print(r)
+    return 0
+}

@@ -1,0 +1,33 @@
+import "std/option.nino"
+import "std/result.nino"
+
+struct Point {
+    x: int,
+    y: int
+}
+
+fn main() -> int {
+    let oi = some_i64(42)
+    let on = none_i64()
+    require(option_i64_is_some(oi) && option_i64_unwrap(oi) == 42, "OptionI64 some check")
+    require(option_i64_is_none(on) && option_i64_unwrap_or(on, 99) == 99, "OptionI64 none check")
+
+    let os = some_str("alpha")
+    require(option_str_is_some(os) && option_str_unwrap(os) == "alpha", "OptionStr check")
+
+    let ri = ok_i64(100)
+    let re = err_i64("bad_i64")
+    require(result_i64_is_ok(ri) && result_i64_unwrap(ri) == 100, "ResultI64 ok check")
+    require(result_i64_is_err(re) && result_i64_unwrap_err(re) == "bad_i64", "ResultI64 err check")
+
+    let rs = ok_str("ok_val")
+    let rf = err_str("fail_val")
+    require(result_str_is_ok(rs) && result_str_unwrap(rs) == "ok_val", "ResultStr ok check")
+    require(result_str_is_err(rf) && result_str_unwrap_err(rf) == "fail_val", "ResultStr err check")
+
+    let opt_pt: Option<Point> = (Option_Point){ .is_some = true, .val = Point { x: 7, y: 9 } }
+    require(Option_Point_is_some(opt_pt) && Option_Point_unwrap(opt_pt).x == 7, "Option<Point> check")
+
+    print("T1-F03-01:PASS")
+    return 0
+}

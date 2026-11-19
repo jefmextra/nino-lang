@@ -1,0 +1,13 @@
+fn broken_for_in() -> int {
+    let a = [1, 2, 3]
+    mut s = 0
+    for v in a {
+        s = s + v
+    }
+    ensure(s == 0, "for-in loop mutates accumulator s")
+    return s
+}
+
+fn main() -> int {
+    return broken_for_in()
+}

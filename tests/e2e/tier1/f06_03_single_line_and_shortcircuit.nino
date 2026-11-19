@@ -1,0 +1,15 @@
+fn single_ok(a: int) -> int { require(a > 10, "pre") ensure(a > 5, "post") return a }
+
+fn guarded_div(a: int, b: int) -> int {
+    require(b == 0 || (a / b) > 0, "short circuit guards div by zero")
+    ensure(b >= 0 || (a / b) <= 0 || true, "verified")
+    return 0
+}
+
+fn main() -> int {
+    let r = single_ok(12)
+    let neg_sqrt = fp_sqrt(-1.0)
+    require(r == 12 && is_nan(neg_sqrt), "single line proof and IEEE-754 sqrt NaN parity must hold")
+    print("T1-F06-03:PASS")
+    return 0
+}

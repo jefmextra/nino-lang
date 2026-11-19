@@ -1,0 +1,11 @@
+fn verified_margin(rev: int, cost: int) -> int {
+    require(rev >= 100 && rev <= 1000000 && cost >= 0 && cost <= rev, "valid amounts")
+    let margin = rev - cost
+    ensure(margin >= 0 && margin <= 1000000, "non-negative bounded margin")
+    return margin
+}
+
+fn main() -> int {
+    print("T1-F07-01:" + int_to_str(verified_margin(500, 120)))
+    return 0
+}

@@ -1,0 +1,9 @@
+fn leak_int() -> int {
+    sealed code = 98765
+    let copy = code + 1
+    return copy
+}
+
+fn main() -> int {
+    return leak_int()
+}

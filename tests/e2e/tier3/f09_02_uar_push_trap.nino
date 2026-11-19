@@ -1,0 +1,12 @@
+fn hidden_rb(m: int) {
+    arena_rollback(m)
+}
+
+fn main() -> int {
+    let m = arena_mark()
+    mut arr: [int] = [10]
+    hidden_rb(m)
+    arr = push(arr, 99)
+    print(arr[0])
+    return 0
+}

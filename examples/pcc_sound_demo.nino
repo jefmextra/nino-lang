@@ -1,0 +1,15 @@
+fn compute_bounded_sum(a: int, b: int) -> int {
+    require(a > 0 && a <= 1000000000, "a must be within bounded positive range")
+    require(b > 0 && b <= 1000000000, "b must be within bounded positive range")
+    let total = a + b
+    ensure(total > 0 && total <= 2000000000, "sum must be strictly positive and overflow-free")
+    return total
+}
+
+fn main() {
+    print("Testing Nino Proof-Carrying Code (PCC) Self-Verifying Binary Engine...")
+    let x = 45
+    let y = 55
+    let sum = compute_bounded_sum(x, y)
+    print("Sound computation verified! Computed sum: " + sum)
+}

@@ -1,0 +1,154 @@
+fn str_index_of(haystack: string, needle: string, start_idx: int) -> int {
+    let hlen = len(haystack)
+    let nlen = len(needle)
+    if nlen == 0 {
+        return start_idx
+    }
+    if start_idx < 0 || start_idx + nlen > hlen {
+        return -1
+    }
+    mut i = start_idx
+    while i + nlen <= hlen {
+        if slice(haystack, i, nlen) == needle {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn str_contains(haystack: string, needle: string) -> bool {
+    return str_index_of(haystack, needle, 0) != -1
+}
+
+fn str_starts_with(s: string, prefix: string) -> bool {
+    let plen = len(prefix)
+    if len(s) < plen {
+        return false
+    }
+    return slice(s, 0, plen) == prefix
+}
+
+fn str_ends_with(s: string, suffix: string) -> bool {
+    let slen = len(s)
+    let xlen = len(suffix)
+    if slen < xlen {
+        return false
+    }
+    return slice(s, slen - xlen, xlen) == suffix
+}
+
+fn str_trim(s: string) -> string {
+    let slen = len(s)
+    mut start = 0
+    while start < slen {
+        let ch = char_at(s, start)
+        if ch == " " || ch == "\t" || ch == "\r" || ch == "\n" {
+            start = start + 1
+        } else {
+            break
+        }
+    }
+    mut end = slen
+    while end > start {
+        let ch = char_at(s, end - 1)
+        if ch == " " || ch == "\t" || ch == "\r" || ch == "\n" {
+            end = end - 1
+        } else {
+            break
+        }
+    }
+    return slice(s, start, end - start)
+}
+
+fn str_replace(s: string, old_sub: string, new_sub: string) -> string {
+    let olen = len(old_sub)
+    let slen = len(s)
+    if olen == 0 || slen == 0 {
+        return s
+    }
+    if str_index_of(s, old_sub, 0) == -1 {
+        return s
+    }
+    mut res = ""
+    mut hi_chunk = ""
+    mut mid_chunk = ""
+    mut sub_chunk = ""
+    mut cnt = 0
+    mut pos = 0
+    while pos < slen {
+        let idx = str_index_of(s, old_sub, pos)
+        if idx == -1 {
+            sub_chunk = sub_chunk + slice(s, pos, slen - pos)
+            pos = slen
+        } else {
+            if idx > pos {
+                sub_chunk = sub_chunk + slice(s, pos, idx - pos)
+            }
+            sub_chunk = sub_chunk + new_sub
+            pos = idx + olen
+            cnt = cnt + 1
+            if cnt % 16 == 0 {
+                mid_chunk = mid_chunk + sub_chunk
+                sub_chunk = ""
+                if cnt % 256 == 0 {
+                    hi_chunk = hi_chunk + mid_chunk
+                    mid_chunk = ""
+                    if cnt % 4096 == 0 {
+                        res = res + hi_chunk
+                        hi_chunk = ""
+                    }
+                }
+            }
+        }
+    }
+    return res + hi_chunk + mid_chunk + sub_chunk
+}
+
+fn str_to_upper(s: string) -> string {
+    let slen = len(s)
+    mut out = ""
+    for i in 0..slen {
+        let code_num = char_code_at(s, i)
+        if code_num >= 97 && code_num <= 122 {
+            out = out + char_from_code(code_num - 32)
+        } else {
+            out = out + char_at(s, i)
+        }
+    }
+    return out
+}
+
+fn str_to_lower(s: string) -> string {
+    let slen = len(s)
+    mut out = ""
+    for i in 0..slen {
+        let code_num = char_code_at(s, i)
+        if code_num >= 65 && code_num <= 90 {
+            out = out + char_from_code(code_num + 32)
+        } else {
+            out = out + char_at(s, i)
+        }
+    }
+    return out
+}
+
+fn str_repeat(s: string, count: int) -> string {
+    if count <= 0 {
+        return ""
+    }
+    mut out = ""
+    for i in 0..count {
+        out = out + s
+    }
+    return out
+}
+
+fn str_pad_left(s: string, target_len: int, pad_ch: string) -> string {
+    let slen = len(s)
+    if slen >= target_len || len(pad_ch) == 0 {
+        return s
+    }
+    let needed = target_len - slen
+    return str_repeat(slice(pad_ch, 0, 1), needed) + s
+}

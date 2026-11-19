@@ -1,0 +1,13 @@
+fn main() -> int {
+    let base: [int] = [1, 2, 3, 4, 5, 6]
+    let evens = arr_filter(base, |x| x % 2 == 0)
+    let doubled = arr_map(evens, |x| x * 2)
+    let sum_direct = arr_reduce(doubled, 0, |acc, x| acc + x)
+
+    let piped_sum = base |> arr_filter(|x| x > 2) |> arr_map(|x| x + 1) |> arr_reduce(0, |acc, x| acc + x)
+
+    require(len(evens) == 3 && sum_direct == 24, "standalone lambda pipeline must sum to 24")
+    require(piped_sum == 22, "piped lambda pipeline must sum to 22")
+    print("T1-F02-04:PASS")
+    return 0
+}

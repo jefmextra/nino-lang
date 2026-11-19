@@ -1,0 +1,29 @@
+fn crypto_u64_to_hex(val: i64) -> string {
+    let h = "0123456789abcdef"
+    mut out = ""
+    mut k = 15
+    while k >= 0 {
+        let nib = (val >> (k * 4)) & 15
+        out = out + char_at(h, nib)
+        k = k - 1
+    }
+    return out
+}
+
+fn create_secure_token(prefix: string) -> string {
+    require(len(prefix) > 0, "Prefix cannot be empty")
+    let r1 = csprng_u64()
+    let r2 = csprng_u64()
+    let raw_hex = crypto_u64_to_hex(r1) + crypto_u64_to_hex(r2)
+    sealed entropy_seed = raw_hex
+    let plain_seed = unseal(entropy_seed)
+    let token = prefix + "_" + plain_seed
+    seal_destroy(entropy_seed)
+    ensure(len(token) > len(prefix), "Generated token must be valid")
+    return token
+}
+
+fn mask_runtime_value(mut raw_val: i32) -> i32 {
+    morphic mut secure_val = raw_val
+    return secure_val
+}

@@ -1,0 +1,985 @@
+{
+  "milestone": "E2E-M5",
+  "description": "Regression suite verifying SMT soundness, LLVM IR lowering, #no_std freestanding C, Morphic/Sealed/Region safety, DB/SQL/Redis hardening, and Stdlib fixes",
+  "tests": [
+    {
+      "id": "T2-F06-04",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_04_uninvariant_loop_ensure.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-05",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_05_branch_require_scope.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-06",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_06_single_line_fn_ensure.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F06-03",
+      "tier": 1,
+      "feature": "F6",
+      "mode": "verify-proof",
+      "source": "tier1/f06_03_single_line_and_shortcircuit.nino",
+      "flags": [
+        "--strict-c11",
+        "--proof",
+        "--keep-c"
+      ],
+      "tamper_test": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "UNSAT Verified"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F06-04",
+      "tier": 1,
+      "feature": "F6",
+      "mode": "build-run",
+      "source": "tier1/f06_03_single_line_and_shortcircuit.nino",
+      "flags": [
+        "--strict-c11",
+        "--proof"
+      ],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F06-03:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F20-02",
+      "tier": 1,
+      "feature": "F20",
+      "mode": "build-run",
+      "source": "tier1/f20_02_llvm_branch_and_vec_gate.nino",
+      "flags": [],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F20-02:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T2-F07-02",
+      "tier": 2,
+      "feature": "F7",
+      "mode": "compile-fail",
+      "source": "tier2/f07_02_native_proof_failclosed.nino",
+      "flags": [
+        "--backend=native",
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F22-01",
+      "tier": 1,
+      "feature": "F22",
+      "mode": "build-run",
+      "source": "tier1/f22_01_nostd_freestanding.nino",
+      "flags": [],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F22-01:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F08-02",
+      "tier": 1,
+      "feature": "F8",
+      "mode": "c11-audit",
+      "source": "tier1/f08_02_morphic_ram_cloak.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F08-02:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F10-02",
+      "tier": 1,
+      "feature": "F10",
+      "mode": "c11-audit",
+      "source": "tier1/f10_02_transact_deep_and_stack_safe.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F10-02:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T3-F09-04",
+      "tier": 3,
+      "feature": "F9",
+      "mode": "build-run",
+      "source": "tier3/f09_04_bce_pop_mutation_trap.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "expect_nonzero": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F09-02",
+      "tier": 1,
+      "feature": "F9",
+      "mode": "c11-audit",
+      "source": "tier1/f09_02_arena_deep_marks.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F09-02:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T3-F09-05",
+      "tier": 3,
+      "feature": "F9",
+      "mode": "build-run",
+      "source": "tier3/f09_05_arena_uaf_trap.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "expect_nonzero": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F03-06",
+      "tier": 2,
+      "feature": "F3",
+      "mode": "compile-fail",
+      "source": "tier2/f03_01_immut_struct_field.nino",
+      "flags": [],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "require_frontend_reject": true,
+      "expect_any_stderr_or_stdout": [
+        "E0384",
+        "type_error"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F03-07",
+      "tier": 2,
+      "feature": "F3",
+      "mode": "compile-fail",
+      "source": "tier2/f03_02_immut_let_member.nino",
+      "flags": [],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "require_frontend_reject": true,
+      "expect_any_stderr_or_stdout": [
+        "E0384",
+        "type_error"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F08-02",
+      "tier": 2,
+      "feature": "F8",
+      "mode": "compile-fail",
+      "source": "tier2/f08_02_sealed_cross_fn_leak.nino",
+      "flags": [],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "require_frontend_reject": true,
+      "expect_any_stderr_or_stdout": [
+        "E0042",
+        "security_error"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F11-02",
+      "tier": 1,
+      "feature": "F11",
+      "mode": "c11-audit",
+      "source": "tier1/f11_02_db_redis_sql_json_hardening.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F11-02:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F12-03",
+      "tier": 1,
+      "feature": "F12",
+      "mode": "c11-audit",
+      "source": "tier1/f12_03_stdlib_jwt_json_wasm_channel_actor.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F12-03:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T2-F06-07",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_07_inline_if_ensure_bypass.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "expect_any_stderr_or_stdout": [
+        "Refutation",
+        "Breached",
+        "SAT",
+        "FAILED"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-08",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "command-check",
+      "source": "tier2/f06_07_inline_if_ensure_bypass.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "prove",
+            "{staged}"
+          ],
+          "expect_nonzero": true,
+          "expect_any_stderr_or_stdout": [
+            "SAT",
+            "Counterexample",
+            "FALSIFIED",
+            "FAILED"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F06-05",
+      "tier": 1,
+      "feature": "F6",
+      "mode": "build-run",
+      "source": "tier1/f06_05_if_else_phi_join.nino",
+      "flags": [
+        "--strict-c11",
+        "--proof"
+      ],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F06-05:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F20-03",
+      "tier": 1,
+      "feature": "F20",
+      "mode": "command-check",
+      "source": "tier1/f20_03_llvm_ast_lowering.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "llvm",
+            "{staged}",
+            "-o",
+            "{tmp_dir}/f20_03.ll"
+          ],
+          "expect_exit": 0
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T3-F09-06",
+      "tier": 3,
+      "feature": "F9",
+      "mode": "build-run",
+      "source": "tier3/f09_06_bce_alias_mutation_trap.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "expect_nonzero": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F08-03",
+      "tier": 2,
+      "feature": "F8",
+      "mode": "compile-fail",
+      "source": "tier2/f08_03_sealed_return_string.nino",
+      "flags": [],
+      "require_frontend_reject": true,
+      "expect_stderr_or_stdout": [
+        "E0042"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F08-04",
+      "tier": 2,
+      "feature": "F8",
+      "mode": "compile-fail",
+      "source": "tier2/f08_04_sealed_return_int.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "require_frontend_reject": true,
+      "expect_stderr_or_stdout": [
+        "E0042"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F08-05",
+      "tier": 2,
+      "feature": "F8",
+      "mode": "command-check",
+      "source": "tier2/f08_05_sealed_hash_consistent.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "check",
+            "{staged}"
+          ],
+          "expect_nonzero": true,
+          "expect_stderr_or_stdout": [
+            "E0042"
+          ]
+        },
+        {
+          "cmd": "ninoc",
+          "args": [
+            "build",
+            "{staged}",
+            "-o",
+            "{tmp_dir}/f08_05.out"
+          ],
+          "expect_nonzero": true,
+          "expect_stderr_or_stdout": [
+            "E0042"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F03-08",
+      "tier": 2,
+      "feature": "F3",
+      "mode": "compile-fail",
+      "source": "tier2/f03_08_immut_array_index.nino",
+      "flags": [],
+      "require_frontend_reject": true,
+      "expect_stderr_or_stdout": [
+        "E0384"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F11-03",
+      "tier": 1,
+      "feature": "F11",
+      "mode": "c11-audit",
+      "source": "tier1/f11_03_sqlite_delete_where.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F11-03:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T2-F16-01",
+      "tier": 2,
+      "feature": "F16",
+      "mode": "compile-fail",
+      "source": "tier2/f16_01_capability_deny.nino",
+      "flags": [],
+      "require_frontend_reject": true,
+      "expect_stderr_or_stdout": [
+        "E0043"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F22-02",
+      "tier": 1,
+      "feature": "F22",
+      "mode": "build-run",
+      "source": "tier1/f22_02_nostd_string_literal.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F22-02:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F10-03",
+      "tier": 1,
+      "feature": "F10",
+      "mode": "c11-audit",
+      "source": "tier1/f10_03_transact_arr_uaf_safety.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F10-03:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T1-F12-04",
+      "tier": 1,
+      "feature": "F12",
+      "mode": "c11-audit",
+      "source": "tier1/f12_04_jwt_alg_none_and_claims.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F12-04:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T1-F15-01",
+      "tier": 1,
+      "feature": "F15",
+      "mode": "c11-audit",
+      "source": "tier1/f15_01_stdlib_compiler_multi_stmt.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F15-01:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T2-F15-02",
+      "tier": 2,
+      "feature": "F15",
+      "mode": "command-check",
+      "source": "tier2/f15_02_lint_inline_recursion.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "lint",
+            "--strict",
+            "{staged}"
+          ],
+          "expect_nonzero": true,
+          "expect_stderr_or_stdout": [
+            "JPL-2 VIOLATION",
+            "JPL-1 VIOLATION"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F20-01",
+      "tier": 2,
+      "feature": "F20",
+      "mode": "command-check",
+      "source": "tier2/f20_01_llvm_dict_failclosed.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "llvm",
+            "{staged}",
+            "-o",
+            "{tmp_dir}/f20_01_fail.ll"
+          ],
+          "expect_nonzero": true,
+          "expect_stderr_or_stdout": [
+            "Nino LLVM Subset Error",
+            "--backend=llvm"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F20-02",
+      "tier": 2,
+      "feature": "F20",
+      "mode": "command-check",
+      "source": "tier2/f20_02_llvm_struct_stdlib_failclosed.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "llvm",
+            "{staged}",
+            "-o",
+            "{tmp_dir}/f20_02_fail.ll"
+          ],
+          "expect_nonzero": true,
+          "expect_stderr_or_stdout": [
+            "Nino LLVM Subset Error",
+            "--backend=llvm"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F20-03",
+      "tier": 2,
+      "feature": "F20",
+      "mode": "command-check",
+      "source": "tier2/f20_03_llvm_arr_stdlib_failclosed.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "llvm",
+            "{staged}",
+            "-o",
+            "{tmp_dir}/f20_03_fail.ll"
+          ],
+          "expect_nonzero": true,
+          "expect_stderr_or_stdout": [
+            "Nino LLVM Subset Error",
+            "--backend=llvm"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F01-07",
+      "tier": 1,
+      "feature": "F1",
+      "mode": "c11-audit",
+      "source": "tier1/f01_07_comments_all_stages.nino",
+      "flags": [
+        "--strict-c11",
+        "--proof"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F01-07:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F01-08",
+      "tier": 1,
+      "feature": "F1",
+      "mode": "command-check",
+      "source": "tier1/f01_07_comments_all_stages.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "check",
+            "{staged}"
+          ],
+          "expect_exit": 0
+        },
+        {
+          "cmd": "ninoc",
+          "args": [
+            "prove",
+            "{staged}"
+          ],
+          "expect_exit": 0
+        },
+        {
+          "cmd": "ninoc",
+          "args": [
+            "fmt",
+            "{staged}",
+            "--check"
+          ],
+          "expect_exit": 0
+        },
+        {
+          "cmd": "ninoc",
+          "args": [
+            "lint",
+            "--strict",
+            "{staged}"
+          ],
+          "expect_exit": 0
+        },
+        {
+          "cmd": "ninoc",
+          "args": [
+            "llvm",
+            "{staged}",
+            "-o",
+            "{tmp_dir}/f01_07.ll"
+          ],
+          "expect_exit": 0
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F06-08",
+      "tier": 1,
+      "feature": "F6",
+      "mode": "build-run",
+      "source": "tier1/f06_08_z3_outside_cwd.nino",
+      "flags": [],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F06-08:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T2-F06-09",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_08_loop_inv_early_exit.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-10",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_09_match_local_mut_unsound.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "expect_any_stderr_or_stdout": [
+        "SAT",
+        "Refutation",
+        "Breached",
+        "FAILED"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-11",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_10_if_shadow_let_unsound.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "expect_any_stderr_or_stdout": [
+        "SAT",
+        "Refutation",
+        "Breached",
+        "FAILED"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F06-09",
+      "tier": 1,
+      "feature": "F6",
+      "mode": "verify-proof",
+      "source": "tier1/f06_09_block_and_for_shadow_valid.nino",
+      "flags": [
+        "--strict-c11",
+        "--proof",
+        "--keep-c"
+      ],
+      "tamper_test": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "UNSAT Verified"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F09-05",
+      "tier": 2,
+      "feature": "F9",
+      "mode": "build-run",
+      "source": "tier2/f09_05_bce_shadow_index_trap.nino",
+      "flags": [],
+      "expect_nonzero": true,
+      "expect_stderr_or_stdout": [
+        "Bounds Violation CWE-125/787"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F20-04",
+      "tier": 1,
+      "feature": "F20",
+      "mode": "build-run",
+      "source": "tier1/f20_04_llvm_shadow_sc_negstep.nino",
+      "flags": [],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F20-04:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T2-F19-01",
+      "tier": 2,
+      "feature": "F19",
+      "mode": "build-run",
+      "source": "tier2/f19_01_native_intmin_div_trap.nino",
+      "flags": [
+        "--backend=native"
+      ],
+      "expect_nonzero": true,
+      "expect_stderr_or_stdout": [
+        "Division"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F19-02",
+      "tier": 1,
+      "feature": "F19",
+      "mode": "build-run",
+      "source": "tier1/f19_02_native_neg_step_for.nino",
+      "flags": [
+        "--backend=native"
+      ],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F19-02:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F15-03",
+      "tier": 2,
+      "feature": "F15",
+      "mode": "build-run",
+      "source": "tier2/f15_03_http_crlf_reject.nino",
+      "flags": [],
+      "expect_nonzero": true,
+      "expect_stderr_or_stdout": [
+        "cannot contain CR or LF"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-12",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_11_array_pop_push_unsound.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "expect_any_stderr_or_stdout": [
+        "SAT",
+        "Refutation",
+        "Breached",
+        "FAILED"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-13",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_12_for_in_loop_unsound.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "expect_any_stderr_or_stdout": [
+        "SAT",
+        "Refutation",
+        "Breached",
+        "FAILED"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-14",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "compile-fail",
+      "source": "tier2/f06_13_array_alias_failclosed.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "expect_any_stderr_or_stdout": [
+        "UNSUPPORTED",
+        "unsupported",
+        "FAILED"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F06-10",
+      "tier": 1,
+      "feature": "F6",
+      "mode": "verify-proof",
+      "source": "tier1/f06_10_array_pop_push_sound.nino",
+      "flags": [
+        "--strict-c11",
+        "--proof",
+        "--keep-c"
+      ],
+      "tamper_test": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "UNSAT Verified"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F03-09",
+      "tier": 2,
+      "feature": "F3",
+      "mode": "compile-fail",
+      "source": "tier2/f03_09_immut_let_to_mut_param.nino",
+      "flags": [],
+      "require_frontend_reject": true,
+      "expect_stderr_or_stdout": [
+        "E0384"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F03-10",
+      "tier": 2,
+      "feature": "F3",
+      "mode": "compile-fail",
+      "source": "tier2/f03_10_nonmut_param_index_write.nino",
+      "flags": [],
+      "require_frontend_reject": true,
+      "expect_stderr_or_stdout": [
+        "E0384"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F20-05",
+      "tier": 1,
+      "feature": "F20",
+      "mode": "build-run",
+      "source": "tier1/f20_05_llvm_for_continue_div0_exit.nino",
+      "flags": [],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F20-05:PASS"
+      ],
+      "timeout_sec": 45
+    },
+    {
+      "id": "T1-F12-05",
+      "tier": 1,
+      "feature": "F12",
+      "mode": "c11-audit",
+      "source": "tier1/f12_05_wasm_leb_json_u_diag_ebpf.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F12-05:PASS"
+      ],
+      "timeout_sec": 45
+    }
+  ]
+}

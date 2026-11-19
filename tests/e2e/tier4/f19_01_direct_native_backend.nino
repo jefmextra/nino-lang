@@ -1,0 +1,47 @@
+import "std/str.nino"
+
+fn main() -> int {
+    let base_tmp = len(get_env("TEMP")) > 0 ? get_env("TEMP") : "/tmp"
+    let pid_s = int_to_str(nino_get_pid())
+    let ir_tag = char_from_code(123) + "r" + char_from_code(125)
+    let nat_code = "fn fib(n: int) -> int {\n    if n <= 1 {\n        return n\n    }\n    return fib(n - 1) + fib(n - 2)\n}\n\nfn main() -> int {\n    mut s = 0\n    for i in 0..6 {\n        if i == 2 { continue }\n        if i == 5 { break }\n        s = s + i\n    }\n    let r = fib(8) + s + 13\n    require(r == 42)\n    print(\"nat=" + ir_tag + "\")\n    return r\n}\n"
+    if len(get_env("OS")) > 0 {
+        let ws = str_replace(base_tmp, "/", "\\") + "\\nino_e2e_nat_" + pid_s
+        let src = ws + "\\nat.nino"
+        let exe = ws + "\\nat.exe"
+        let e64 = ws + "\\nat_x64.elf"
+        let a64 = ws + "\\nat_arm64.elf"
+        let asm = ws + "\\nat.s"
+        exec_cmd("mkdir \"" + ws + "\" >nul 2>&1")
+        write_file(src, nat_code)
+        let rc_b = exec_cmd("ninoc.exe build \"" + src + "\" -o \"" + exe + "\" --backend=native >nul")
+        let no_c = (file_exists(src + ".c") == false)
+        let rc_run = exec_cmd("\"" + exe + "\" >nul")
+        let rc_elf = exec_cmd("ninoc.exe build \"" + src + "\" -o \"" + e64 + "\" --backend=native-elf >nul")
+        let rc_arm = exec_cmd("ninoc.exe build \"" + src + "\" -o \"" + a64 + "\" --backend=native-arm64 >nul")
+        let rc_asm = exec_cmd("ninoc.exe asm \"" + src + "\" --arch=aarch64 -o \"" + asm + "\" >nul")
+        let has_arm_hdr = file_exists(a64) && file_exists(e64) && file_exists(asm)
+        exec_cmd("rmdir /s /q \"" + ws + "\" >nul 2>&1")
+        require(rc_b == 0 && no_c && rc_run == 42 && rc_elf == 0 && rc_arm == 0 && rc_asm == 0 && has_arm_hdr, "Windows direct native backend check failed")
+    } else {
+        let ws = base_tmp + "/nino_e2e_nat_" + pid_s
+        let src = ws + "/nat.nino"
+        let bin = ws + "/nat.out"
+        let pe = ws + "/nat.exe"
+        let a64 = ws + "/nat_arm64.elf"
+        let asm = ws + "/nat.s"
+        exec_cmd("mkdir -p \"" + ws + "\"")
+        write_file(src, nat_code)
+        let rc_b = exec_cmd("./ninoc build \"" + src + "\" -o \"" + bin + "\" --backend=native >/dev/null")
+        let no_c = (file_exists(src + ".c") == false)
+        let rc_run = exec_cmd("\"" + bin + "\" >/dev/null")
+        let rc_pe = exec_cmd("./ninoc build \"" + src + "\" -o \"" + pe + "\" --backend=native-pe >/dev/null")
+        let rc_arm = exec_cmd("./ninoc build \"" + src + "\" -o \"" + a64 + "\" --backend=native-arm64 >/dev/null")
+        let rc_asm = exec_cmd("./ninoc asm \"" + src + "\" --arch=aarch64 -o \"" + asm + "\" >/dev/null")
+        let has_files = file_exists(pe) && file_exists(a64) && file_exists(asm)
+        exec_cmd("rm -rf \"" + ws + "\"")
+        require(rc_b == 0 && no_c && rc_run == 42 && rc_pe == 0 && rc_arm == 0 && rc_asm == 0 && has_files, "POSIX direct native backend check failed")
+    }
+    print("T4-F19-01:PASS")
+    return 0
+}

@@ -1,0 +1,31 @@
+fn compute_compound(base: int, multiplier: int, offset: int) -> int {
+    let result = (base * multiplier) +
+        offset
+    return result
+}
+
+fn main() {
+    print("Testing Nino Multi-Line Statement Support...")
+
+    let total = 100 +
+        200 +
+        300 +
+        400
+    print("Multi-line sum: " + total)
+
+    let val = compute_compound(
+        10,
+        5,
+        25
+    )
+    print("Multi-line function invocation: " + val)
+
+    let is_verified = (total == 1000) &&
+        (val == 75)
+
+    if is_verified {
+        print("Multi-line expression evaluation: [SUCCESS]")
+    } else {
+        print("Multi-line evaluation: [FAIL]")
+    }
+}

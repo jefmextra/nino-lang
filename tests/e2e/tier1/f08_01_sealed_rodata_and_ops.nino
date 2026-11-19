@@ -1,0 +1,19 @@
+fn main() -> int {
+    sealed let api_tok = "E2E_SEALED_SECRET_ZERO_LEAK_TOKEN_9876"
+    sealed let bal: int = 85000
+    mut lk = 0
+    if seal_is_locked(api_tok) {
+        lk = 1
+    }
+    let plain = unseal(api_tok)
+    mut arith_ok = 0
+    if bal + 500 == 85500 {
+        arith_ok = 1
+    }
+    let u_bal = unseal(bal)
+    let h_plain = sha256(plain)
+    require(len(plain) == 38 && h_plain == "2deb70c5781851556c231b2ce68f3487b32b71762bea27dcdd1b852dbb783abd" && arith_ok == 1 && u_bal == 85000 && lk == 1, "sealed verification failed")
+    seal_destroy(api_tok)
+    print("T1-F08-01:PASS")
+    return 0
+}

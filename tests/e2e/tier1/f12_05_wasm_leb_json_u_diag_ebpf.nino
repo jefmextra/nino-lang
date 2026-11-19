@@ -1,0 +1,62 @@
+import "std/wasm.nino"
+import "std/json.nino"
+import "std/str.nino"
+
+fn resolve_ninoc_cmd() -> string {
+    if is_windows() {
+        if file_exists("ninoc.exe") { return "ninoc.exe" }
+        return "ninoc.exe"
+    }
+    if file_exists("./ninoc") { return "./ninoc" }
+    return "ninoc"
+}
+
+fn main() -> int {
+    mut inst = wasm_spawn("mal", 1, 100)
+    let bad_mem = wasm_load_bytes(inst, [
+        0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+        0x05,0x0d,0x01,0x00,
+        0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x7f
+    ])
+    require(bad_mem == false, "WASM overlong LEB128 in memory section must return false cleanly")
+
+    let bad_exp = wasm_load_bytes(inst, [
+        0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+        0x07,0x0d,0x01,
+        0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x7f,
+        0x00,0x00
+    ])
+    require(bad_exp == false, "WASM overlong LEB128 in export section must return false cleanly")
+
+    let j = "{\"msg\":\"Hello\\u0021 \\u0041\"}"
+    require(json_get_string(j, "msg") == "Hello! A", "JSON \\uXXXX escape must decode ASCII codepoints")
+
+    let db = db_sqlite_open(":memory:")
+    db_sqlite_exec(db, "CREATE TABLE IF NOT EXISTS keep_rows (id INTEGER, name TEXT)")
+    db_exec(db, "INSERT INTO keep_rows VALUES (?, ?)", ["1", "alice"])
+    db_sqlite_exec(db, "CREATE TABLE IF NOT EXISTS keep_rows (id INTEGER, name TEXT)")
+    let jq = db_query_json(db, "SELECT id, name FROM keep_rows")
+    require(str_contains(jq, "alice"), "CREATE TABLE IF NOT EXISTS must preserve existing rows")
+    db_close(db)
+
+    let pid = ebpf_prog_create()
+    ebpf_emit(pid, 0xb7, 0, 0, 0, 0)
+    ebpf_emit(pid, 0x15, 0, 0, -1, 0)
+    ebpf_emit(pid, 0x95, 0, 0, 0, 0)
+    require(ebpf_exec_packet(pid, "aa") == 1, "eBPF step budget exhaustion must return fail-closed 1")
+
+    let ninoc = resolve_ninoc_cmd()
+    let lb = "{"
+    let rb = "}"
+    let d_src = "temp_e2e_f12_05_diag.nino"
+    let d_out = "temp_e2e_f12_05_diag.txt"
+    write_file(d_src, "import \"std/env.nino\"\nfn main() -> int " + lb + "\n    let z = unknown_fn_xyz(1)\n    return z\n" + rb + "\n")
+    let rc_d = exec_cmd(ninoc + " check " + d_src + " > " + d_out + " 2>&1")
+    let d_txt = read_file(d_out)
+    file_delete(d_src)
+    file_delete(d_out)
+    require(rc_d != 0 && str_contains(d_txt, "unknown_fn_xyz(1)"), "Diagnostic snippet with imports must show calling file line")
+
+    print("T1-F12-05:PASS")
+    return 0
+}

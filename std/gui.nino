@@ -1,0 +1,52 @@
+struct GuiWindow {
+    raw_handle: any,
+    title: string,
+    width: i32,
+    height: i32
+}
+
+fn gui_create_window(title: string, width: i32, height: i32) -> GuiWindow {
+    let handle = create_window(title, width, height)
+    return GuiWindow {
+        raw_handle: handle,
+        title: title,
+        width: width,
+        height: height
+    }
+}
+
+fn gui_draw_rect(window: GuiWindow, x: i32, y: i32, width: i32, height: i32, color_hex: string) {
+    window_draw_rect(window.raw_handle, x, y, width, height, color_hex)
+}
+
+fn gui_draw_round_rect(window: GuiWindow, x: i32, y: i32, width: i32, height: i32, radius: i32, color_hex: string, outline_hex: string) {
+    window_draw_round_rect(window.raw_handle, x, y, width, height, radius, color_hex, outline_hex)
+}
+
+fn gui_draw_text(window: GuiWindow, text: string, x: i32, y: i32, font_size: i32, color_hex: string) {
+    window_draw_text(window.raw_handle, text, x, y, font_size, color_hex)
+}
+
+fn gui_refresh(window: GuiWindow) {
+    window_update(window.raw_handle)
+}
+
+fn gui_is_active(window: GuiWindow) -> bool {
+    return window_is_open(window.raw_handle)
+}
+
+fn gui_wait_close(window: GuiWindow) {
+    window_wait_close(window.raw_handle)
+}
+
+fn gui_clear(window: GuiWindow) {
+    window_clear(window.raw_handle)
+}
+
+fn gui_poll_click(window: GuiWindow) -> [i64] {
+    return window_poll_click(window.raw_handle)
+}
+
+fn gui_sleep(window: GuiWindow, ms: i32) {
+    window_sleep(window.raw_handle, ms)
+}

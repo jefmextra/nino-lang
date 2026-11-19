@@ -1,0 +1,17 @@
+fn match_mut_loop(k: int) -> int {
+    mut y = 10
+    mut i = 0
+    while i < 2 {
+        match k {
+            1 => { y = 99 },
+            _ => {}
+        }
+        i = i + 1
+    }
+    ensure(y == 10, "unsound match local mut inside loop")
+    return y
+}
+
+fn main() -> int {
+    return match_mut_loop(1)
+}

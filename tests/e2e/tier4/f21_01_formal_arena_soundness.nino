@@ -1,0 +1,33 @@
+import "std/str.nino"
+
+fn main() -> int {
+    require(file_exists("formal/arena_soundness.smt2"), "Missing formal/arena_soundness.smt2")
+    let base_tmp = len(get_env("TEMP")) > 0 ? get_env("TEMP") : "/tmp"
+    let pid_s = int_to_str(nino_get_pid())
+    mut zout = ""
+    mut rc = 1
+    if len(get_env("OS")) > 0 {
+        let out_p = str_replace(base_tmp, "/", "\\") + "\\nino_formal_z3_" + pid_s + ".out"
+        rc = exec_cmd("tools\\z3.exe -T:15 -t:5000 -smt2 formal\\arena_soundness.smt2 > \"" + out_p + "\" 2>&1")
+        zout = read_file(out_p)
+        exec_cmd("del /f /q \"" + out_p + "\" >nul 2>&1")
+    } else {
+        let out_p = base_tmp + "/nino_formal_z3_" + pid_s + ".out"
+        rc = exec_cmd("z3 -T:15 -t:5000 -smt2 formal/arena_soundness.smt2 > \"" + out_p + "\" 2>&1")
+        zout = read_file(out_p)
+        exec_cmd("rm -f \"" + out_p + "\"")
+    }
+    require(rc == 0, "Z3 formal proof exited non-zero")
+    let lines = str_split(str_replace(zout, "\r\n", "\n"), "\n")
+    mut unsat_cnt = 0
+    for i in 0..len(lines) {
+        let ln = str_trim(lines[i])
+        if len(ln) > 0 {
+            require(ln == "unsat", "Expected unsat in formal arena proof, got: " + ln)
+            unsat_cnt = unsat_cnt + 1
+        }
+    }
+    require(unsat_cnt == 5, "Expected 5 formal unsat theorems in formal/arena_soundness.smt2")
+    print("T4-F21-01:PASS")
+    return 0
+}

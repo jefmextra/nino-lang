@@ -1,0 +1,377 @@
+name: NinoLang Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Dry-run bundle version label (for testing packaging without creating a public tag)'
+        required: false
+        default: 'v1.0.1-dryrun'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-package:
+    name: Verify & Package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve and validate release tag
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.release_tag }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$REF_NAME"
+          fi
+          case "$TAG" in
+            *[!A-Za-z0-9._-]*|"")
+              echo "Invalid release tag: $TAG" >&2
+              exit 1
+              ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Install toolchain dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential z3 clang lld
+          gcc --version
+          z3 --version
+          clang --version
+
+      - name: Verify or install toolchain dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) {
+              foreach ($dir in @("C:\msys64\mingw64\bin", "C:\msys64\ucrt64\bin")) {
+                  if (Test-Path (Join-Path $dir "gcc.exe")) {
+                      $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                      $env:PATH = "$dir;$env:PATH"
+                      $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+                      break
+                  }
+              }
+          }
+          if (-not $gcc) {
+              choco install mingw -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+              $mingwDir = Split-Path -Parent (Get-Command gcc -ErrorAction Stop).Source
+              $mingwDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          $clang = Get-Command clang -ErrorAction SilentlyContinue
+          $lld = Get-Command lld -ErrorAction SilentlyContinue
+          if (-not $clang -or -not $lld) {
+              if (Test-Path "C:\Program Files\LLVM\bin\clang.exe") {
+                  "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                  $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+                  $clang = Get-Command clang -ErrorAction SilentlyContinue
+                  $lld = Get-Command lld -ErrorAction SilentlyContinue
+              }
+          }
+          if (-not $clang -or -not $lld) {
+              choco install llvm -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+              if (Test-Path "C:\Program Files\LLVM\bin") {
+                  "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                  $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+              }
+          }
+          if (-not (Test-Path "tools\z3.exe") -or -not (Test-Path "tools\libz3.dll")) {
+              Write-Error "Missing tools/z3.exe or tools/libz3.dll"
+              exit 1
+          }
+          & .\tools\z3.exe --version
+          gcc --version
+          clang --version
+
+      - name: Run 3-stage deterministic bootstrap (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rm -f stage1 stage2 stage3 ninoc nino
+          gcc -O3 -s -fomit-frame-pointer -frandom-seed=42 -std=c11 bootstrap/ninoc_seed.c -o stage1 -lm -lpthread -ldl
+          ./stage1 build compiler/ninoc.nino -o stage2
+          ./stage2 build compiler/ninoc.nino -o stage3
+          sha2=$(sha256sum stage2 | awk '{print $1}')
+          sha3=$(sha256sum stage3 | awk '{print $1}')
+          echo "stage2=$sha2 stage3=$sha3"
+          test "$sha2" = "$sha3"
+          cp -f stage3 ninoc
+          cp -f stage3 nino
+          chmod +x ninoc nino
+          rm -f stage1 stage2 stage3 compiler/ninoc.nino.c
+          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+          echo "NINOC_SHA256=$sha3" >> "$GITHUB_ENV"
+
+      - name: Run 3-stage deterministic bootstrap (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Path stage1.exe, stage2.exe, stage3.exe, ninoc.exe, nino.exe, compiler\ninoc.nino.c -Force -ErrorAction SilentlyContinue
+          gcc -O3 -s -fomit-frame-pointer -frandom-seed=42 "-Wl,--no-insert-timestamp" -std=c11 bootstrap/ninoc_seed.c -o stage1.exe -lm -lgdi32 -luser32 -lbcrypt -lws2_32
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\stage1.exe build compiler/ninoc.nino -o stage2.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\stage2.exe build compiler/ninoc.nino -o stage3.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sha2 = (Get-FileHash -Path stage2.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sha3 = (Get-FileHash -Path stage3.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "stage2=$sha2 stage3=$sha3"
+          if ($sha2 -ne $sha3) {
+              Write-Error "3-stage bootstrap divergence detected"
+              exit 1
+          }
+          Copy-Item -Path stage3.exe -Destination ninoc.exe -Force
+          Copy-Item -Path stage3.exe -Destination nino.exe -Force
+          Remove-Item -Path stage1.exe, stage2.exe, stage3.exe, compiler\ninoc.nino.c -Force -ErrorAction SilentlyContinue
+          Join-Path $env:GITHUB_WORKSPACE "tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:GITHUB_WORKSPACE | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "NINOC_SHA256=$sha3" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify Z3 formal metatheory, compliance, and test suites (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          zout="$(z3 -T:15 -t:5000 -smt2 formal/arena_soundness.smt2 2>&1)"
+          printf '%s\n' "$zout"
+          test "$(printf '%s\n' "$zout" | grep -cx 'unsat')" -eq 5
+          ./ninoc run tools/compliance_check.nino
+          ./ninoc test
+          bash tests/e2e/run_e2e.sh --strict-compliance
+
+      - name: Verify Z3 formal metatheory, compliance, and test suites (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zout = & .\tools\z3.exe -T:15 -t:5000 -smt2 formal\arena_soundness.smt2 2>&1 | Out-String
+          Write-Host $zout
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $unsats = ($zout -split "\r?\n" | Where-Object { $_.Trim() -eq "unsat" }).Count
+          if ($unsats -ne 5) {
+              Write-Error "Expected 5 formal unsat theorems, got $unsats"
+              exit 1
+          }
+          & .\ninoc.exe run tools/compliance_check.nino
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\ninoc.exe test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell -ExecutionPolicy Bypass -File tests/e2e/run_e2e.ps1 -StrictCompliance
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package Linux release tarball
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          mkdir -p release_out stage_pkg/tools
+          cp -a ninoc nino stage_pkg/
+          git ls-files -z \
+            README.md LICENSE SPECIFICATION.md GOVERNANCE.md ROADMAP.md CONTRIBUTING.md CHALLENGE.md nino.pkg nino.lock \
+            bootstrap/ compiler/ runtime/ std/ formal/ rfcs/ examples/ pilots/ \
+            | xargs -0 cp --parents -a -t stage_pkg/
+          cp -a tools/*.nino stage_pkg/tools/
+          tar -czf "release_out/nino-${RELEASE_TAG}-linux-x64.tar.gz" -C stage_pkg .
+          pkg_sha="$(sha256sum "release_out/nino-${RELEASE_TAG}-linux-x64.tar.gz" | awk '{print $1}')"
+          printf "linux_bin_sha256=%s\nlinux_pkg_sha256=%s\n" "$NINOC_SHA256" "$pkg_sha" > release_out/meta-linux.txt
+          cat release_out/meta-linux.txt
+
+      - name: Package Windows release zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          Add-Type -AssemblyName System.IO.Compression
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          New-Item -ItemType Directory -Force -Path release_out | Out-Null
+          $outZip = "release_out/nino-$env:RELEASE_TAG-windows-x64.zip"
+          $zipFull = Join-Path (Get-Location).Path $outZip
+          if (Test-Path $zipFull) { Remove-Item $zipFull -Force }
+          $tracked = & git ls-files `
+            CHALLENGE.md CONTRIBUTING.md GOVERNANCE.md LICENSE README.md ROADMAP.md SPECIFICATION.md `
+            nino.lock nino.pkg `
+            bootstrap/ compiler/ runtime/ std/ formal/ rfcs/ examples/ pilots/ `
+            tools/compliance_check.nino tools/fuzzer.nino tools/iso_conformance.nino `
+            tools/test_runner.nino tools/libz3.dll tools/z3.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $entries = [System.Collections.Generic.List[string]]::new()
+          $entries.Add("ninoc.exe")
+          foreach ($item in $tracked) {
+              if ($item) { $entries.Add($item) }
+          }
+          $zip = [System.IO.Compression.ZipFile]::Open($zipFull, [System.IO.Compression.ZipArchiveMode]::Create)
+          try {
+              foreach ($rel in ($entries | Sort-Object -Unique)) {
+                  $srcFull = Join-Path (Get-Location).Path ($rel -replace '/', '\')
+                  if (-not (Test-Path $srcFull)) { throw "Missing release entry: $rel" }
+                  [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $srcFull, $rel, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+              }
+          } finally {
+              $zip.Dispose()
+          }
+          $pkgSha = (Get-FileHash -Path $outZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "windows_bin_sha256=$env:NINOC_SHA256`nwindows_pkg_sha256=$pkgSha`n" | Set-Content -Path release_out/meta-windows.txt -Encoding ascii
+          Get-Content release_out/meta-windows.txt
+
+      - name: Upload packaged release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ matrix.os }}
+          path: release_out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    name: Attest Checksums & Publish GitHub Release
+    needs: verify-and-package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Linux bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-ubuntu-latest
+          path: dist_release
+
+      - name: Download Windows bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-windows-latest
+          path: dist_release
+
+      - name: Generate SHA256SUMS, optional Ed25519 signature, and release notes
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.release_tag }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_SIGNING_KEY: ${{ secrets.NINO_RELEASE_ED25519_PEM }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$REF_NAME"
+          fi
+          case "$TAG" in
+            *[!A-Za-z0-9._-]*|"")
+              echo "Invalid release tag: $TAG" >&2
+              exit 1
+              ;;
+          esac
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+
+          cd dist_release
+          linux_bin_sha="$(grep '^linux_bin_sha256=' meta-linux.txt | cut -d= -f2)"
+          windows_bin_sha="$(grep '^windows_bin_sha256=' meta-windows.txt | cut -d= -f2)"
+          rm -f meta-linux.txt meta-windows.txt
+
+          sha256sum "nino-${TAG}-linux-x64.tar.gz" "nino-${TAG}-windows-x64.zip" > SHA256SUMS
+          cat SHA256SUMS
+
+          signed_note="Checksums are provided in SHA256SUMS (no detached Ed25519 release signing key was configured for this workflow run)."
+          if [ -n "${RELEASE_SIGNING_KEY:-}" ]; then
+            printf '%s\n' "$RELEASE_SIGNING_KEY" > /tmp/release_ed25519.pem
+            chmod 600 /tmp/release_ed25519.pem
+            if openssl pkeyutl -sign -rawin -inkey /tmp/release_ed25519.pem -in SHA256SUMS -out SHA256SUMS.sig \
+              && openssl pkey -in /tmp/release_ed25519.pem -pubout -out release-pubkey.pem; then
+              signed_note="A detached Ed25519 signature over SHA256SUMS is attached as SHA256SUMS.sig with release-pubkey.pem."
+            else
+              echo "Warning: failed to sign SHA256SUMS with NINO_RELEASE_ED25519_PEM" >&2
+              rm -f SHA256SUMS.sig release-pubkey.pem
+            fi
+            rm -f /tmp/release_ed25519.pem
+          fi
+
+          export RELEASE_TAG_VAL="$TAG"
+          export LINUX_BIN_SHA="$linux_bin_sha"
+          export WINDOWS_BIN_SHA="$windows_bin_sha"
+          export SIGNED_NOTE="$signed_note"
+          python3 - <<'PYEOF'
+          import os, textwrap
+          notes = textwrap.dedent(f"""\
+          ## Nino {os.environ['RELEASE_TAG_VAL']}
+
+          Linux (x86_64) and Windows (x64) release bundles built from `bootstrap/ninoc_seed.c` and verified in CI prior to packaging.
+
+          ### Included Changes
+          - **3-Stage Deterministic Bootstrap**: Converged bit-for-bit across Stage-2 and Stage-3 on both Linux and Windows.
+          - **Formal Metatheory Proofs**: Checked 5 SMT-LIB2 memory-epoch and vectorization invariants in `formal/arena_soundness.smt2` with Z3 (`5/5 unsat`).
+          - **Open RFCs & Clause Traceability**: Added `rfcs/RFC-0001` through `RFC-0003` alongside Clause 10 traceability links in `SPECIFICATION.md`.
+          - **Compiler & Runtime Updates**: Modularized self-hosted compiler (`compiler/*.nino`), standard `//` and `/* ... */` comment support, fail-closed direct LLVM IR subset lowering (`ninoc llvm`), AST+Phi-Join SMT verification (`QF_BV`/`QF_BVFP`), hardened BCE/sealed/transact safety, HMAC-SHA256 / Ed25519 PCC verification, and direct PE/ELF native code generation.
+          - **Test Coverage**: Passed all 29 `ninoc test` suites, `tools/compliance_check.nino`, and the 145-test Tier 1-4 E2E matrix on Ubuntu and Windows runners.
+
+          ### Verified Stage-3 Compiler SHA-256
+          - Linux x86_64 (`ninoc`): `{os.environ['LINUX_BIN_SHA']}`
+          - Windows x64 (`ninoc.exe`): `{os.environ['WINDOWS_BIN_SHA']}`
+
+          ### Verification & Current Scope
+          - Verify downloads: `sha256sum -c SHA256SUMS`
+          - Re-run formal arena proofs locally: `z3 -T:15 -t:5000 -smt2 formal/arena_soundness.smt2`
+          - {os.environ['SIGNED_NOTE']}
+          - **Current scope**: Nino is an evolving engineering prototype (TRL 7). Core compiler passes and CI suites pass in our test environment, while exploratory standard library modules (such as lattice KEM, ZK, and MPC helpers) remain under review and should undergo independent evaluation before safety-critical use.
+          """)
+          with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
+              f.write(notes)
+          PYEOF
+
+      - name: Upload dry-run release bundle (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dryrun-${{ env.RELEASE_TAG }}
+          path: dist_release/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish GitHub Release (tag push only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist_release
+          assets=(
+            "nino-${RELEASE_TAG}-linux-x64.tar.gz"
+            "nino-${RELEASE_TAG}-windows-x64.zip"
+            "SHA256SUMS"
+          )
+          if [ -f SHA256SUMS.sig ] && [ -f release-pubkey.pem ]; then
+            assets+=("SHA256SUMS.sig" "release-pubkey.pem")
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --title "Nino ${RELEASE_TAG}" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --title "Nino ${RELEASE_TAG}" \
+              --notes-file RELEASE_NOTES.md
+          fi

@@ -1,0 +1,67 @@
+fn run_test_unit(source_file: string) -> int {
+    print("  [TEST] Running: " + source_file)
+    mut bin = "./ninoc"
+    if is_windows() {
+        bin = "ninoc.exe"
+    }
+    let cmd = bin + " run " + source_file
+    let code = exec_cmd(cmd)
+    if code == 0 {
+        print("    -> [PASS]")
+        return 0
+    }
+    print("    -> [FAIL] (" + source_file + " exited with code " + int_to_str(code) + ")")
+    return 1
+}
+
+fn main() -> int {
+    print("================================================================================")
+    print("[Nino Sovereign Pure Native Test Suite Runner]")
+    print("Self-Hosted Test Verification (Zero Python Dependencies)")
+    print("")
+
+    mut failures = 0
+    failures = failures + run_test_unit("main.nino")
+    failures = failures + run_test_unit("examples/safe_calc.nino")
+    failures = failures + run_test_unit("examples/math3d_demo.nino")
+    failures = failures + run_test_unit("examples/systems_io_demo.nino")
+    failures = failures + run_test_unit("boot/build_kernel.nino")
+    file_delete("boot/build_kernel.nino.c")
+    file_delete("boot/build_kernel.exe")
+    file_delete("boot/build_kernel")
+    failures = failures + run_test_unit("examples/high_assurance_demo.nino")
+    failures = failures + run_test_unit("examples/runtime_verification.nino")
+    failures = failures + run_test_unit("examples/control_flow_demo.nino")
+    failures = failures + run_test_unit("examples/tensor_channel_mesh_demo.nino")
+    failures = failures + run_test_unit("examples/ffi_test.nino")
+    failures = failures + run_test_unit("examples/native_test.nino")
+    failures = failures + run_test_unit("examples/leak_test.nino")
+    failures = failures + run_test_unit("examples/transactions_enclave_demo.nino")
+    failures = failures + run_test_unit("examples/xdp_ddos_filter.nino")
+    failures = failures + run_test_unit("examples/bootstrap_test.nino")
+    failures = failures + run_test_unit("examples/generics_demo.nino")
+    failures = failures + run_test_unit("examples/hardened_audit_test.nino")
+    failures = failures + run_test_unit("examples/multiline_demo.nino")
+    failures = failures + run_test_unit("examples/daemon_arena_demo.nino")
+    failures = failures + run_test_unit("examples/pcc_sound_demo.nino")
+    failures = failures + run_test_unit("examples/http_microservice.nino")
+    failures = failures + run_test_unit("examples/lsp_protocol_test.nino")
+    failures = failures + run_test_unit("examples/toolchain_verification.nino")
+    failures = failures + run_test_unit("pilots/ledger_microservice.nino")
+    failures = failures + run_test_unit("pilots/iot_edge_telemetry.nino")
+    failures = failures + run_test_unit("pilots/xdp_packet_firewall.nino")
+    failures = failures + run_test_unit("tools/compliance_check.nino")
+    failures = failures + run_test_unit("tools/fuzzer.nino")
+    failures = failures + run_test_unit("tools/iso_conformance.nino")
+
+    print("")
+    print("--------------------------------------------------------------------------------")
+    if failures == 0 {
+        print("[ALL TEST SUITES PASSED SUCCESSFULLY]")
+        print("================================================================================")
+        return 0
+    }
+    print("[TEST FAILURES DETECTED]")
+    print("================================================================================")
+    return 1
+}

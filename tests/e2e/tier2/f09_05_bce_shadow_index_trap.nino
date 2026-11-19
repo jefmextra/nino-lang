@@ -1,0 +1,10 @@
+fn main() -> int {
+    let a = [10, 20, 30]
+    mut s = 0
+    for i in 0..len(a) {
+        let i = 999999
+        s = s + a[i]
+    }
+    print(s)
+    return 0
+}

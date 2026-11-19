@@ -1,0 +1,18 @@
+fn alloc_cosmic_safe_buffer(size: i32) -> any {
+    require(size > 0, "Buffer size must be greater than zero")
+    let buf = alloc_parity_buffer(size)
+    return buf
+}
+
+fn alloc_anti_tamper_enclave(size: i32, name: string) -> any {
+    require(size > 0, "Enclave size must be greater than zero")
+    let enc = alloc_guarded_memory(size, name)
+    return enc
+}
+
+fn get_cpu_benchmark_cycles() -> i64 {
+    inline_asm {
+        rdtsc
+    }
+    return cpu_get_cycles()
+}

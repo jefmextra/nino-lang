@@ -1,0 +1,20 @@
+import "std/str.nino"
+
+fn nest_marks(depth: int) -> int {
+    if depth <= 0 {
+        return 0
+    }
+    let m = arena_mark()
+    let s = "d_" + int_to_str(depth)
+    require(len(s) >= 3, "arena string must allocate inside deep mark")
+    let sub = nest_marks(depth - 1)
+    arena_rollback(m)
+    return sub + 1
+}
+
+fn main() -> int {
+    let total = nest_marks(150)
+    require(total == 150, "arena_mark/rollback must support depth > 64 dynamically")
+    print("T1-F09-02:PASS")
+    return 0
+}

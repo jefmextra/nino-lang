@@ -1,0 +1,127 @@
+{
+  "milestone": "E2E-M3",
+  "description": "Tier 1-3 E2E tests for Features F8-F10 (Sealed obfuscation, Arena epoch UAR, C11 stdatomic)",
+  "tests": [
+    {
+      "id": "T1-F08-01",
+      "tier": 1,
+      "feature": "F8",
+      "mode": "binary-inspect",
+      "source": "tier1/f08_01_sealed_rodata_and_ops.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "rodata_forbid": [
+        "E2E_SEALED_SECRET_ZERO_LEAK_TOKEN_9876"
+      ],
+      "run_binary": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F08-01:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F08-01",
+      "tier": 2,
+      "feature": "F8",
+      "mode": "compile-fail",
+      "source": "tier2/f08_01_sealed_leak_blocked.nino",
+      "flags": [],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "require_frontend_reject": true,
+      "expect_any_stderr_or_stdout": [
+        "E0042",
+        "security_error"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F09-01",
+      "tier": 1,
+      "feature": "F9",
+      "mode": "c11-audit",
+      "source": "tier1/f09_01_arena_promotion_survival.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "c11_forbid": [
+        "__auto_type",
+        "__typeof__",
+        "({",
+        "__asm__",
+        "__uint128_t",
+        "__sync_"
+      ],
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F09-01:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T3-F09-01",
+      "tier": 3,
+      "feature": "F9",
+      "mode": "build-run",
+      "source": "tier3/f09_01_uar_index_trap.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "expect_nonzero": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T3-F09-02",
+      "tier": 3,
+      "feature": "F9",
+      "mode": "build-run",
+      "source": "tier3/f09_02_uar_push_trap.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "expect_nonzero": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T3-F09-03",
+      "tier": 3,
+      "feature": "F9",
+      "mode": "build-run",
+      "source": "tier3/f09_03_uar_bce_loop_trap.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "expect_nonzero": true,
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F10-01",
+      "tier": 1,
+      "feature": "F10",
+      "mode": "c11-audit",
+      "source": "tier1/f10_01_c11_threads_crypto.nino",
+      "flags": [
+        "--strict-c11"
+      ],
+      "c11_scan_scope": "all",
+      "c11_forbid": [
+        "__auto_type",
+        "__typeof__",
+        "({",
+        "__asm__",
+        "__uint128_t",
+        "__sync_"
+      ],
+      "pedantic_c11_compile": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T1-F10-01:PASS"
+      ],
+      "timeout_sec": 30
+    }
+  ]
+}

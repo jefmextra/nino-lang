@@ -1,0 +1,9 @@
+fn takes_int(n: int) -> int {
+    return n + 1
+}
+
+fn main() -> int {
+    let out: int = "hello" |> takes_int()
+    print(out)
+    return 0
+}

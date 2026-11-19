@@ -1,0 +1,125 @@
+struct DpBudgetTracker {
+    max_budget: f64,
+    mut spent: f64,
+    mut queries: i64
+}
+
+fn dp_budget_init(max_budget: f64) -> DpBudgetTracker {
+    require(max_budget > 0.0, "Max privacy budget must be positive")
+    return DpBudgetTracker {
+        max_budget: max_budget,
+        spent: 0.0,
+        queries: 0
+    }
+}
+
+fn dp_consume_budget(mut tracker: DpBudgetTracker, cost: f64) -> bool {
+    require(cost >= 0.0, "Privacy query cost cannot be negative")
+    if tracker.spent + cost > tracker.max_budget {
+        return false
+    }
+    tracker.spent = tracker.spent + cost
+    tracker.queries = tracker.queries + 1
+    return true
+}
+
+fn dp_laplace_noise(scale: f64) -> f64 {
+    let bits53 = csprng_u64() & 9007199254740991
+    let u01 = (bits53 + 0.5) / 9007199254740992.0
+    let u = u01 - 0.5
+    mut sgn = 1.0
+    mut abs_u = u
+    if u < 0.0 {
+        sgn = -1.0
+        abs_u = -u
+    }
+    let term = 1.0 - (2.0 * abs_u)
+    let exact_ln = math_ln(term)
+    let noise = -scale * sgn * exact_ln
+    return noise
+}
+
+fn dp_mean(dataset: [f64], epsilon: f64, sensitivity: f64) -> f64 {
+    require(epsilon > 0.0, "Privacy parameter epsilon must be strictly positive")
+    require(sensitivity > 0.0, "Global sensitivity must be positive")
+    let n = len(dataset)
+    require(n > 0, "Dataset cannot be empty")
+
+    mut sum = 0.0
+    for i in 0..n {
+        let val = dataset[i]
+        mut clamped = val
+        if val > sensitivity {
+            clamped = sensitivity
+        } else if val < -sensitivity {
+            clamped = -sensitivity
+        }
+        sum = sum + clamped
+    }
+
+    let true_mean = sum / n
+    let noise_scale = sensitivity / (n * epsilon)
+    let noise = dp_laplace_noise(noise_scale)
+    let private_mean = true_mean + noise
+    return private_mean
+}
+
+fn dp_sum(dataset: [f64], epsilon: f64, sensitivity: f64) -> f64 {
+    require(epsilon > 0.0, "Privacy parameter epsilon must be strictly positive")
+    let n = len(dataset)
+    mut sum = 0.0
+    for i in 0..n {
+        sum = sum + dataset[i]
+    }
+    let noise_scale = sensitivity / epsilon
+    let noise = dp_laplace_noise(noise_scale)
+    return sum + noise
+}
+
+fn dp_round_i64(x: f64) -> i64 {
+    mut neg = false
+    mut v = x
+    if v < 0.0 {
+        neg = true
+        v = -v
+    }
+    v = v + 0.5
+    mut p2: [i64] = []
+    mut pv: [f64] = []
+    mut ci: i64 = 1
+    mut cf = 1.0
+    for k in 0..30 {
+        p2 = push(p2, ci)
+        pv = push(pv, cf)
+        ci = ci * 2
+        cf = cf * 2.0
+    }
+    mut res: i64 = 0
+    mut bi = 29
+    while bi >= 0 {
+        if v >= pv[bi] {
+            v = v - pv[bi]
+            res = res + p2[bi]
+        }
+        bi = bi - 1
+    }
+    if neg {
+        return -res
+    }
+    return res
+}
+
+fn dp_count(count: i64, epsilon: f64) -> i64 {
+    require(epsilon > 0.0, "Privacy parameter epsilon must be strictly positive")
+    let noise = dp_laplace_noise(1.0 / epsilon)
+    let noisy_count = count + dp_round_i64(noise)
+    if noisy_count < 0 {
+        return 0
+    }
+    return noisy_count
+}
+
+fn dp_verify_budget(used_epsilon: f64, max_budget: f64) -> bool {
+    ensure(used_epsilon <= max_budget, "Differential privacy budget exceeded allowed threshold")
+    return used_epsilon <= max_budget
+}

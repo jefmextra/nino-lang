@@ -1,0 +1,137 @@
+fn csv_row_count(csv_text: string) -> int {
+    let clen = len(csv_text)
+    if clen == 0 {
+        return 0
+    }
+    mut rows = 0
+    mut pos = 0
+    while pos < clen {
+        mut lend = pos
+        while lend < clen && char_at(csv_text, lend) != "\n" {
+            lend = lend + 1
+        }
+        let line_len = lend - pos
+        if line_len > 0 {
+            if line_len == 1 && char_at(csv_text, pos) == "\r" {
+                pos = lend + 1
+            } else {
+                rows = rows + 1
+                pos = lend + 1
+            }
+        } else {
+            pos = lend + 1
+        }
+    }
+    return rows
+}
+
+fn csv_get_row_line(csv_text: string, target_row: int) -> string {
+    let clen = len(csv_text)
+    mut cur_row = 0
+    mut pos = 0
+    while pos < clen {
+        mut lend = pos
+        while lend < clen && char_at(csv_text, lend) != "\n" {
+            lend = lend + 1
+        }
+        mut rlen = lend - pos
+        if rlen > 0 && char_at(csv_text, pos + rlen - 1) == "\r" {
+            rlen = rlen - 1
+        }
+        if rlen > 0 {
+            if cur_row == target_row {
+                return slice(csv_text, pos, rlen)
+            }
+            cur_row = cur_row + 1
+        }
+        pos = lend + 1
+    }
+    return ""
+}
+
+fn csv_col_count(csv_text: string, row_idx: int) -> int {
+    let line = csv_get_row_line(csv_text, row_idx)
+    let llen = len(line)
+    if llen == 0 {
+        return 0
+    }
+    mut cols = 1
+    mut in_q = false
+    for i in 0..llen {
+        let ch = char_at(line, i)
+        if ch == "\"" {
+            in_q = !in_q
+        } else if ch == "," && in_q == false {
+            cols = cols + 1
+        }
+    }
+    return cols
+}
+
+fn csv_get_cell(csv_text: string, row_idx: int, col_idx: int) -> string {
+    let line = csv_get_row_line(csv_text, row_idx)
+    let llen = len(line)
+    if llen == 0 {
+        return ""
+    }
+    mut cur_col = 0
+    mut in_q = false
+    mut cell = ""
+    mut i = 0
+    while i < llen {
+        let ch = char_at(line, i)
+        if ch == "\"" {
+            if in_q && i + 1 < llen && char_at(line, i + 1) == "\"" {
+                if cur_col == col_idx {
+                    cell = cell + "\""
+                }
+                i = i + 2
+            } else {
+                in_q = !in_q
+                i = i + 1
+            }
+        } else if ch == "," && in_q == false {
+            if cur_col == col_idx {
+                return cell
+            }
+            cur_col = cur_col + 1
+            cell = ""
+            i = i + 1
+        } else {
+            if cur_col == col_idx {
+                cell = cell + ch
+            }
+            i = i + 1
+        }
+    }
+    if cur_col == col_idx {
+        return cell
+    }
+    return ""
+}
+
+fn csv_escape_cell(val: string) -> string {
+    let vlen = len(val)
+    mut needs_q = false
+    mut out = ""
+    for i in 0..vlen {
+        let ch = char_at(val, i)
+        if ch == "," || ch == "\n" || ch == "\r" {
+            needs_q = true
+            out = out + ch
+        } else if ch == "\"" {
+            needs_q = true
+            out = out + "\"\""
+        } else {
+            out = out + ch
+        }
+    }
+    if needs_q {
+        return "\"" + out + "\""
+    }
+    return out
+}
+
+fn csv_build_row3(c1: string, c2: string, c3: string) -> string {
+    return csv_escape_cell(c1) + "," + csv_escape_cell(c2) + "," + csv_escape_cell(c3)
+}

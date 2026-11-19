@@ -1,0 +1,24 @@
+fn zkp_commit_value(secret: i64) -> dict {
+    let cm = zk_commit(secret)
+    return cm
+}
+
+fn zkp_prove_range(secret: i64, op: string, threshold: i64) -> dict {
+    let proof = zk_prove_condition(secret, op, threshold)
+    return proof
+}
+
+fn zkp_verify_range(proof: dict) -> bool {
+    let is_valid = zk_verify_proof(proof)
+    return is_valid
+}
+
+fn zkp_prove_set_membership(secret: i64, allowed_set: list) -> dict {
+    let proof = zk_prove_membership(secret, allowed_set)
+    return proof
+}
+
+fn zkp_verify_set_membership(proof: dict, allowed_set: list) -> bool {
+    let is_valid = zk_verify_membership(proof, allowed_set)
+    return is_valid
+}

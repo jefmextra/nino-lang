@@ -1,0 +1,9 @@
+fn main() -> int {
+    mut d = { "seed": "ok" }
+    let m = arena_mark()
+    let tmp = "dict_val_" + int_to_str(5)
+    d["k"] = tmp
+    arena_rollback(m)
+    print(d["k"])
+    return 0
+}

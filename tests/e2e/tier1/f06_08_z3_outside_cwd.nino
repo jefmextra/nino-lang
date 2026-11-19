@@ -1,0 +1,32 @@
+fn main() -> int {
+    let lb = "{"
+    let rb = "}"
+    let out_dir = is_windows() ? (len(get_env("TEMP")) > 0 ? get_env("TEMP") : "C:\\Windows\\Temp") : "/tmp"
+    let p = out_dir + "/nino_e2e_f06_08_cwd.nino"
+    let bin_p = is_windows() ? (out_dir + "\\nino_e2e_f06_08_cwd.exe") : (out_dir + "/nino_e2e_f06_08_cwd")
+    let src = "fn check_ok(x: int) -> int " + lb + "\n    require(x > 0 && x < 1000, \"pos\")\n    let res = x + 1\n    ensure(res > 1, \"inc\")\n    return res\n" + rb + "\nfn main() -> int " + lb + "\n    print(check_ok(5))\n    return 0\n" + rb + "\n"
+    write_file(p, src)
+    if is_windows() {
+        let cmd1 = "cmd /c \"for %I in (ninoc.exe) do (cd /d \"" + out_dir + "\" && \"%~fI\" prove \"" + p + "\" >nul 2>&1)\""
+        require(exec_cmd(cmd1) == 0, "prove outside repo root failed on Windows")
+        let cmd2 = "cmd /c \"for %I in (ninoc.exe) do (set \"NINO_HOME=%CD%\" && cd /d \"" + out_dir + "\" && \"%~fI\" build \"" + p + "\" --proof -o \"" + bin_p + "\" >nul 2>&1)\""
+        require(exec_cmd(cmd2) == 0, "build --proof outside repo root failed on Windows")
+        let cmd3 = "cmd /c \"set \"NINO_HOME=%CD%\" && cd /d \"" + out_dir + "\" && \"" + bin_p + "\" --verify-proof --reverify-z3 >nul 2>&1\""
+        require(exec_cmd(cmd3) == 0, "--verify-proof --reverify-z3 with NINO_HOME failed on Windows")
+        file_delete(bin_p)
+        file_delete(out_dir + "\\nino_e2e_f06_08_cwd.nino.c")
+        file_delete(out_dir + "\\nino_e2e_f06_08_cwd.nino.smt2")
+    } else {
+        let cmd1 = "sh -c 'NINO_HOME=\"$(pwd)\"; export NINO_HOME; NINOC=\"$NINO_HOME/ninoc\"; (cd \"" + out_dir + "\" && \"$NINOC\" prove \"" + p + "\" >/dev/null 2>&1)'"
+        require(exec_cmd(cmd1) == 0, "prove outside repo root failed on POSIX")
+        let cmd2 = "sh -c 'NINO_HOME=\"$(pwd)\"; export NINO_HOME; NINOC=\"$NINO_HOME/ninoc\"; (cd \"" + out_dir + "\" && \"$NINOC\" build \"" + p + "\" --proof -o \"" + bin_p + "\" >/dev/null 2>&1 && \"" + bin_p + "\" --verify-proof --reverify-z3 >/dev/null 2>&1)'"
+        require(exec_cmd(cmd2) == 0, "--verify-proof --reverify-z3 outside repo root failed on POSIX")
+        file_delete(bin_p)
+        file_delete(out_dir + "/nino_e2e_f06_08_cwd.nino.c")
+        file_delete(out_dir + "/nino_e2e_f06_08_cwd.nino.smt2")
+    }
+    file_delete(p)
+    file_delete(p + ".smt2")
+    print("T1-F06-08:PASS")
+    return 0
+}

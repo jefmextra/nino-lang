@@ -1,0 +1,10 @@
+import "std/str.nino"
+
+fn main() -> int {
+    morphic mut secret_num = 13374299
+    require(secret_num == 13374299, "morphic read must recover exact initialized value")
+    secret_num = secret_num + 1
+    require(secret_num == 13374300, "morphic write must update split shares")
+    print("T1-F08-02:PASS")
+    return 0
+}

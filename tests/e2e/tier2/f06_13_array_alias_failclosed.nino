@@ -1,0 +1,11 @@
+fn aliased_slice_mutate() -> int {
+    mut a = [1, 2]
+    mut b = a
+    b[0] = 99
+    ensure(a[0] == 1, "aliased slice assignment must fail closed")
+    return a[0]
+}
+
+fn main() -> int {
+    return aliased_slice_mutate()
+}

@@ -1,0 +1,25 @@
+import "std/str.nino"
+
+fn main() -> int {
+    let db = db_sqlite_open(":memory:")
+    db_exec(db, "CREATE TABLE users (id INTEGER, name TEXT)", [])
+    db_exec(db, "CREATE TABLE audit_log (id INTEGER, action TEXT)", [])
+    db_exec(db, "INSERT INTO users VALUES (?, ?)", ["1", "alice"])
+    db_exec(db, "INSERT INTO users VALUES (?, ?)", ["2", "bob"])
+    db_exec(db, "INSERT INTO audit_log VALUES (?, ?)", ["10", "keep_me"])
+
+    db_exec(db, "DELETE FROM users WHERE name = ?", ["alice"])
+
+    let urows = db_query(db, "SELECT id, name FROM users", [])
+    let arows = db_query(db, "SELECT id, action FROM audit_log", [])
+    require(len(urows) == 1, "DELETE FROM users WHERE name=? must remove only matching row")
+    require(str_contains(urows[0], "bob") && !str_contains(urows[0], "alice"), "bob must remain after deleting alice")
+    require(len(arows) == 1 && str_contains(arows[0], "keep_me"), "DELETE FROM users must never drop unrelated tables")
+
+    let j = db_query_json(db, "SELECT id, name FROM users WHERE id = 2")
+    require(str_contains(j, "bob") && !str_contains(j, "alice"), "db_query_json column WHERE must filter cleanly")
+    db_close(db)
+
+    print("T1-F11-03:PASS")
+    return 0
+}

@@ -1,0 +1,25 @@
+fn wrap_box(v: int, present: bool) -> Option<Box<int>> {
+    let b: Box<int> = (Box_int){ .val = v }
+    if present {
+        return (Option_Box_int){ .is_some = true, .val = b }
+    }
+    return (Option_Box_int){ .is_some = false, .val = (Box_int){ .val = 0 } }
+}
+
+fn unwrap_box_or(opt: Option<Box<int>>, fallback: int) -> int {
+    if opt.is_some {
+        return opt.val.val
+    }
+    return fallback
+}
+
+fn main() -> int {
+    let a = wrap_box(42, true)
+    let b = wrap_box(10, false)
+    require(a.is_some == true && a.val.val == 42, "Option<Box<int>> present check")
+    require(b.is_some == false, "Option<Box<int>> none check")
+    require(unwrap_box_or(a, -1) == 42, "unwrap_box_or some check")
+    require(unwrap_box_or(b, -1) == -1, "unwrap_box_or none check")
+    print("T1-F03-02:PASS")
+    return 0
+}

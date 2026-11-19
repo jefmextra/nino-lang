@@ -1,0 +1,7 @@
+fn main() -> int {
+    let s = "#no_std"
+    require(len(s) == 7, "literal #no_std must not toggle freestanding build")
+    print(s)
+    print("T1-F22-02:PASS")
+    return 0
+}

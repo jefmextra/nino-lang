@@ -1,0 +1,1658 @@
+// compiler/lexer_parser.nino: Recursive import expander, DFA lexer & Pratt recursive-descent AST parser
+fn strip_block_comments_line(line: string, mut in_bcmt: [bool]) -> string {
+    let n = len(line)
+    mut out = ""
+    mut i = 0
+    mut in_q = false
+    mut esc = false
+    while i < n {
+        let ch = char_at(line, i)
+        if in_bcmt[0] {
+            if ch == "*" && i + 1 < n && char_at(line, i + 1) == "/" {
+                in_bcmt[0] = false
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else if in_q {
+            out = out + ch
+            if esc {
+                esc = false
+            } else if ch == "\\" {
+                esc = true
+            } else if ch == "\"" {
+                in_q = false
+            }
+            i = i + 1
+        } else if ch == "/" && i + 1 < n && char_at(line, i + 1) == "/" {
+            break
+        } else if ch == "/" && i + 1 < n && char_at(line, i + 1) == "*" {
+            in_bcmt[0] = true
+            i = i + 2
+        } else {
+            if ch == "\"" { in_q = true }
+            out = out + ch
+            i = i + 1
+        }
+    }
+    return trim(out)
+}
+
+fn expand_imports_rec(source: string, cur_fid: int, base_dir: string, mut eu: ExpandedUnit) {
+    let clean = replace_str(source, "\r\n", "\n")
+    let slen = len(clean)
+    mut pos = 0
+    mut line_no = 0
+    mut in_bcmt: [bool] = [false]
+    while pos <= slen {
+        if pos == slen && slen > 0 && char_at(clean, slen - 1) == "\n" {
+            pos = slen + 1
+        } else {
+            mut line_end = pos
+            while line_end < slen && char_at(clean, line_end) != "\n" {
+                line_end = line_end + 1
+            }
+            line_no = line_no + 1
+            let raw_line = slice(clean, pos, line_end - pos)
+            let stripped = strip_block_comments_line(raw_line, in_bcmt)
+            if starts_with(stripped, "import \"") && ends_with(stripped, "\"") {
+                let raw_path = slice(stripped, 8, len(stripped) - 9)
+                let actual_path = resolve_import_path(raw_path, base_dir)
+                let tag = "|" + actual_path + "|"
+                if find_str(eu.visited, tag, 0) == -1 {
+                    let nxt_vis = eu.visited + tag
+                    eu.visited = nxt_vis
+                    if file_exists(actual_path) {
+                        let norm_imp = replace_str(actual_path, "\\", "/")
+                        let imp_fid = len(eu.files)
+                        mut f_arr = eu.files
+                        f_arr = push(f_arr, norm_imp)
+                        eu.files = f_arr
+                        let imp_src = read_file(actual_path)
+                        let imp_base = get_directory_of(actual_path)
+                        expand_imports_rec(imp_src, imp_fid, imp_base, eu)
+                    }
+                }
+            } else {
+                mut l_arr = eu.lines
+                l_arr = push(l_arr, raw_line)
+                eu.lines = l_arr
+                mut fid_arr = eu.line_fids
+                fid_arr = push(fid_arr, cur_fid)
+                eu.line_fids = fid_arr
+                mut ln_arr = eu.line_nums
+                ln_arr = push(ln_arr, line_no)
+                eu.line_nums = ln_arr
+            }
+            pos = line_end + 1
+        }
+    }
+}
+
+fn expand_all_imports_mapped(source: string, base_dir: string, file_name: string, do_expand: bool) -> ExpandedUnit {
+    mut norm_fn = replace_str(file_name, "\\", "/")
+    if len(norm_fn) == 0 {
+        norm_fn = "source.nino"
+    }
+    mut lines_a: [string] = []
+    mut files_a: [string] = []
+    mut fids_a: [int] = []
+    mut lnums_a: [int] = []
+    files_a = push(files_a, norm_fn)
+    mut eu = ExpandedUnit { lines: lines_a, files: files_a, line_fids: fids_a, line_nums: lnums_a, visited: "|" }
+    if do_expand {
+        expand_imports_rec(source, 0, base_dir, eu)
+    } else {
+        let clean = replace_str(source, "\r\n", "\n")
+        let slen = len(clean)
+        mut pos = 0
+        mut line_no = 0
+        while pos <= slen {
+            if pos == slen && slen > 0 && char_at(clean, slen - 1) == "\n" {
+                pos = slen + 1
+            } else {
+                mut le = pos
+                while le < slen && char_at(clean, le) != "\n" {
+                    le = le + 1
+                }
+                line_no = line_no + 1
+                let raw_line = slice(clean, pos, le - pos)
+                mut l_arr = eu.lines
+                l_arr = push(l_arr, raw_line)
+                eu.lines = l_arr
+                mut fid_arr = eu.line_fids
+                fid_arr = push(fid_arr, 0)
+                eu.line_fids = fid_arr
+                mut ln_arr = eu.line_nums
+                ln_arr = push(ln_arr, line_no)
+                eu.line_nums = ln_arr
+                pos = le + 1
+            }
+        }
+    }
+    return eu
+}
+
+fn lex_tokenize_mapped(eu: ExpandedUnit) -> TokStream {
+    mut toks: [NinoTok] = []
+    let nlines = len(eu.lines)
+    mut paren_d = 0
+    mut bracket_d = 0
+    mut in_blk_cmt = false
+    mut last_kind = -1
+    let no_std_kw = "#" + "no_std"
+    for li in 0..nlines {
+        let ln = eu.lines[li]
+        let fid = eu.line_fids[li]
+        let lno = eu.line_nums[li]
+        let llen = len(ln)
+        mut i = 0
+        while i < llen {
+            let ch = char_at(ln, i)
+            if in_blk_cmt {
+                if ch == "*" && i + 1 < llen && char_at(ln, i + 1) == "/" {
+                    in_blk_cmt = false
+                    i = i + 2
+                } else {
+                    i = i + 1
+                }
+            } else if ch == " " || ch == "\t" || ch == "\r" {
+                i = i + 1
+            } else if ch == "/" && i + 1 < llen && char_at(ln, i + 1) == "/" {
+                i = llen
+            } else if ch == "/" && i + 1 < llen && char_at(ln, i + 1) == "*" {
+                in_blk_cmt = true
+                i = i + 2
+            } else if ch == "#" {
+                let col = i + 1
+                if i + 7 <= llen && slice(ln, i, 7) == no_std_kw {
+                    let t = NinoTok { kind: TK_NO_STD(), text: no_std_kw, file_id: fid, line: lno, col: col }
+                    toks = push(toks, t)
+                    last_kind = TK_NO_STD()
+                    i = i + 7
+                } else {
+                    i = i + 1
+                }
+            } else if ch == "\"" {
+                let start = i
+                let col = i + 1
+                i = i + 1
+                mut in_q = true
+                while i < llen && in_q {
+                    let sc = char_at(ln, i)
+                    if sc == "\\" {
+                        if i + 1 < llen {
+                            i = i + 2
+                        } else {
+                            i = i + 1
+                        }
+                    } else if sc == "\"" {
+                        i = i + 1
+                        in_q = false
+                    } else {
+                        i = i + 1
+                    }
+                }
+                let txt = slice(ln, start, i - start)
+                let t = NinoTok { kind: TK_STR(), text: txt, file_id: fid, line: lno, col: col }
+                toks = push(toks, t)
+                last_kind = TK_STR()
+            } else if f1_is_digit(ch) {
+                let start = i
+                let col = i + 1
+                mut k = TK_INT()
+                if ch == "0" && i + 1 < llen && (char_at(ln, i + 1) == "x" || char_at(ln, i + 1) == "X") {
+                    i = i + 2
+                    while i < llen && f1_is_hex_digit(char_at(ln, i)) {
+                        i = i + 1
+                    }
+                } else {
+                    while i < llen && f1_is_digit(char_at(ln, i)) {
+                        i = i + 1
+                    }
+                    if i + 1 < llen && char_at(ln, i) == "." && f1_is_digit(char_at(ln, i + 1)) {
+                        k = TK_FLOAT()
+                        i = i + 1
+                        while i < llen && f1_is_digit(char_at(ln, i)) {
+                            i = i + 1
+                        }
+                        if i < llen && (char_at(ln, i) == "e" || char_at(ln, i) == "E") {
+                            i = i + 1
+                            if i < llen && (char_at(ln, i) == "+" || char_at(ln, i) == "-") {
+                                i = i + 1
+                            }
+                            while i < llen && f1_is_digit(char_at(ln, i)) {
+                                i = i + 1
+                            }
+                        }
+                    }
+                }
+                let txt = slice(ln, start, i - start)
+                let t = NinoTok { kind: k, text: txt, file_id: fid, line: lno, col: col }
+                toks = push(toks, t)
+                last_kind = k
+            } else if f1_is_ident_start(ch) {
+                let start = i
+                let col = i + 1
+                while i < llen && is_alpha_num(char_at(ln, i)) {
+                    i = i + 1
+                }
+                let word = slice(ln, start, i - start)
+                mut k = TK_IDENT()
+                if f1_is_reserved_kw(word) {
+                    k = TK_KW()
+                }
+                let t = NinoTok { kind: k, text: word, file_id: fid, line: lno, col: col }
+                toks = push(toks, t)
+                last_kind = k
+            } else {
+                let col = i + 1
+                mut k = -1
+                mut tok_len = 1
+                if i + 2 <= llen {
+                    let two = slice(ln, i, 2)
+                    if two == "|>" {
+                        k = TK_PIPE_GT()
+                        tok_len = 2
+                    } else if two == "||" {
+                        k = TK_OROR()
+                        tok_len = 2
+                    } else if two == "&&" {
+                        k = TK_ANDAND()
+                        tok_len = 2
+                    } else if two == "==" {
+                        k = TK_EQEQ()
+                        tok_len = 2
+                    } else if two == "!=" {
+                        k = TK_NEQ()
+                        tok_len = 2
+                    } else if two == "<=" {
+                        k = TK_LE()
+                        tok_len = 2
+                    } else if two == ">=" {
+                        k = TK_GE()
+                        tok_len = 2
+                    } else if two == "<<" {
+                        k = TK_SHL()
+                        tok_len = 2
+                    } else if two == ">>" {
+                        k = TK_SHR()
+                        tok_len = 2
+                    } else if two == "->" {
+                        k = TK_ARROW()
+                        tok_len = 2
+                    } else if two == "=>" {
+                        k = TK_FAT_ARROW()
+                        tok_len = 2
+                    } else if two == ".." {
+                        k = TK_DOTDOT()
+                        tok_len = 2
+                    }
+                }
+                if k == -1 {
+                    if ch == "(" {
+                        k = TK_LPAREN()
+                        paren_d = paren_d + 1
+                    } else if ch == ")" {
+                        k = TK_RPAREN()
+                        if paren_d > 0 {
+                            paren_d = paren_d - 1
+                        }
+                    } else if ch == "{" {
+                        k = TK_LBRACE()
+                    } else if ch == "}" {
+                        k = TK_RBRACE()
+                    } else if ch == "[" {
+                        k = TK_LBRACK()
+                        bracket_d = bracket_d + 1
+                    } else if ch == "]" {
+                        k = TK_RBRACK()
+                        if bracket_d > 0 {
+                            bracket_d = bracket_d - 1
+                        }
+                    } else if ch == "," {
+                        k = TK_COMMA()
+                    } else if ch == ":" {
+                        k = TK_COLON()
+                    } else if ch == ";" {
+                        k = TK_SEMI()
+                    } else if ch == "." {
+                        k = TK_DOT()
+                    } else if ch == "?" {
+                        k = TK_QMARK()
+                    } else if ch == "|" {
+                        k = TK_PIPE()
+                    } else if ch == "=" {
+                        k = TK_EQ()
+                    } else if ch == "+" {
+                        k = TK_PLUS()
+                    } else if ch == "-" {
+                        k = TK_MINUS()
+                    } else if ch == "*" {
+                        k = TK_STAR()
+                    } else if ch == "/" {
+                        k = TK_SLASH()
+                    } else if ch == "%" {
+                        k = TK_PERCENT()
+                    } else if ch == "<" {
+                        k = TK_LT()
+                    } else if ch == ">" {
+                        k = TK_GT()
+                    } else if ch == "!" {
+                        k = TK_BANG()
+                    } else if ch == "&" {
+                        k = TK_AMP()
+                    } else if ch == "^" {
+                        k = TK_CARET()
+                    }
+                }
+                if k != -1 {
+                    let sym_txt = slice(ln, i, tok_len)
+                    let t = NinoTok { kind: k, text: sym_txt, file_id: fid, line: lno, col: col }
+                    toks = push(toks, t)
+                    last_kind = k
+                }
+                i = i + tok_len
+            }
+        }
+        if paren_d == 0 && bracket_d == 0 && last_kind != TK_NL() && len(toks) > 0 {
+            let t_nl = NinoTok { kind: TK_NL(), text: "\n", file_id: fid, line: lno, col: llen + 1 }
+            toks = push(toks, t_nl)
+            last_kind = TK_NL()
+        }
+    }
+    let eof_t = NinoTok { kind: TK_EOF(), text: "", file_id: 0, line: nlines + 1, col: 1 }
+    toks = push(toks, eof_t)
+    return TokStream { toks: toks, has_error: false, err_msg: "", err_file: "", err_line: 0, err_col: 0 }
+}
+
+fn lex_tokenize_expr_str(expr_src: string, fid: int, line_no: int, col_no: int) -> [NinoTok] {
+    mut lns: [string] = []
+    lns = push(lns, expr_src)
+    mut fls: [string] = []
+    fls = push(fls, "interp.nino")
+    mut fids: [int] = []
+    fids = push(fids, fid)
+    mut lnums: [int] = []
+    lnums = push(lnums, line_no)
+    let eu = ExpandedUnit { lines: lns, files: fls, line_fids: fids, line_nums: lnums, visited: "|" }
+    let ts = lex_tokenize_mapped(eu)
+    return ts.toks
+}
+
+fn ast_consume_gt(mut pool: AstPool, mut cur: TokCursor) -> bool {
+    if cur.pending_gt > 0 {
+        let next_pgt = cur.pending_gt - 1
+        cur.pending_gt = next_pgt
+        return true
+    }
+    let t = cur_peek(cur)
+    if t.kind == TK_GT() {
+        cur_advance(cur)
+        return true
+    }
+    if t.kind == TK_SHR() {
+        cur_advance(cur)
+        let next_pgt = cur.pending_gt + 1
+        cur.pending_gt = next_pgt
+        return true
+    }
+    ast_set_error(pool, "Expected '>' in generic type", t.file_id, t.line, t.col)
+    return false
+}
+
+fn ast_parse_type_str(mut pool: AstPool, mut cur: TokCursor) -> string {
+    let t = cur_peek(cur)
+    if t.kind == TK_LBRACK() {
+        cur_advance(cur)
+        let inner = ast_parse_type_str(pool, cur)
+        if cur_peek(cur).kind == TK_RBRACK() {
+            cur_advance(cur)
+        } else {
+            let t2 = cur_peek(cur)
+            ast_set_error(pool, "Expected ']' in array type", t2.file_id, t2.line, t2.col)
+        }
+        return "[" + inner + "]"
+    }
+    if t.kind == TK_LBRACE() {
+        cur_advance(cur)
+        let kt = ast_parse_type_str(pool, cur)
+        if cur_peek(cur).kind == TK_COLON() {
+            cur_advance(cur)
+        }
+        let vt = ast_parse_type_str(pool, cur)
+        if cur_peek(cur).kind == TK_RBRACE() {
+            cur_advance(cur)
+        }
+        return "{" + kt + ":" + vt + "}"
+    }
+    if t.kind == TK_IDENT() {
+        cur_advance(cur)
+        mut base = t.text
+        if cur.pending_gt == 0 && cur_peek(cur).kind == TK_LT() {
+            cur_advance(cur)
+            let pk0 = cur_peek(cur)
+            if pk0.kind == TK_GT() || pk0.kind == TK_SHR() || pk0.kind == TK_COMMA() {
+                ast_set_error(pool, "Expected type name inside generic arguments", pk0.file_id, pk0.line, pk0.col)
+                return ""
+            }
+            mut args = ast_parse_type_str(pool, cur)
+            mut acnt = 1
+            while cur.pending_gt == 0 && cur_peek(cur).kind == TK_COMMA() {
+                cur_advance(cur)
+                let pk1 = cur_peek(cur)
+                if pk1.kind == TK_GT() || pk1.kind == TK_SHR() || pk1.kind == TK_COMMA() {
+                    ast_set_error(pool, "Expected type name after ',' in generic type", pk1.file_id, pk1.line, pk1.col)
+                    return ""
+                }
+                let next_arg = ast_parse_type_str(pool, cur)
+                args = args + ", " + next_arg
+                acnt = acnt + 1
+            }
+            ast_consume_gt(pool, cur)
+            if (base == "Option" || base == "Box" || base == "Stack" || base == "Queue" || base == "Array") && acnt != 1 {
+                ast_set_error(pool, "Generic type '" + base + "' expects 1 type argument, found " + int_to_str(acnt), t.file_id, t.line, t.col)
+            } else if (base == "Result" || base == "Pair") && acnt != 2 {
+                ast_set_error(pool, "Generic type '" + base + "' expects 2 type arguments, found " + int_to_str(acnt), t.file_id, t.line, t.col)
+            }
+            return base + "<" + args + ">"
+        }
+        return base
+    }
+    ast_set_error(pool, "Expected type name", t.file_id, t.line, t.col)
+    return ""
+}
+
+fn ast_infix_bp(k: int, txt: string) -> int {
+    if k == TK_PIPE_GT() { return 10 }
+    if k == TK_QMARK() { return 15 }
+    if k == TK_OROR() { return 20 }
+    if k == TK_KW() && txt == "or" { return 25 }
+    if k == TK_ANDAND() { return 30 }
+    if k == TK_KW() && txt == "and" { return 35 }
+    if k == TK_EQEQ() || k == TK_NEQ() { return 40 }
+    if k == TK_LT() || k == TK_LE() || k == TK_GT() || k == TK_GE() { return 45 }
+    if k == TK_PIPE() { return 50 }
+    if k == TK_CARET() { return 55 }
+    if k == TK_AMP() { return 60 }
+    if k == TK_SHL() || k == TK_SHR() { return 65 }
+    if k == TK_PLUS() || k == TK_MINUS() { return 70 }
+    if k == TK_STAR() || k == TK_SLASH() || k == TK_PERCENT() { return 75 }
+    if k == TK_LPAREN() || k == TK_LBRACK() || k == TK_DOT() { return 90 }
+    return 0
+}
+
+fn ast_is_c_cast_lit(cur: TokCursor) -> bool {
+    let t0 = cur_peek(cur)
+    if t0.kind != TK_LPAREN() {
+        return false
+    }
+    let t1 = cur_peek_at(cur, 1)
+    if t1.kind != TK_IDENT() {
+        return false
+    }
+    mut off = 2
+    if cur_peek_at(cur, off).kind == TK_LT() {
+        mut gd = 1
+        off = off + 1
+        while off < 32 && gd > 0 {
+            let tk = cur_peek_at(cur, off).kind
+            if tk == TK_EOF() {
+                return false
+            }
+            if tk == TK_LT() {
+                gd = gd + 1
+            } else if tk == TK_GT() {
+                gd = gd - 1
+            } else if tk == TK_SHR() {
+                gd = gd - 2
+            }
+            off = off + 1
+        }
+    }
+    if cur_peek_at(cur, off).kind != TK_RPAREN() {
+        return false
+    }
+    if cur_peek_at(cur, off + 1).kind != TK_LBRACE() {
+        return false
+    }
+    mut bi = off + 2
+    while cur_peek_at(cur, bi).kind == TK_NL() {
+        bi = bi + 1
+    }
+    let first_in = cur_peek_at(cur, bi)
+    if first_in.kind == TK_RBRACE() {
+        return true
+    }
+    if first_in.kind == TK_DOT() && cur_peek_at(cur, bi + 1).kind == TK_IDENT() && cur_peek_at(cur, bi + 2).kind == TK_EQ() {
+        return true
+    }
+    return false
+}
+
+fn ast_parse_expr_bp(mut pool: AstPool, mut cur: TokCursor, min_bp: int, depth: int) -> int {
+    if depth > 128 {
+        let td = cur_peek(cur)
+        ast_set_error(pool, "Expression recursion depth exceeded", td.file_id, td.line, td.col)
+        return -1
+    }
+    let t = cur_peek(cur)
+    mut lhs = -1
+    if t.kind == TK_INT() {
+        cur_advance(cur)
+        lhs = ast_add_node(pool, NK_INT_LIT(), "", "", t.text, "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+    } else if t.kind == TK_FLOAT() {
+        cur_advance(cur)
+        lhs = ast_add_node(pool, NK_FLOAT_LIT(), "", "", t.text, "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+    } else if t.kind == TK_STR() {
+        cur_advance(cur)
+        lhs = ast_add_node(pool, NK_STR_LIT(), "", "", t.text, "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+    } else if t.kind == TK_KW() && (t.text == "true" || t.text == "false") {
+        cur_advance(cur)
+        lhs = ast_add_node(pool, NK_BOOL_LIT(), "", "", t.text, "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+    } else if t.kind == TK_KW() && t.text == "nil" {
+        cur_advance(cur)
+        lhs = ast_add_node(pool, NK_NIL_LIT(), "", "", "nil", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+    } else if t.kind == TK_MINUS() || t.kind == TK_PLUS() || t.kind == TK_BANG() || t.kind == TK_AMP() || (t.kind == TK_KW() && t.text == "not") {
+        cur_advance(cur)
+        let operand = ast_parse_expr_bp(pool, cur, 80, depth + 1)
+        lhs = ast_add_node(pool, NK_UNARY_OP(), t.text, "", "", "", t.line, t.col, t.file_id, operand, -1, -1, NF_NONE())
+    } else if t.kind == TK_PIPE() || t.kind == TK_OROR() {
+        cur_advance(cur)
+        mut lparams: [int] = []
+        if t.kind == TK_PIPE() {
+            while cur_peek(cur).kind != TK_PIPE() && cur_eof(cur) == false {
+                let pt = cur_peek(cur)
+                if pt.kind == TK_IDENT() {
+                    cur_advance(cur)
+                    mut ptype = ""
+                    if cur_peek(cur).kind == TK_COLON() {
+                        cur_advance(cur)
+                        ptype = ast_parse_type_str(pool, cur)
+                    }
+                    let pid = ast_add_node(pool, NK_PARAM(), "", pt.text, "", ptype, pt.line, pt.col, pt.file_id, -1, -1, -1, NF_NONE())
+                    lparams = push(lparams, pid)
+                } else {
+                    cur_advance(cur)
+                }
+                if cur_peek(cur).kind == TK_COMMA() {
+                    cur_advance(cur)
+                }
+            }
+            if cur_peek(cur).kind == TK_PIPE() {
+                cur_advance(cur)
+            } else {
+                let te = cur_peek(cur)
+                ast_set_error(pool, "Expected closing '|' in lambda", te.file_id, te.line, te.col)
+            }
+        }
+        cur_skip_nl(cur)
+        let lbody = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        mut lflags = NF_NONE()
+        if len(lparams) >= 2 {
+            lflags = NF_LAMBDA_2ARG()
+        }
+        lhs = ast_add_node(pool, NK_LAMBDA(), "", "", "", "", t.line, t.col, t.file_id, lbody, -1, -1, lflags)
+        ast_attach_children(pool, lhs, lparams)
+    } else if t.kind == TK_LBRACK() {
+        cur_advance(cur)
+        cur_skip_nl(cur)
+        mut elems: [int] = []
+        while cur_peek(cur).kind != TK_RBRACK() && cur_eof(cur) == false && pool.has_error == false {
+            let prev_al = cur.allow_struct_lit
+            let al_true = true
+            cur.allow_struct_lit = al_true
+            let el = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            cur.allow_struct_lit = prev_al
+            elems = push(elems, el)
+            cur_skip_nl(cur)
+            if cur_peek(cur).kind == TK_COMMA() {
+                cur_advance(cur)
+                cur_skip_nl(cur)
+            } else {
+                if cur_peek(cur).kind != TK_RBRACK() {
+                    let te = cur_peek(cur)
+                    ast_set_error(pool, "Expected ',' or ']' in array literal", te.file_id, te.line, te.col)
+                }
+            }
+        }
+        if cur_peek(cur).kind == TK_RBRACK() {
+            cur_advance(cur)
+        } else {
+            let te = cur_peek(cur)
+            ast_set_error(pool, "Unclosed '[' in array literal", te.file_id, te.line, te.col)
+        }
+        lhs = ast_add_node(pool, NK_ARRAY_LIT(), "", "", "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+        ast_attach_children(pool, lhs, elems)
+    } else if t.kind == TK_LBRACE() {
+        cur_advance(cur)
+        cur_skip_nl(cur)
+        mut entries: [int] = []
+        while cur_peek(cur).kind != TK_RBRACE() && cur_eof(cur) == false && pool.has_error == false {
+            let prev_al = cur.allow_struct_lit
+            let al_true = true
+            cur.allow_struct_lit = al_true
+            let k_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            cur_skip_nl(cur)
+            if cur_peek(cur).kind == TK_COLON() {
+                cur_advance(cur)
+                cur_skip_nl(cur)
+            } else {
+                let te = cur_peek(cur)
+                ast_set_error(pool, "Expected ':' in dict literal", te.file_id, te.line, te.col)
+            }
+            let v_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            cur.allow_struct_lit = prev_al
+            let ent_id = ast_add_node(pool, NK_DICT_ENTRY(), "", "", "", "", t.line, t.col, t.file_id, k_id, v_id, -1, NF_NONE())
+            entries = push(entries, ent_id)
+            cur_skip_nl(cur)
+            if cur_peek(cur).kind == TK_COMMA() {
+                cur_advance(cur)
+                cur_skip_nl(cur)
+            }
+        }
+        if cur_peek(cur).kind == TK_RBRACE() {
+            cur_advance(cur)
+        } else {
+            let te = cur_peek(cur)
+            ast_set_error(pool, "Unclosed '}' in dict literal", te.file_id, te.line, te.col)
+        }
+        lhs = ast_add_node(pool, NK_DICT_LIT(), "", "", "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+        ast_attach_children(pool, lhs, entries)
+    } else if t.kind == TK_LPAREN() {
+        if ast_is_c_cast_lit(cur) {
+            cur_advance(cur)
+            let cast_t = ast_parse_type_str(pool, cur)
+            if cur_peek(cur).kind == TK_RPAREN() {
+                cur_advance(cur)
+            }
+            if cur_peek(cur).kind == TK_LBRACE() {
+                cur_advance(cur)
+            }
+            cur_skip_nl(cur)
+            mut finits: [int] = []
+            while cur_peek(cur).kind != TK_RBRACE() && cur_eof(cur) == false && pool.has_error == false {
+                if cur_peek(cur).kind == TK_DOT() {
+                    cur_advance(cur)
+                }
+                let ft = cur_peek(cur)
+                if ft.kind == TK_IDENT() {
+                    cur_advance(cur)
+                } else {
+                    ast_set_error(pool, "Expected field name in compound literal", ft.file_id, ft.line, ft.col)
+                }
+                if cur_peek(cur).kind == TK_EQ() {
+                    cur_advance(cur)
+                }
+                cur_skip_nl(cur)
+                let prev_al = cur.allow_struct_lit
+                let al_true = true
+                cur.allow_struct_lit = al_true
+                let fv = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+                cur.allow_struct_lit = prev_al
+                let fi = ast_add_node(pool, NK_FIELD_INIT(), "", ft.text, "", "", ft.line, ft.col, ft.file_id, fv, -1, -1, NF_NONE())
+                finits = push(finits, fi)
+                cur_skip_nl(cur)
+                if cur_peek(cur).kind == TK_COMMA() {
+                    cur_advance(cur)
+                    cur_skip_nl(cur)
+                }
+            }
+            if cur_peek(cur).kind == TK_RBRACE() {
+                cur_advance(cur)
+            }
+            lhs = ast_add_node(pool, NK_STRUCT_LIT(), "", cast_t, "", cast_t, t.line, t.col, t.file_id, -1, -1, -1, NF_C_CAST())
+            ast_attach_children(pool, lhs, finits)
+        } else {
+            cur_advance(cur)
+            let prev_al = cur.allow_struct_lit
+            let al_true = true
+            cur.allow_struct_lit = al_true
+            lhs = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            cur.allow_struct_lit = prev_al
+            if cur_peek(cur).kind == TK_RPAREN() {
+                cur_advance(cur)
+            } else {
+                let te = cur_peek(cur)
+                ast_set_error(pool, "Expected ')' after parenthesized expression", te.file_id, te.line, te.col)
+            }
+        }
+    } else if t.kind == TK_IDENT() {
+        cur_advance(cur)
+        mut is_slit = false
+        if cur.allow_struct_lit && cur_peek(cur).kind == TK_LBRACE() {
+            mut la = 1
+            while cur_peek_at(cur, la).kind == TK_NL() {
+                la = la + 1
+            }
+            let n1 = cur_peek_at(cur, la)
+            let n2 = cur_peek_at(cur, la + 1)
+            if n1.kind == TK_RBRACE() || (n1.kind == TK_IDENT() && n2.kind == TK_COLON()) {
+                is_slit = true
+            }
+        }
+        if is_slit {
+            cur_advance(cur)
+            cur_skip_nl(cur)
+            mut finits: [int] = []
+            while cur_peek(cur).kind != TK_RBRACE() && cur_eof(cur) == false && pool.has_error == false {
+                let ft = cur_peek(cur)
+                if ft.kind == TK_IDENT() {
+                    cur_advance(cur)
+                } else {
+                    ast_set_error(pool, "Expected field name in struct literal", ft.file_id, ft.line, ft.col)
+                }
+                if cur_peek(cur).kind == TK_COLON() {
+                    cur_advance(cur)
+                } else {
+                    let te = cur_peek(cur)
+                    ast_set_error(pool, "Expected ':' in struct literal", te.file_id, te.line, te.col)
+                }
+                cur_skip_nl(cur)
+                let prev_al = cur.allow_struct_lit
+                let al_true = true
+                cur.allow_struct_lit = al_true
+                let fv = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+                cur.allow_struct_lit = prev_al
+                let fi = ast_add_node(pool, NK_FIELD_INIT(), "", ft.text, "", "", ft.line, ft.col, ft.file_id, fv, -1, -1, NF_NONE())
+                finits = push(finits, fi)
+                cur_skip_nl(cur)
+                if cur_peek(cur).kind == TK_COMMA() {
+                    cur_advance(cur)
+                    cur_skip_nl(cur)
+                }
+            }
+            if cur_peek(cur).kind == TK_RBRACE() {
+                cur_advance(cur)
+            } else {
+                let te = cur_peek(cur)
+                ast_set_error(pool, "Unclosed '}' in struct literal", te.file_id, te.line, te.col)
+            }
+            lhs = ast_add_node(pool, NK_STRUCT_LIT(), "", t.text, "", t.text, t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+            ast_attach_children(pool, lhs, finits)
+        } else {
+            lhs = ast_add_node(pool, NK_IDENT(), "", t.text, "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+        }
+    } else {
+        ast_set_error(pool, "Unexpected token in expression: '" + t.text + "'", t.file_id, t.line, t.col)
+        return -1
+    }
+
+    mut parsing_led = true
+    while parsing_led && pool.has_error == false {
+        let op_t = cur_peek(cur)
+        let bp = ast_infix_bp(op_t.kind, op_t.text)
+        if bp == 0 || bp < min_bp {
+            parsing_led = false
+        } else if op_t.kind == TK_LPAREN() {
+            cur_advance(cur)
+            cur_skip_nl(cur)
+            mut args: [int] = []
+            while cur_peek(cur).kind != TK_RPAREN() && cur_eof(cur) == false && pool.has_error == false {
+                let prev_al = cur.allow_struct_lit
+                let al_true = true
+                cur.allow_struct_lit = al_true
+                let a = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+                cur.allow_struct_lit = prev_al
+                args = push(args, a)
+                cur_skip_nl(cur)
+                if cur_peek(cur).kind == TK_COMMA() {
+                    cur_advance(cur)
+                    cur_skip_nl(cur)
+                } else if cur_peek(cur).kind != TK_RPAREN() {
+                    let te = cur_peek(cur)
+                    ast_set_error(pool, "Expected ',' or ')' in call arguments", te.file_id, te.line, te.col)
+                }
+            }
+            if cur_peek(cur).kind == TK_RPAREN() {
+                cur_advance(cur)
+            } else {
+                let te = cur_peek(cur)
+                ast_set_error(pool, "Unclosed '(' in call expression", te.file_id, te.line, te.col)
+            }
+            let call_id = ast_add_node(pool, NK_CALL(), "", "", "", "", op_t.line, op_t.col, op_t.file_id, lhs, -1, -1, NF_NONE())
+            ast_attach_children(pool, call_id, args)
+            lhs = call_id
+        } else if op_t.kind == TK_LBRACK() {
+            cur_advance(cur)
+            cur_skip_nl(cur)
+            let prev_al = cur.allow_struct_lit
+            let al_true = true
+            cur.allow_struct_lit = al_true
+            let idx_e = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            cur.allow_struct_lit = prev_al
+            cur_skip_nl(cur)
+            if cur_peek(cur).kind == TK_RBRACK() {
+                cur_advance(cur)
+            } else {
+                let te = cur_peek(cur)
+                ast_set_error(pool, "Expected ']' in index expression", te.file_id, te.line, te.col)
+            }
+            lhs = ast_add_node(pool, NK_INDEX(), "", "", "", "", op_t.line, op_t.col, op_t.file_id, lhs, idx_e, -1, NF_NONE())
+        } else if op_t.kind == TK_DOT() {
+            cur_advance(cur)
+            let mt = cur_peek(cur)
+            if mt.kind == TK_IDENT() {
+                cur_advance(cur)
+            } else {
+                ast_set_error(pool, "Expected field name after '.'", mt.file_id, mt.line, mt.col)
+            }
+            lhs = ast_add_node(pool, NK_MEMBER(), "", mt.text, "", "", mt.line, mt.col, mt.file_id, lhs, -1, -1, NF_NONE())
+        } else if op_t.kind == TK_QMARK() {
+            cur_advance(cur)
+            cur_skip_nl(cur)
+            let then_e = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            cur_skip_nl(cur)
+            if cur_peek(cur).kind == TK_COLON() {
+                cur_advance(cur)
+            } else {
+                let te = cur_peek(cur)
+                ast_set_error(pool, "Expected ':' in ternary expression", te.file_id, te.line, te.col)
+            }
+            cur_skip_nl(cur)
+            let else_e = ast_parse_expr_bp(pool, cur, bp, depth + 1)
+            lhs = ast_add_node(pool, NK_TERNARY(), "?:", "", "", "", op_t.line, op_t.col, op_t.file_id, lhs, then_e, else_e, NF_NONE())
+        } else if op_t.kind == TK_PIPE_GT() {
+            cur_advance(cur)
+            cur_skip_nl(cur)
+            let rhs = ast_parse_expr_bp(pool, cur, bp + 1, depth + 1)
+            lhs = ast_add_node(pool, NK_PIPE(), "|>", "", "", "", op_t.line, op_t.col, op_t.file_id, lhs, rhs, -1, NF_NONE())
+        } else {
+            cur_advance(cur)
+            cur_skip_nl(cur)
+            let rhs = ast_parse_expr_bp(pool, cur, bp + 1, depth + 1)
+            lhs = ast_add_node(pool, NK_BIN_OP(), op_t.text, "", "", "", op_t.line, op_t.col, op_t.file_id, lhs, rhs, -1, NF_NONE())
+        }
+    }
+    return lhs
+}
+
+fn ast_expand_str_interps(mut pool: AstPool) {
+    mut ni = 0
+    while ni < len(pool.nodes) {
+        let nd: AstNode = pool.nodes[ni]
+        if nd.kind == NK_STR_LIT() && find_char(nd.str_val, "{", 0) != -1 && len(nd.str_val) >= 2 {
+            let inner = slice(nd.str_val, 1, len(nd.str_val) - 2)
+            let ilen = len(inner)
+            mut kids: [int] = []
+            mut cur_lit = ""
+            mut pos = 0
+            mut has_interp = false
+            while pos < ilen {
+                let ch = char_at(inner, pos)
+                if ch == "{" {
+                    let close_b = find_char(inner, "}", pos)
+                    if close_b != -1 {
+                        let raw_ex = trim(slice(inner, pos + 1, close_b - pos - 1))
+                        if is_interp_expr(raw_ex) {
+                            let clean_ex = replace_str(raw_ex, "\\\"", "\"")
+                            let sub_toks = lex_tokenize_expr_str(clean_ex, nd.file_id, nd.line, nd.col)
+                            mut sub_cur = cur_new(sub_toks)
+                            let prev_err = pool.has_error
+                            let ex_id = ast_parse_expr_bp(pool, sub_cur, 0, 0)
+                            let rem_k = cur_peek(sub_cur).kind
+                            if ex_id != -1 && pool.has_error == false && (rem_k == TK_EOF() || rem_k == TK_NL()) {
+                                has_interp = true
+                                if len(cur_lit) > 0 {
+                                    let lit_id = ast_add_node(pool, NK_STR_LIT(), "", "", "\"" + cur_lit + "\"", "", nd.line, nd.col, nd.file_id, -1, -1, -1, NF_NONE())
+                                    kids = push(kids, lit_id)
+                                    cur_lit = ""
+                                }
+                                kids = push(kids, ex_id)
+                                pos = close_b + 1
+                            } else {
+                                pool.has_error = prev_err
+                                cur_lit = cur_lit + ch
+                                pos = pos + 1
+                            }
+                        } else {
+                            cur_lit = cur_lit + ch
+                            pos = pos + 1
+                        }
+                    } else {
+                        cur_lit = cur_lit + ch
+                        pos = pos + 1
+                    }
+                } else {
+                    cur_lit = cur_lit + ch
+                    pos = pos + 1
+                }
+            }
+            if has_interp && len(kids) > 0 {
+                if len(cur_lit) > 0 {
+                    let tail_id = ast_add_node(pool, NK_STR_LIT(), "", "", "\"" + cur_lit + "\"", "", nd.line, nd.col, nd.file_id, -1, -1, -1, NF_NONE())
+                    kids = push(kids, tail_id)
+                }
+                mut upd: AstNode = pool.nodes[ni]
+                let k_interp = NK_STR_INTERP()
+                let flg_i = NF_HAS_INTERP()
+                upd.kind = k_interp
+                upd.flags = flg_i
+                pool.nodes[ni] = upd
+                ast_attach_children(pool, ni, kids)
+            }
+        }
+        ni = ni + 1
+    }
+}
+
+fn ast_parse_stmt(mut pool: AstPool, mut cur: TokCursor, depth: int) -> int {
+    if depth > 128 {
+        let td = cur_peek(cur)
+        ast_set_error(pool, "Statement recursion depth exceeded", td.file_id, td.line, td.col)
+        return -1
+    }
+    cur_skip_nl_semi(cur)
+    let t = cur_peek(cur)
+    if t.kind == TK_LBRACE() {
+        cur_advance(cur)
+        mut kids: [int] = []
+        cur_skip_nl_semi(cur)
+        while cur_peek(cur).kind != TK_RBRACE() && cur_eof(cur) == false && pool.has_error == false {
+            let st_id = ast_parse_stmt(pool, cur, depth + 1)
+            if st_id != -1 {
+                kids = push(kids, st_id)
+            }
+            cur_skip_nl_semi(cur)
+        }
+        if cur_peek(cur).kind == TK_RBRACE() {
+            cur_advance(cur)
+        } else {
+            let te = cur_peek(cur)
+            ast_set_error(pool, "Unclosed '{' block", te.file_id, te.line, te.col)
+        }
+        let blk_id = ast_add_node(pool, NK_BLOCK(), "", "", "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+        ast_attach_children(pool, blk_id, kids)
+        return blk_id
+    }
+    if t.kind == TK_KW() && (t.text == "let" || t.text == "mut" || t.text == "sealed" || t.text == "morphic") {
+        mut flg = NF_NONE()
+        if t.text == "let" {
+            cur_advance(cur)
+        } else if t.text == "mut" {
+            cur_advance(cur)
+            flg = NF_MUT()
+        } else if t.text == "sealed" {
+            cur_advance(cur)
+            if cur_peek(cur).kind == TK_KW() && cur_peek(cur).text == "let" {
+                cur_advance(cur)
+            }
+            flg = NF_SEALED()
+        } else {
+            cur_advance(cur)
+            if cur_peek(cur).kind == TK_KW() && cur_peek(cur).text == "mut" {
+                cur_advance(cur)
+            }
+            flg = NF_MUT() + NF_MORPHIC()
+        }
+        let vt = cur_peek(cur)
+        if vt.kind == TK_IDENT() {
+            cur_advance(cur)
+        } else {
+            ast_set_error(pool, "Expected identifier in variable declaration", vt.file_id, vt.line, vt.col)
+        }
+        mut tann = ""
+        if cur_peek(cur).kind == TK_COLON() {
+            cur_advance(cur)
+            tann = ast_parse_type_str(pool, cur)
+        }
+        if cur_peek(cur).kind == TK_EQ() {
+            cur_advance(cur)
+        } else {
+            let te = cur_peek(cur)
+            ast_set_error(pool, "Expected '=' in variable declaration", te.file_id, te.line, te.col)
+        }
+        cur_skip_nl(cur)
+        let init_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        return ast_add_node(pool, NK_LET_STMT(), "", vt.text, "", tann, t.line, t.col, t.file_id, init_id, -1, -1, flg)
+    }
+    if t.kind == TK_KW() && t.text == "return" {
+        cur_advance(cur)
+        let nt = cur_peek(cur)
+        mut val_id = -1
+        if nt.kind != TK_NL() && nt.kind != TK_SEMI() && nt.kind != TK_RBRACE() && nt.kind != TK_EOF() && nt.kind != TK_COMMA() {
+            val_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        }
+        return ast_add_node(pool, NK_RETURN_STMT(), "", "", "", "", t.line, t.col, t.file_id, val_id, -1, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "break" {
+        cur_advance(cur)
+        return ast_add_node(pool, NK_BREAK_STMT(), "", "", "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "continue" {
+        cur_advance(cur)
+        return ast_add_node(pool, NK_CONTINUE_STMT(), "", "", "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "if" {
+        cur_advance(cur)
+        let prev_al = cur.allow_struct_lit
+        let al_false = false
+        cur.allow_struct_lit = al_false
+        let cond_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        cur.allow_struct_lit = prev_al
+        cur_skip_nl(cur)
+        let then_id = ast_parse_stmt(pool, cur, depth + 1)
+        mut else_id = -1
+        cur_skip_nl(cur)
+        if cur_peek(cur).kind == TK_KW() && cur_peek(cur).text == "else" {
+            cur_advance(cur)
+            cur_skip_nl(cur)
+            else_id = ast_parse_stmt(pool, cur, depth + 1)
+        }
+        return ast_add_node(pool, NK_IF_STMT(), "", "", "", "", t.line, t.col, t.file_id, cond_id, then_id, else_id, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "while" {
+        cur_advance(cur)
+        let prev_al = cur.allow_struct_lit
+        let al_false = false
+        cur.allow_struct_lit = al_false
+        let cond_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        cur.allow_struct_lit = prev_al
+        cur_skip_nl(cur)
+        let body_id = ast_parse_stmt(pool, cur, depth + 1)
+        return ast_add_node(pool, NK_WHILE_STMT(), "", "", "", "", t.line, t.col, t.file_id, cond_id, body_id, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "for" {
+        cur_advance(cur)
+        let vt = cur_peek(cur)
+        if vt.kind == TK_IDENT() {
+            cur_advance(cur)
+        } else {
+            ast_set_error(pool, "Expected loop variable in 'for'", vt.file_id, vt.line, vt.col)
+        }
+        if cur_peek(cur).kind == TK_KW() && cur_peek(cur).text == "in" {
+            cur_advance(cur)
+        } else {
+            let te = cur_peek(cur)
+            ast_set_error(pool, "Expected 'in' in 'for' loop", te.file_id, te.line, te.col)
+        }
+        let prev_al = cur.allow_struct_lit
+        let al_false = false
+        cur.allow_struct_lit = al_false
+        let start_or_coll = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        if cur_peek(cur).kind == TK_DOTDOT() {
+            cur_advance(cur)
+            let end_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            mut step_id = -1
+            if cur_peek(cur).kind == TK_IDENT() && cur_peek(cur).text == "step" {
+                cur_advance(cur)
+                step_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            }
+            cur.allow_struct_lit = prev_al
+            cur_skip_nl(cur)
+            let body_id = ast_parse_stmt(pool, cur, depth + 1)
+            let for_id = ast_add_node(pool, NK_FOR_RANGE(), "", vt.text, "", "", t.line, t.col, t.file_id, start_or_coll, end_id, step_id, NF_NONE())
+            mut bkids: [int] = []
+            bkids = push(bkids, body_id)
+            ast_attach_children(pool, for_id, bkids)
+            return for_id
+        } else {
+            cur.allow_struct_lit = prev_al
+            cur_skip_nl(cur)
+            let body_id = ast_parse_stmt(pool, cur, depth + 1)
+            return ast_add_node(pool, NK_FOR_IN(), "", vt.text, "", "", t.line, t.col, t.file_id, start_or_coll, body_id, -1, NF_NONE())
+        }
+    }
+    if t.kind == TK_KW() && t.text == "match" {
+        cur_advance(cur)
+        let prev_al = cur.allow_struct_lit
+        let al_false = false
+        cur.allow_struct_lit = al_false
+        let scrut_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        cur.allow_struct_lit = prev_al
+        cur_skip_nl(cur)
+        if cur_peek(cur).kind == TK_LBRACE() {
+            cur_advance(cur)
+        } else {
+            let te = cur_peek(cur)
+            ast_set_error(pool, "Expected '{' in match", te.file_id, te.line, te.col)
+        }
+        mut arms: [int] = []
+        cur_skip_nl(cur)
+        while cur_peek(cur).kind != TK_RBRACE() && cur_eof(cur) == false && pool.has_error == false {
+            let pt = cur_peek(cur)
+            mut pat_txt = pt.text
+            if pt.kind == TK_MINUS() {
+                cur_advance(cur)
+                let pt2 = cur_peek(cur)
+                pat_txt = "-" + pt2.text
+                cur_advance(cur)
+            } else {
+                cur_advance(cur)
+            }
+            if cur_peek(cur).kind == TK_FAT_ARROW() {
+                cur_advance(cur)
+            } else {
+                let te = cur_peek(cur)
+                ast_set_error(pool, "Expected '=>' in match arm", te.file_id, te.line, te.col)
+            }
+            cur_skip_nl(cur)
+            let arm_body = ast_parse_stmt(pool, cur, depth + 1)
+            let arm_id = ast_add_node(pool, NK_MATCH_ARM(), "", pat_txt, "", "", pt.line, pt.col, pt.file_id, -1, arm_body, -1, NF_NONE())
+            arms = push(arms, arm_id)
+            cur_skip_nl(cur)
+            if cur_peek(cur).kind == TK_COMMA() {
+                cur_advance(cur)
+                cur_skip_nl(cur)
+            }
+        }
+        if cur_peek(cur).kind == TK_RBRACE() {
+            cur_advance(cur)
+        }
+        let m_id = ast_add_node(pool, NK_MATCH_STMT(), "", "", "", "", t.line, t.col, t.file_id, scrut_id, -1, -1, NF_NONE())
+        ast_attach_children(pool, m_id, arms)
+        return m_id
+    }
+    if t.kind == TK_KW() && t.text == "defer" {
+        cur_advance(cur)
+        let inner_st = ast_parse_stmt(pool, cur, depth + 1)
+        return ast_add_node(pool, NK_DEFER_STMT(), "", "", "", "", t.line, t.col, t.file_id, inner_st, -1, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "guard" {
+        cur_advance(cur)
+        let prev_al = cur.allow_struct_lit
+        let al_false = false
+        cur.allow_struct_lit = al_false
+        let cond_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        cur.allow_struct_lit = prev_al
+        if cur_peek(cur).kind == TK_KW() && cur_peek(cur).text == "else" {
+            cur_advance(cur)
+        } else {
+            let te = cur_peek(cur)
+            ast_set_error(pool, "Expected 'else' in guard statement", te.file_id, te.line, te.col)
+        }
+        cur_skip_nl(cur)
+        let else_blk = ast_parse_stmt(pool, cur, depth + 1)
+        return ast_add_node(pool, NK_GUARD_STMT(), "", "", "", "", t.line, t.col, t.file_id, cond_id, else_blk, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && (t.text == "transact" || t.text == "transaction") {
+        cur_advance(cur)
+        cur_skip_nl(cur)
+        let try_blk = ast_parse_stmt(pool, cur, depth + 1)
+        cur_skip_nl(cur)
+        mut comp_blk = -1
+        if cur_peek(cur).kind == TK_KW() && (cur_peek(cur).text == "compensate" || cur_peek(cur).text == "rollback") {
+            cur_advance(cur)
+            cur_skip_nl(cur)
+            comp_blk = ast_parse_stmt(pool, cur, depth + 1)
+        }
+        return ast_add_node(pool, NK_TRANSACT_STMT(), "", "", "", "", t.line, t.col, t.file_id, try_blk, comp_blk, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "inline_asm" {
+        cur_advance(cur)
+        cur_skip_nl(cur)
+        mut kids: [int] = []
+        if cur_peek(cur).kind == TK_LBRACE() {
+            cur_advance(cur)
+            cur_skip_nl_semi(cur)
+            while cur_peek(cur).kind != TK_RBRACE() && cur_eof(cur) == false && pool.has_error == false {
+                let it = cur_peek(cur)
+                if it.kind == TK_IDENT() && it.text == "rdtsc" {
+                    cur_advance(cur)
+                    let r_id = ast_add_node(pool, NK_RDTSC_STMT(), "", "", "", "", it.line, it.col, it.file_id, -1, -1, -1, NF_NONE())
+                    kids = push(kids, r_id)
+                } else if it.kind == TK_IDENT() && it.text == "cpuid" {
+                    cur_advance(cur)
+                    let c_id = ast_add_node(pool, NK_CPUID_STMT(), "", "", "", "", it.line, it.col, it.file_id, -1, -1, -1, NF_NONE())
+                    kids = push(kids, c_id)
+                } else {
+                    let s_id = ast_parse_stmt(pool, cur, depth + 1)
+                    kids = push(kids, s_id)
+                }
+                cur_skip_nl_semi(cur)
+            }
+            if cur_peek(cur).kind == TK_RBRACE() {
+                cur_advance(cur)
+            }
+        }
+        let asm_id = ast_add_node(pool, NK_INLINE_ASM(), "", "", "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+        ast_attach_children(pool, asm_id, kids)
+        return asm_id
+    }
+    if t.kind == TK_KW() && t.text == "comptime" {
+        cur_advance(cur)
+        cur_skip_nl(cur)
+        let blk_id = ast_parse_stmt(pool, cur, depth + 1)
+        return ast_add_node(pool, NK_COMPTIME(), "", "", "", "", t.line, t.col, t.file_id, blk_id, -1, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "abort" {
+        cur_advance(cur)
+        mut msg_id = -1
+        if cur_peek(cur).kind == TK_LPAREN() {
+            cur_advance(cur)
+            msg_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+            if cur_peek(cur).kind == TK_RPAREN() {
+                cur_advance(cur)
+            }
+        } else {
+            msg_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        }
+        return ast_add_node(pool, NK_ABORT_STMT(), "", "", "", "", t.line, t.col, t.file_id, msg_id, -1, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && (t.text == "require" || t.text == "ensure" || t.text == "invariant") {
+        cur_advance(cur)
+        mut ck = NK_CONTRACT_REQ()
+        if t.text == "ensure" {
+            ck = NK_CONTRACT_ENS()
+        } else if t.text == "invariant" {
+            ck = NK_CONTRACT_INV()
+        }
+        if cur_peek(cur).kind == TK_LPAREN() {
+            cur_advance(cur)
+        }
+        let cond_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        mut msg_id = -1
+        if cur_peek(cur).kind == TK_COMMA() {
+            cur_advance(cur)
+            msg_id = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        }
+        if cur_peek(cur).kind == TK_RPAREN() {
+            cur_advance(cur)
+        }
+        return ast_add_node(pool, ck, "", t.text, "", "", t.line, t.col, t.file_id, cond_id, msg_id, -1, NF_NONE())
+    }
+    if t.kind == TK_KW() && t.text == "receive" {
+        cur_advance(cur)
+        mut pname = "msg"
+        if cur_peek(cur).kind == TK_LPAREN() {
+            cur_advance(cur)
+            if cur_peek(cur).kind == TK_IDENT() {
+                let pn_t = cur_peek(cur)
+                cur_advance(cur)
+                pname = pn_t.text
+            }
+            if cur_peek(cur).kind == TK_RPAREN() {
+                cur_advance(cur)
+            }
+        }
+        cur_skip_nl(cur)
+        let blk_id = ast_parse_stmt(pool, cur, depth + 1)
+        return ast_add_node(pool, NK_RECEIVE_STMT(), "", pname, "", "", t.line, t.col, t.file_id, blk_id, -1, -1, NF_NONE())
+    }
+
+    let lhs = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+    if cur_peek(cur).kind == TK_EQ() {
+        let eq_t = cur_advance(cur)
+        cur_skip_nl(cur)
+        let rhs = ast_parse_expr_bp(pool, cur, 0, depth + 1)
+        return ast_add_node(pool, NK_ASSIGN_STMT(), "=", "", "", "", eq_t.line, eq_t.col, eq_t.file_id, lhs, rhs, -1, NF_NONE())
+    }
+    if cur_peek(cur).kind == TK_SEMI() {
+        cur_advance(cur)
+    }
+    return ast_add_node(pool, NK_EXPR_STMT(), "", "", "", "", t.line, t.col, t.file_id, lhs, -1, -1, NF_NONE())
+}
+
+fn ast_parse_params(mut pool: AstPool, mut cur: TokCursor) -> [int] {
+    mut p_ids: [int] = []
+    if cur_peek(cur).kind == TK_LPAREN() {
+        cur_advance(cur)
+    }
+    while cur_peek(cur).kind != TK_RPAREN() && cur_eof(cur) == false && pool.has_error == false {
+        mut p_flg = NF_NONE()
+        if cur_peek(cur).kind == TK_KW() && cur_peek(cur).text == "mut" {
+            cur_advance(cur)
+            p_flg = NF_MUT()
+        }
+        let pn = cur_peek(cur)
+        if pn.kind == TK_IDENT() {
+            cur_advance(cur)
+        } else {
+            ast_set_error(pool, "Expected parameter name", pn.file_id, pn.line, pn.col)
+        }
+        mut pt = "int"
+        if cur_peek(cur).kind == TK_COLON() {
+            cur_advance(cur)
+            pt = ast_parse_type_str(pool, cur)
+        }
+        mut def_id = -1
+        if cur_peek(cur).kind == TK_EQ() {
+            cur_advance(cur)
+            def_id = ast_parse_expr_bp(pool, cur, 0, 0)
+        }
+        let pid = ast_add_node(pool, NK_PARAM(), "", pn.text, "", pt, pn.line, pn.col, pn.file_id, def_id, -1, -1, p_flg)
+        p_ids = push(p_ids, pid)
+        if cur_peek(cur).kind == TK_COMMA() {
+            cur_advance(cur)
+        } else if cur_peek(cur).kind != TK_RPAREN() {
+            let te = cur_peek(cur)
+            ast_set_error(pool, "Expected ',' or ')' in parameter list", te.file_id, te.line, te.col)
+        }
+    }
+    if cur_peek(cur).kind == TK_RPAREN() {
+        cur_advance(cur)
+    }
+    return p_ids
+}
+
+fn ast_parse_program(mut pool: AstPool, mut cur: TokCursor) -> int {
+    mut top_items: [int] = []
+    cur_skip_nl_semi(cur)
+    while cur_eof(cur) == false && pool.has_error == false {
+        let t = cur_peek(cur)
+        if t.kind == TK_NO_STD() {
+            cur_advance(cur)
+            let nid = ast_add_node(pool, NK_NO_STD(), "", "", "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+            top_items = push(top_items, nid)
+        } else if t.kind == TK_KW() && t.text == "import" {
+            cur_advance(cur)
+            let pt = cur_peek(cur)
+            mut imp_s = ""
+            if pt.kind == TK_STR() {
+                cur_advance(cur)
+                imp_s = pt.text
+            } else {
+                ast_set_error(pool, "Expected string path after 'import'", pt.file_id, pt.line, pt.col)
+            }
+            let nid = ast_add_node(pool, NK_IMPORT(), "", "", imp_s, "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+            top_items = push(top_items, nid)
+        } else if t.kind == TK_KW() && t.text == "struct" {
+            cur_advance(cur)
+            let st = cur_peek(cur)
+            if st.kind == TK_IDENT() {
+                cur_advance(cur)
+            } else {
+                ast_set_error(pool, "Expected struct name", st.file_id, st.line, st.col)
+            }
+            cur_skip_nl(cur)
+            if cur_peek(cur).kind == TK_LBRACE() {
+                cur_advance(cur)
+            }
+            mut f_ids: [int] = []
+            cur_skip_nl(cur)
+            while cur_peek(cur).kind != TK_RBRACE() && cur_eof(cur) == false && pool.has_error == false {
+                mut f_flg = NF_NONE()
+                if cur_peek(cur).kind == TK_KW() && cur_peek(cur).text == "mut" {
+                    cur_advance(cur)
+                    f_flg = NF_MUT()
+                }
+                let fn_t = cur_peek(cur)
+                if fn_t.kind == TK_IDENT() {
+                    cur_advance(cur)
+                } else {
+                    ast_set_error(pool, "Expected struct field name", fn_t.file_id, fn_t.line, fn_t.col)
+                }
+                mut ft_str = "int"
+                if cur_peek(cur).kind == TK_COLON() {
+                    cur_advance(cur)
+                    ft_str = ast_parse_type_str(pool, cur)
+                }
+                let fid_node = ast_add_node(pool, NK_FIELD_DECL(), "", fn_t.text, "", ft_str, fn_t.line, fn_t.col, fn_t.file_id, -1, -1, -1, f_flg)
+                f_ids = push(f_ids, fid_node)
+                cur_skip_nl(cur)
+                if cur_peek(cur).kind == TK_COMMA() {
+                    cur_advance(cur)
+                    cur_skip_nl(cur)
+                }
+            }
+            if cur_peek(cur).kind == TK_RBRACE() {
+                cur_advance(cur)
+            }
+            let sid_node = ast_add_node(pool, NK_STRUCT_DECL(), "", st.text, "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+            ast_attach_children(pool, sid_node, f_ids)
+            top_items = push(top_items, sid_node)
+        } else if t.kind == TK_KW() && t.text == "extern" {
+            cur_advance(cur)
+            if cur_peek(cur).kind == TK_KW() && cur_peek(cur).text == "fn" {
+                cur_advance(cur)
+            }
+            let ft = cur_peek(cur)
+            if ft.kind == TK_IDENT() {
+                cur_advance(cur)
+            } else {
+                ast_set_error(pool, "Expected function name after 'extern fn'", ft.file_id, ft.line, ft.col)
+            }
+            let p_ids = ast_parse_params(pool, cur)
+            mut ret_t = "void"
+            if cur_peek(cur).kind == TK_ARROW() {
+                cur_advance(cur)
+                ret_t = ast_parse_type_str(pool, cur)
+            }
+            mut from_lib = ""
+            if cur_peek(cur).kind == TK_IDENT() && cur_peek(cur).text == "from" {
+                cur_advance(cur)
+                if cur_peek(cur).kind == TK_STR() {
+                    let fl_t = cur_peek(cur)
+                    cur_advance(cur)
+                    from_lib = fl_t.text
+                }
+            }
+            let eid = ast_add_node(pool, NK_EXTERN_FN(), "", ft.text, from_lib, ret_t, t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+            ast_attach_children(pool, eid, p_ids)
+            top_items = push(top_items, eid)
+        } else if t.kind == TK_KW() && t.text == "fn" {
+            cur_advance(cur)
+            let ft = cur_peek(cur)
+            if ft.kind == TK_IDENT() {
+                cur_advance(cur)
+            } else {
+                ast_set_error(pool, "Expected function name", ft.file_id, ft.line, ft.col)
+            }
+            let p_ids = ast_parse_params(pool, cur)
+            mut ret_t = ""
+            if cur_peek(cur).kind == TK_ARROW() {
+                cur_advance(cur)
+                ret_t = ast_parse_type_str(pool, cur)
+            }
+            mut cap_str = ""
+            if cur_peek(cur).kind == TK_IDENT() && cur_peek(cur).text == "with" {
+                cur_advance(cur)
+                if cur_peek(cur).kind == TK_IDENT() && cur_peek(cur).text == "capability" {
+                    cur_advance(cur)
+                }
+                if cur_peek(cur).kind == TK_LBRACK() {
+                    cur_advance(cur)
+                    while cur_peek(cur).kind != TK_RBRACK() && cur_eof(cur) == false {
+                        let ct = cur_advance(cur)
+                        cap_str = cap_str + ct.text
+                    }
+                    if cur_peek(cur).kind == TK_RBRACK() {
+                        cur_advance(cur)
+                    }
+                } else if cur_peek(cur).kind == TK_BANG() {
+                    cur_advance(cur)
+                    if cur_peek(cur).kind == TK_IDENT() {
+                        let cp_t = cur_peek(cur)
+                        cur_advance(cur)
+                        cap_str = "!" + cp_t.text
+                    }
+                } else if cur_peek(cur).kind == TK_IDENT() {
+                    let cp_t = cur_peek(cur)
+                    cur_advance(cur)
+                    cap_str = cp_t.text
+                }
+            }
+            cur_skip_nl(cur)
+            let body_id = ast_parse_stmt(pool, cur, 0)
+            let fn_id = ast_add_node(pool, NK_FN_DECL(), "", ft.text, cap_str, ret_t, t.line, t.col, t.file_id, body_id, -1, -1, NF_NONE())
+            ast_attach_children(pool, fn_id, p_ids)
+            top_items = push(top_items, fn_id)
+        } else if t.kind == TK_KW() && t.text == "actor" {
+            cur_advance(cur)
+            let at = cur_peek(cur)
+            if at.kind == TK_IDENT() {
+                cur_advance(cur)
+            }
+            cur_skip_nl(cur)
+            mut recvs: [int] = []
+            if cur_peek(cur).kind == TK_LBRACE() {
+                cur_advance(cur)
+                cur_skip_nl_semi(cur)
+                while cur_peek(cur).kind != TK_RBRACE() && cur_eof(cur) == false && pool.has_error == false {
+                    let st_id = ast_parse_stmt(pool, cur, 0)
+                    if st_id != -1 {
+                        recvs = push(recvs, st_id)
+                    }
+                    cur_skip_nl_semi(cur)
+                }
+                if cur_peek(cur).kind == TK_RBRACE() {
+                    cur_advance(cur)
+                }
+            }
+            let act_id = ast_add_node(pool, NK_ACTOR_DECL(), "", at.text, "", "", t.line, t.col, t.file_id, -1, -1, -1, NF_NONE())
+            ast_attach_children(pool, act_id, recvs)
+            top_items = push(top_items, act_id)
+        } else if t.kind == TK_KW() && (t.text == "let" || t.text == "mut") {
+            let st_id = ast_parse_stmt(pool, cur, 0)
+            if st_id != -1 {
+                mut nd: AstNode = pool.nodes[st_id]
+                let k_gl = NK_GLOBAL_LET()
+                nd.kind = k_gl
+                pool.nodes[st_id] = nd
+                top_items = push(top_items, st_id)
+            }
+        } else {
+            let st_id = ast_parse_stmt(pool, cur, 0)
+            if st_id != -1 {
+                top_items = push(top_items, st_id)
+            } else {
+                cur_advance(cur)
+            }
+        }
+        cur_skip_nl_semi(cur)
+    }
+    let root_id = ast_add_node(pool, NK_PROGRAM(), "", "unit", "", "", 1, 1, 0, -1, -1, -1, NF_NONE())
+    ast_attach_children(pool, root_id, top_items)
+    pool.root = root_id
+    return root_id
+}
+
+fn ast_parse_unit_ex(source: string, base_dir: string, file_name: string, do_expand: bool) -> AstPool {
+    let eu = expand_all_imports_mapped(source, base_dir, file_name, do_expand)
+    let ts = lex_tokenize_mapped(eu)
+    mut pool = ast_pool_new()
+    let f_cp = eu.files
+    let l_cp = eu.lines
+    let lf_cp = eu.line_fids
+    let ln_cp = eu.line_nums
+    pool.files = f_cp
+    pool.lines = l_cp
+    pool.line_fids = lf_cp
+    pool.line_nums = ln_cp
+    mut cur = cur_new(ts.toks)
+    ast_parse_program(pool, cur)
+    if pool.has_error == false {
+        ast_expand_str_interps(pool)
+    }
+    return pool
+}
+
+fn ast_parse_unit(source: string, base_dir: string, file_name: string) -> AstPool {
+    return ast_parse_unit_ex(source, base_dir, file_name, true)
+}
+
+fn ast_kind_tag_name(k: int) -> string {
+    if k == NK_PROGRAM() { return "PROGRAM" }
+    if k == NK_NO_STD() { return "NO_STD" }
+    if k == NK_IMPORT() { return "IMPORT" }
+    if k == NK_STRUCT_DECL() { return "STRUCT_DECL" }
+    if k == NK_FIELD_DECL() { return "FIELD_DECL" }
+    if k == NK_FN_DECL() { return "FN_DECL" }
+    if k == NK_PARAM() { return "PARAM" }
+    if k == NK_EXTERN_FN() { return "EXTERN_FN" }
+    if k == NK_ACTOR_DECL() { return "ACTOR_DECL" }
+    if k == NK_GLOBAL_LET() { return "GLOBAL_LET" }
+    if k == NK_BLOCK() { return "BLOCK" }
+    if k == NK_LET_STMT() { return "LET_DECL" }
+    if k == NK_ASSIGN_STMT() { return "ASSIGN_STMT" }
+    if k == NK_EXPR_STMT() { return "STMT_EXPR" }
+    if k == NK_RETURN_STMT() { return "RETURN_STMT" }
+    if k == NK_IF_STMT() { return "IF_STMT" }
+    if k == NK_WHILE_STMT() { return "WHILE_STMT" }
+    if k == NK_FOR_RANGE() { return "FOR_RANGE" }
+    if k == NK_FOR_IN() { return "FOR_IN" }
+    if k == NK_MATCH_STMT() { return "MATCH_STMT" }
+    if k == NK_MATCH_ARM() { return "MATCH_ARM" }
+    if k == NK_DEFER_STMT() { return "DEFER_STMT" }
+    if k == NK_GUARD_STMT() { return "GUARD_STMT" }
+    if k == NK_CONTRACT_REQ() { return "CONTRACT_REQ" }
+    if k == NK_CONTRACT_ENS() { return "CONTRACT_ENS" }
+    if k == NK_CONTRACT_INV() { return "CONTRACT_INV" }
+    if k == NK_ABORT_STMT() { return "ABORT_STMT" }
+    if k == NK_TRANSACT_STMT() { return "TRANSACT_STMT" }
+    if k == NK_INLINE_ASM() { return "INLINE_ASM" }
+    if k == NK_COMPTIME() { return "COMPTIME" }
+    if k == NK_RECEIVE_STMT() { return "RECEIVE_STMT" }
+    if k == NK_BREAK_STMT() { return "BREAK_STMT" }
+    if k == NK_CONTINUE_STMT() { return "CONTINUE_STMT" }
+    if k == NK_INT_LIT() { return "INT_LIT" }
+    if k == NK_FLOAT_LIT() { return "FLOAT_LIT" }
+    if k == NK_STR_LIT() { return "STR_LIT" }
+    if k == NK_BOOL_LIT() { return "BOOL_LIT" }
+    if k == NK_NIL_LIT() { return "NIL_LIT" }
+    if k == NK_IDENT() { return "IDENT" }
+    if k == NK_BIN_OP() { return "BIN_OP" }
+    if k == NK_UNARY_OP() { return "UNARY_OP" }
+    if k == NK_CALL() { return "CALL_EXPR" }
+    if k == NK_INDEX() { return "INDEX_EXPR" }
+    if k == NK_MEMBER() { return "MEMBER_EXPR" }
+    if k == NK_ARRAY_LIT() { return "ARRAY_LIT" }
+    if k == NK_DICT_LIT() { return "DICT_LIT" }
+    if k == NK_STRUCT_LIT() { return "STRUCT_LIT" }
+    if k == NK_FIELD_INIT() { return "FIELD_INIT" }
+    if k == NK_LAMBDA() { return "LAMBDA" }
+    if k == NK_TERNARY() { return "TERNARY" }
+    if k == NK_STR_INTERP() { return "STR_INTERP" }
+    if k == NK_PIPE() { return "PIPE_EXPR" }
+    if k == NK_DICT_ENTRY() { return "DICT_ENTRY" }
+    return "NODE"
+}
+
+fn ast_render_indent(d: int) -> string {
+    mut s = ""
+    mut i = 0
+    while i < d && i < 16 {
+        s = s + "  "
+        i = i + 1
+    }
+    return s
+}
+
+fn ast_render_rec(pool: AstPool, nid: int, parent_id: int, depth: int) -> string {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return ""
+    }
+    let nd: AstNode = pool.nodes[nid]
+    mut lbl = nd.name
+    if len(lbl) == 0 {
+        lbl = nd.op
+    }
+    if len(lbl) == 0 {
+        lbl = nd.str_val
+    }
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal_nd: AstNode = pool.nodes[nd.left]
+        if len(cal_nd.name) > 0 {
+            lbl = cal_nd.name
+        }
+    }
+    mut child_tag = ""
+    if nd.left != -1 || nd.right != -1 {
+        child_tag = " l=" + int_to_str(nd.left) + " r=" + int_to_str(nd.right)
+    }
+    mut out = ast_render_indent(depth) + "[#" + int_to_str(nid) + " p=" + int_to_str(parent_id) + child_tag + "] " + ast_kind_tag_name(nd.kind) + " " + lbl + "\n"
+    if nd.left != -1 {
+        out = out + ast_render_rec(pool, nd.left, nid, depth + 1)
+    }
+    if nd.right != -1 {
+        out = out + ast_render_rec(pool, nd.right, nid, depth + 1)
+    }
+    if nd.extra != -1 {
+        out = out + ast_render_rec(pool, nd.extra, nid, depth + 1)
+    }
+    for ci in 0..nd.child_count {
+        let cid = pool.children[nd.child_start + ci]
+        out = out + ast_render_rec(pool, cid, nid, depth + 1)
+    }
+    return out
+}
+
+fn ast_render_from_pool(pool: AstPool) -> string {
+    let total = len(pool.nodes)
+    mut hdr = "; Nino Tagged AST (" + int_to_str(total) + " Nodes)\n"
+    if pool.root >= 0 {
+        hdr = hdr + ast_render_rec(pool, pool.root, -1, 0)
+    }
+    return hdr
+}
+

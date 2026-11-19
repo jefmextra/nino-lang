@@ -1,0 +1,7 @@
+fn main() -> int {
+    let m = arena_mark()
+    let s = "tmp_" + int_to_str(1)
+    arena_rollback(m)
+    print(s)
+    return 0
+}

@@ -1,0 +1,28 @@
+struct Point {
+    x: int,
+    y: int
+}
+
+fn make_tagged_pair(a: int, b: string) -> Pair<int, string> {
+    return (Pair_int_string){ .first = a, .second = b }
+}
+
+fn wrap_pair_opt(a: int, b: string) -> Option<Pair<int, string>> {
+    let p = make_tagged_pair(a, b)
+    return (Option_Pair_int_string){ .is_some = true, .val = p }
+}
+
+fn main() -> int {
+    let p1 = make_tagged_pair(10, "ten")
+    let b: Box<int> = (Box_int){ .val = 55 }
+    let op: Option<Point> = (Option_Point){ .is_some = true, .val = Point { x: 3, y: 4 } }
+    let nested: Pair<Box<int>, Option<Point>> = (Pair_Box_int_Option_Point){ .first = b, .second = op }
+    let opt_pair = wrap_pair_opt(99, "ninety_nine")
+
+    require(p1.first == 10 && p1.second == "ten", "Pair<int, string> check")
+    require(nested.first.val == 55 && nested.second.is_some && nested.second.val.x == 3, "Pair<Box<int>, Option<Point>> check")
+    require(opt_pair.is_some && opt_pair.val.first == 99 && opt_pair.val.second == "ninety_nine", "Option<Pair<int, string>> check")
+
+    print("T1-F03-04:PASS")
+    return 0
+}

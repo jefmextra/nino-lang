@@ -1,0 +1,34 @@
+fn main() -> int {
+    let s: int = 1
+    if true {
+        mut s: string = "L2"
+        if true {
+            let s: bool = true
+            if true {
+                mut s: int = 40
+                if true {
+                    let s: string = "L5"
+                    if true {
+                        mut s: bool = false
+                        if true {
+                            let s: int = 70
+                            if true {
+                                mut s: string = "L8"
+                                require(s == "L8", "level 8 shadow")
+                            }
+                            require(s == 70, "level 7 unwind")
+                        }
+                        require(s == false, "level 6 unwind")
+                    }
+                    require(s == "L5", "level 5 unwind")
+                }
+                require(s == 40, "level 4 unwind")
+            }
+            require(s == true, "level 3 unwind")
+        }
+        require(s == "L2", "level 2 unwind")
+    }
+    require(s == 1, "level 1 unwind")
+    print("T2-F01-05:PASS")
+    return 0
+}

@@ -1,0 +1,65 @@
+import "std/str.nino"
+
+fn resolve_ninoc_cmd() -> string {
+    if is_windows() {
+        if file_exists("ninoc.exe") { return "ninoc.exe" }
+        return "ninoc.exe"
+    }
+    if file_exists("./ninoc") { return "./ninoc" }
+    return "ninoc"
+}
+
+fn main() -> int {
+    let ninoc = resolve_ninoc_cmd()
+    let lb = "{"
+    let rb = "}"
+
+    let src_ll = "temp_e2e_f20_05_ll.nino"
+    let out_ll = "temp_e2e_f20_05_ll.ll"
+    mut code_ll = "fn loop_cont() -> int " + lb + "\n    mut s = 0\n    for i in 0..5 " + lb + "\n        if i == 2 " + lb + " continue " + rb + "\n        s = s + i\n    " + rb + "\n    return s\n" + rb + "\n"
+    code_ll = code_ll + "fn safe_div(a: int, b: int) -> int " + lb + "\n    return a / b\n" + rb + "\n"
+    code_ll = code_ll + "fn main() -> int " + lb + "\n    if loop_cont() != 8 " + lb + " exit(1) " + rb + "\n    if safe_div(12, 3) != 4 " + lb + " exit(2) " + rb + "\n    exit(0)\n    return 0\n" + rb + "\n"
+    write_file(src_ll, code_ll)
+
+    require(exec_cmd(ninoc + " llvm " + src_ll + " -o " + out_ll) == 0, "ninoc llvm must emit IR for for..continue/div/exit")
+    let ir = read_file(out_ll)
+    require(str_contains(ir, "for.inc.1:"), "for loop must emit dedicated increment latch for.inc label")
+    require(str_contains(ir, "br label %for.inc.1"), "continue inside for must target for.inc label")
+    require(str_contains(ir, "call void @nino_require(i1 "), "integer sdiv must emit runtime division-by-zero/overflow guards")
+    require(str_contains(ir, "call void @exit(i32 "), "exit(code) builtin must lower to @exit(i32)")
+
+    if !is_windows() {
+        if exec_cmd("clang --version >/dev/null 2>&1") == 0 {
+            let obj_ll = "temp_e2e_f20_05_ll.o"
+            let exe_ll = "temp_e2e_f20_05_ll.out"
+            require(exec_cmd("clang -c " + out_ll + " -o " + obj_ll) == 0, "clang must compile emitted LLVM IR")
+            require(exec_cmd("gcc " + obj_ll + " -o " + exe_ll) == 0, "gcc must link LLVM IR object")
+            require(exec_cmd("./" + exe_ll) == 0, "compiled for..continue/div/exit executable must return 0")
+            file_delete(obj_ll)
+            file_delete(exe_ll)
+        }
+    } else {
+        let exe_nat = "temp_e2e_f20_05_nat.exe"
+        require(exec_cmd(ninoc + " build " + src_ll + " --backend=native -o " + exe_nat) == 0, "native backend must build exit(code)")
+        require(exec_cmd(".\\" + exe_nat) == 0, "native exit(0) executable must return 0")
+        file_delete(exe_nat)
+    }
+
+    let eq_a = "temp_e2e_f20_05_ea.nino"
+    let eq_b = "temp_e2e_f20_05_eb.nino"
+    let eq_c = "temp_e2e_f20_05_ec.nino"
+    write_file(eq_a, "fn calc(c: bool) -> int " + lb + "\n    let x = 5\n    if c " + lb + "\n        let x = 99\n    " + rb + "\n    return x\n" + rb + "\n")
+    write_file(eq_b, "fn calc(c: bool) -> int " + lb + "\n    if c " + lb + "\n        return 99\n    " + rb + " else " + lb + "\n        return 5\n    " + rb + "\n    return 0\n" + rb + "\n")
+    write_file(eq_c, "fn calc(c: bool) -> int " + lb + "\n    return 5\n" + rb + "\n")
+
+    require(exec_cmd(ninoc + " equiv " + eq_a + " " + eq_b + " calc") != 0, "equiv must detect inner let shadow non-equivalence")
+    require(exec_cmd(ninoc + " equiv " + eq_a + " " + eq_c + " calc") == 0, "equiv must prove sound equivalence when shadow stays scoped")
+
+    file_delete(src_ll)
+    file_delete(out_ll)
+    file_delete(eq_a)
+    file_delete(eq_b)
+    file_delete(eq_c)
+    print("T1-F20-05:PASS")
+    return 0
+}

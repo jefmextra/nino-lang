@@ -1,0 +1,229 @@
+fn check_nino_source_file(path: string) -> int {
+    if file_exists(path) == false {
+        print("  [ERROR] Missing expected source file: " + path)
+        return 1
+    }
+    let src = read_file(path)
+    let n = len(src)
+    mut i = 0
+    mut line = 1
+    mut violations = 0
+    mut in_lcmt = false
+    mut in_bcmt = false
+    while i < n {
+        let ch = char_at(src, i)
+        let b0 = char_code_at(src, i)
+        if b0 == 226 && i + 2 < n {
+            let b1 = char_code_at(src, i + 1)
+            let b2 = char_code_at(src, i + 2)
+            if b1 == 128 && (b2 == 148 || b2 == 147) {
+                print("  [VIOLATION] Forbidden dash character in " + path + " at line " + int_to_str(line))
+                violations = violations + 1
+            }
+        }
+        if ch == "\n" {
+            line = line + 1
+            in_lcmt = false
+            i = i + 1
+        } else if in_lcmt {
+            i = i + 1
+        } else if in_bcmt {
+            if ch == "*" && i + 1 < n && char_at(src, i + 1) == "/" {
+                in_bcmt = false
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else if ch == "\"" {
+            i = i + 1
+            mut in_str = true
+            while i < n && in_str {
+                let sc = char_at(src, i)
+                if sc == "\\" {
+                    if i + 1 < n && char_at(src, i + 1) == "\n" {
+                        line = line + 1
+                    }
+                    i = i + 2
+                } else if sc == "\"" {
+                    i = i + 1
+                    in_str = false
+                } else {
+                    if sc == "\n" {
+                        line = line + 1
+                    }
+                    i = i + 1
+                }
+            }
+        } else if ch == "/" && i + 1 < n && char_at(src, i + 1) == "/" {
+            in_lcmt = true
+            i = i + 2
+        } else if ch == "/" && i + 1 < n && char_at(src, i + 1) == "*" {
+            in_bcmt = true
+            i = i + 2
+        } else if ch == "*" && i + 1 < n && char_at(src, i + 1) == "/" {
+            print("  [VIOLATION] Unmatched block comment close in " + path + " at line " + int_to_str(line))
+            violations = violations + 1
+            i = i + 2
+        } else if ch == "#" {
+            let no_std_tag = "#" + "no_std"
+            if slice(src, i, 7) == no_std_tag {
+                i = i + 7
+            } else {
+                print("  [VIOLATION] Forbidden hash comment in " + path + " at line " + int_to_str(line))
+                violations = violations + 1
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    if in_bcmt {
+        print("  [VIOLATION] Unclosed block comment in " + path + " at line " + int_to_str(line))
+        violations = violations + 1
+    }
+    return violations
+}
+
+fn check_text_no_dashes(path: string) -> int {
+    if file_exists(path) == false {
+        return 0
+    }
+    let txt = read_file(path)
+    let n = len(txt)
+    mut i = 0
+    mut line = 1
+    mut violations = 0
+    let e1 = "&" + "mdash;"
+    let e2 = "&" + "ndash;"
+    let e3 = "&#" + "8212;"
+    let e4 = "&#" + "8211;"
+    while i < n {
+        let b0 = char_code_at(txt, i)
+        if b0 == 10 {
+            line = line + 1
+        } else if b0 == 226 && i + 2 < n {
+            let b1 = char_code_at(txt, i + 1)
+            let b2 = char_code_at(txt, i + 2)
+            if b1 == 128 && (b2 == 148 || b2 == 147) {
+                print("  [VIOLATION] Forbidden UTF-8 dash in " + path + " at line " + int_to_str(line))
+                violations = violations + 1
+            }
+        } else if b0 == 38 && i + 7 <= n {
+            let sub7 = slice(txt, i, 7)
+            if sub7 == e1 || sub7 == e2 || sub7 == e3 || sub7 == e4 {
+                print("  [VIOLATION] Forbidden HTML dash entity in " + path + " at line " + int_to_str(line))
+                violations = violations + 1
+            }
+        }
+        i = i + 1
+    }
+    return violations
+}
+
+fn main() -> int {
+    print("================================================================================")
+    print("[Nino Sovereign Native Compliance Auditor (Code Hygiene & Conformance)]")
+    print("================================================================================")
+
+    mut v = 0
+    v = v + check_nino_source_file("main.nino")
+    v = v + check_nino_source_file("boot/build_kernel.nino")
+    v = v + check_nino_source_file("compiler/common.nino")
+    v = v + check_nino_source_file("compiler/runtime_hdr.nino")
+    v = v + check_nino_source_file("compiler/types_ast.nino")
+    v = v + check_nino_source_file("compiler/lexer_parser.nino")
+    v = v + check_nino_source_file("compiler/nir.nino")
+    v = v + check_nino_source_file("compiler/c_codegen.nino")
+    v = v + check_nino_source_file("compiler/sem_check.nino")
+    v = v + check_nino_source_file("compiler/smt_prover.nino")
+    v = v + check_nino_source_file("compiler/native_backend.nino")
+    v = v + check_nino_source_file("compiler/llvm_ir.nino")
+    v = v + check_nino_source_file("compiler/tooling.nino")
+    v = v + check_nino_source_file("compiler/ninoc.nino")
+    v = v + check_nino_source_file("examples/tensor_channel_mesh_demo.nino")
+    v = v + check_nino_source_file("examples/bootstrap_test.nino")
+    v = v + check_nino_source_file("examples/daemon_arena_demo.nino")
+    v = v + check_nino_source_file("examples/ffi_test.nino")
+    v = v + check_nino_source_file("examples/generics_demo.nino")
+    v = v + check_nino_source_file("examples/gui_demo.nino")
+    v = v + check_nino_source_file("examples/hardened_audit_test.nino")
+    v = v + check_nino_source_file("examples/high_assurance_demo.nino")
+    v = v + check_nino_source_file("examples/http_microservice.nino")
+    v = v + check_nino_source_file("examples/kernel_os.nino")
+    v = v + check_nino_source_file("examples/leak_test.nino")
+    v = v + check_nino_source_file("examples/lsp_protocol_test.nino")
+    v = v + check_nino_source_file("examples/math3d_demo.nino")
+    v = v + check_nino_source_file("examples/multiline_demo.nino")
+    v = v + check_nino_source_file("examples/native_test.nino")
+    v = v + check_nino_source_file("examples/os_desktop_gui.nino")
+    v = v + check_nino_source_file("examples/pcc_fail_demo.nino")
+    v = v + check_nino_source_file("examples/pcc_sound_demo.nino")
+    v = v + check_nino_source_file("examples/systems_io_demo.nino")
+    v = v + check_nino_source_file("examples/safe_calc.nino")
+    v = v + check_nino_source_file("examples/security_test.nino")
+    v = v + check_nino_source_file("examples/runtime_verification.nino")
+    v = v + check_nino_source_file("examples/actor_wasm_privacy_demo.nino")
+    v = v + check_nino_source_file("examples/toolchain_verification.nino")
+    v = v + check_nino_source_file("examples/control_flow_demo.nino")
+    v = v + check_nino_source_file("examples/transactions_enclave_demo.nino")
+    v = v + check_nino_source_file("examples/xdp_ddos_filter.nino")
+    v = v + check_nino_source_file("pkg/libcrypto/module.nino")
+    v = v + check_nino_source_file("std/actor.nino")
+    v = v + check_nino_source_file("std/channel.nino")
+    v = v + check_nino_source_file("std/compiler.nino")
+    v = v + check_nino_source_file("std/consensus.nino")
+    v = v + check_nino_source_file("std/crypto.nino")
+    v = v + check_nino_source_file("std/db.nino")
+    v = v + check_nino_source_file("std/env.nino")
+    v = v + check_nino_source_file("std/fs.nino")
+    v = v + check_nino_source_file("std/gui.nino")
+    v = v + check_nino_source_file("std/honeypot.nino")
+    v = v + check_nino_source_file("std/http.nino")
+    v = v + check_nino_source_file("std/interop.nino")
+    v = v + check_nino_source_file("std/json.nino")
+    v = v + check_nino_source_file("std/math.nino")
+    v = v + check_nino_source_file("std/math3d.nino")
+    v = v + check_nino_source_file("std/mesh.nino")
+    v = v + check_nino_source_file("std/mpc.nino")
+    v = v + check_nino_source_file("std/option.nino")
+    v = v + check_nino_source_file("std/privacy.nino")
+    v = v + check_nino_source_file("std/quantum.nino")
+    v = v + check_nino_source_file("std/resilience.nino")
+    v = v + check_nino_source_file("std/result.nino")
+    v = v + check_nino_source_file("std/csv.nino")
+    v = v + check_nino_source_file("std/jwt.nino")
+    v = v + check_nino_source_file("std/regex.nino")
+    v = v + check_nino_source_file("std/str.nino")
+    v = v + check_nino_source_file("std/tensor.nino")
+    v = v + check_nino_source_file("std/uuid.nino")
+    v = v + check_nino_source_file("std/wasm.nino")
+    v = v + check_nino_source_file("std/z3.nino")
+    v = v + check_nino_source_file("std/zkp.nino")
+    v = v + check_nino_source_file("pilots/ledger_microservice.nino")
+    v = v + check_nino_source_file("pilots/iot_edge_telemetry.nino")
+    v = v + check_nino_source_file("pilots/xdp_packet_firewall.nino")
+    v = v + check_nino_source_file("tools/compliance_check.nino")
+    v = v + check_nino_source_file("tools/fuzzer.nino")
+    v = v + check_nino_source_file("tools/iso_conformance.nino")
+    v = v + check_nino_source_file("tools/test_runner.nino")
+    v = v + check_nino_source_file("tests/e2e/tier1/f01_07_comments_all_stages.nino")
+
+    v = v + check_text_no_dashes("README.md")
+    v = v + check_text_no_dashes("ROADMAP.md")
+    v = v + check_text_no_dashes("SPECIFICATION.md")
+    v = v + check_text_no_dashes("CONTRIBUTING.md")
+    v = v + check_text_no_dashes("CHALLENGE.md")
+    v = v + check_text_no_dashes("docs/index.html")
+    v = v + check_text_no_dashes("web/index.html")
+    v = v + check_text_no_dashes("runtime/nino_runtime.h")
+    v = v + check_text_no_dashes(".github/workflows/ci.yml")
+
+    if v == 0 {
+        print("  [✓ COMPLIANCE VERIFIED] 0 Comment Syntax Errors, 0 Forbidden '#', 0 Em-Dash/En-Dash Violations.")
+        print("================================================================================")
+        return 0
+    }
+    print("  [✗ COMPLIANCE FAILED] Total Violations: " + int_to_str(v))
+    print("================================================================================")
+    return 1
+}

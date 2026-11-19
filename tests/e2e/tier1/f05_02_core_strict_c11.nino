@@ -1,0 +1,21 @@
+fn main() -> int {
+    morphic mut guard_v = 100
+    guard_v = guard_v + 25
+    sealed let token = "STRICT_C11_VAULT_KEY"
+    mut cfg = { "mode": "strict" }
+    cfg["code"] = 200
+    mut tx_val = 10
+    transact {
+        tx_val = 999
+        abort "rollback_check"
+    } compensate {
+        tx_val = 42
+    }
+    inline_asm {
+        tx_val = tx_val + 1
+    }
+    require(guard_v == 125 && unseal(token) == "STRICT_C11_VAULT_KEY", "morphic/sealed check failed")
+    require(cfg["mode"] == "strict" && cfg["code"] == "200" && tx_val == 43, "dict/transact/inline_asm check failed")
+    print("T1-F05-02:PASS")
+    return 0
+}

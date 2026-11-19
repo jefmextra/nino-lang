@@ -1,0 +1,12 @@
+fn bug_loop(n: int) -> int {
+    mut x = 0
+    for i in 0..n {
+        x = 42
+    }
+    ensure(x == 42, "uninvariant loop fails when n == 0")
+    return x
+}
+
+fn main() -> int {
+    return bug_loop(0)
+}

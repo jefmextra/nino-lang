@@ -1,0 +1,10 @@
+struct S {
+    id: int,
+    mut val: int
+}
+
+fn main() -> int {
+    mut s = S { id: 1, val: 2 }
+    s.id = 99
+    return s.id
+}

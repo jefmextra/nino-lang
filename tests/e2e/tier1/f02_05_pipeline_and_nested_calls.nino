@@ -1,0 +1,20 @@
+fn add_offset(v: int, off: int) -> int {
+    return v + off
+}
+
+fn scale_val(v: int, factor: int) -> int {
+    return v * factor
+}
+
+fn combine(a: int, b: int) -> int {
+    return a + b
+}
+
+fn main() -> int {
+    let piped = 5 |> add_offset(3) |> scale_val(4)
+    let nested = combine(add_offset(2, 8), scale_val(3, 5))
+    require(piped == 32, "multi-stage pipe must yield 32")
+    require(nested == 25, "nested calls must yield 25")
+    print("T1-F02-05:PASS")
+    return 0
+}

@@ -1,0 +1,18 @@
+fn thr_fn(x: int) -> int {
+    return x * 5 + 3
+}
+
+fn main() -> int {
+    let t1 = thread_spawn(thr_fn, 4)
+    let t2 = thread_spawn(thr_fn, 6)
+    let r1 = thread_join(t1)
+    let r2 = thread_join(t2)
+    let kp = pq_generate_keypair(512)
+    let enc = pq_encapsulate(kp["public_key"])
+    let ss = pq_decapsulate(enc["ciphertext"], kp["private_key"])
+    let zp = zk_prove_condition(95000, ">", 50000)
+    let zv = zk_verify_proof(zp)
+    require(r1 == 23 && r2 == 33 && enc["shared_secret"] == ss && zv, "C11 threads/PQC/ZKP check failed")
+    print("T1-F10-01:PASS")
+    return 0
+}

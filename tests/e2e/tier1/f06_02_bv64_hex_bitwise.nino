@@ -1,0 +1,14 @@
+fn mask_byte(x: int) -> int {
+    require(x >= 0 && x <= 0xFFFF, "16-bit bounded value")
+    let lo = x & 0xFF
+    let sh = (lo << 2) & 0xFF
+    let inv = (~lo) & 0xFF
+    let ok = lo + sh + inv
+    ensure(lo >= 0 && lo <= 0xFF && ok >= 0 && ok <= 1024, "bitwise invariant")
+    return ok
+}
+
+fn main() -> int {
+    print("T1-F06-02:" + int_to_str(mask_byte(0x0F)))
+    return 0
+}

@@ -1,0 +1,6 @@
+fn main() -> int {
+    let flag: bool = (10 + 5) && "hello"
+    let inv: bool = !"text"
+    print(flag, inv)
+    return 0
+}

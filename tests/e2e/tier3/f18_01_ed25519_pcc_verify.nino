@@ -1,0 +1,48 @@
+import "std/str.nino"
+
+fn main() -> int {
+    let h512 = sha512("abc")
+    require(str_starts_with(h512, "ddaf35a193617abacc417349ae204131"), "SHA-512 KAT mismatch")
+
+    let seed1 = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+    let kp = ed25519_keygen_seed(seed1)
+    let pk = ed25519_pubkey_from_sk(seed1)
+    require(pk == "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "RFC 8032 pubkey mismatch")
+    let sig = ed25519_sign("nino_pcc_msg", seed1)
+    require(len(sig) == 128, "Ed25519 sig len")
+    require(ed25519_verify("nino_pcc_msg", sig, pk), "Ed25519 verify failed")
+    require(ed25519_verify("tampered_msg", sig, pk) == false, "Ed25519 must reject tamper")
+
+    let base_tmp = len(get_env("TEMP")) > 0 ? get_env("TEMP") : "/tmp"
+    let pid_s = int_to_str(nino_get_pid())
+    let pcc_code = "fn add_pos(a: int, b: int) -> int {\n    require(a >= 0 && a <= 50 && b >= 0 && b <= 50, \"b\")\n    let r = a + b\n    ensure(r >= 0 && r <= 100, \"o\")\n    return r\n}\n\nfn main() -> int {\n    print(add_pos(10, 20))\n    return 0\n}\n"
+    let bad_pk = "0000000000000000000000000000000000000000000000000000000000000000"
+    if len(get_env("OS")) > 0 {
+        let ws = str_replace(base_tmp, "/", "\\") + "\\nino_e2e_ed_" + pid_s
+        let src = ws + "\\ed.nino"
+        let exe = ws + "\\ed.exe"
+        let bat = ws + "\\b.bat"
+        exec_cmd("mkdir \"" + ws + "\" >nul 2>&1")
+        write_file(src, pcc_code)
+        write_file(bat, "@echo off\nset \"NINO_PCC_ED25519_SEED=" + seed1 + "\"\nninoc.exe keygen --seed " + seed1 + " >nul || exit /b 1\nninoc.exe build \"" + src + "\" -o \"" + exe + "\" --proof --strict-c11 >nul || exit /b 1\n")
+        let rc_b = exec_cmd("call \"" + bat + "\"")
+        let rc_ok = exec_cmd("\"" + exe + "\" --verify-proof --pubkey " + pk + " >nul")
+        let rc_bad = exec_cmd("\"" + exe + "\" --verify-proof --pubkey " + bad_pk + " >nul 2>&1")
+        exec_cmd("rmdir /s /q \"" + ws + "\" >nul 2>&1")
+        require(rc_b == 0 && rc_ok == 0 && rc_bad != 0, "Windows Ed25519 PCC verification failed")
+    } else {
+        let ws = base_tmp + "/nino_e2e_ed_" + pid_s
+        let src = ws + "/ed.nino"
+        let exe = ws + "/ed.out"
+        exec_cmd("mkdir -p \"" + ws + "\"")
+        write_file(src, pcc_code)
+        let rc_k = exec_cmd("./ninoc keygen --seed " + seed1 + " >/dev/null")
+        let rc_b = exec_cmd("NINO_PCC_ED25519_SEED=" + seed1 + " ./ninoc build \"" + src + "\" -o \"" + exe + "\" --proof --strict-c11 >/dev/null")
+        let rc_ok = exec_cmd("\"" + exe + "\" --verify-proof --pubkey " + pk + " >/dev/null")
+        let rc_bad = exec_cmd("\"" + exe + "\" --verify-proof --pubkey " + bad_pk + " >/dev/null 2>&1")
+        exec_cmd("rm -rf \"" + ws + "\"")
+        require(rc_k == 0 && rc_b == 0 && rc_ok == 0 && rc_bad != 0, "POSIX Ed25519 PCC verification failed")
+    }
+    print("T3-F18-01:PASS")
+    return 0
+}

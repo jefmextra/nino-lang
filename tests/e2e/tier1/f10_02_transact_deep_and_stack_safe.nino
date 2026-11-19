@@ -1,0 +1,50 @@
+fn stack_clobber(n: int) -> int {
+    mut a = n + 111111
+    mut b = a * 3
+    mut c = b ^ 987654
+    if n > 0 {
+        return stack_clobber(n - 1) + (c & 7)
+    }
+    return a + b + c
+}
+
+fn mutate_local_then_return() -> int {
+    mut local_buf = 100
+    local_buf = 999
+    return local_buf
+}
+
+fn deep_tx(d: int, mut hits: [int]) {
+    if d <= 0 {
+        return
+    }
+    transact {
+        hits[0] = hits[0] + 1
+        if d > 1 {
+            deep_tx(d - 1, hits)
+        }
+    } compensate {
+        hits[0] = hits[0] - 1
+    }
+}
+
+fn main() -> int {
+    mut g = 50
+    transact {
+        g = 123
+        let r = mutate_local_then_return()
+        require(r == 999, "helper local returns properly")
+        let _junk = stack_clobber(12)
+        abort "CWE-562 test abort"
+    } compensate {
+        require(g == 50, "aborted transact must roll back outer mut var")
+    }
+    let after_clobber = stack_clobber(12)
+    require(after_clobber != 0, "stack must remain intact after helper-local rollback abort (CWE-562 safe)")
+
+    mut hits = [0]
+    deep_tx(40, hits)
+    require(hits[0] == 40, "chunked transact frames must support depth > 32")
+    print("T1-F10-02:PASS")
+    return 0
+}

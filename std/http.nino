@@ -1,0 +1,121 @@
+fn http_build_json_response(status_code: int, status_text: string, json_body: string) -> string {
+    let blen = len(json_body)
+    mut resp = "HTTP/1.1 " + int_to_str(status_code) + " " + status_text + "\r\n"
+    resp = resp + "Content-Type: application/json; charset=utf-8\r\n"
+    resp = resp + "Content-Length: " + int_to_str(blen) + "\r\n"
+    resp = resp + "Connection: close\r\n\r\n"
+    resp = resp + json_body
+    return resp
+}
+
+fn http_extract_status_code(raw_http: string) -> int {
+    let rlen = len(raw_http)
+    if rlen < 12 {
+        return 0
+    }
+    mut sp = 0
+    while sp < rlen && char_at(raw_http, sp) != " " {
+        sp = sp + 1
+    }
+    while sp < rlen && char_at(raw_http, sp) == " " {
+        sp = sp + 1
+    }
+    mut code = 0
+    while sp < rlen {
+        let code_num = char_code_at(raw_http, sp)
+        if code_num >= 48 && code_num <= 57 {
+            code = code * 10 + (code_num - 48)
+            sp = sp + 1
+        } else {
+            break
+        }
+    }
+    return code
+}
+
+fn http_extract_body(raw_http: string) -> string {
+    let rlen = len(raw_http)
+    mut i = 0
+    while i + 4 <= rlen {
+        if slice(raw_http, i, 4) == "\r\n\r\n" {
+            return slice(raw_http, i + 4, rlen - i - 4)
+        }
+        i = i + 1
+    }
+    mut j = 0
+    while j + 2 <= rlen {
+        if slice(raw_http, j, 2) == "\n\n" {
+            return slice(raw_http, j + 2, rlen - j - 2)
+        }
+        j = j + 1
+    }
+    return ""
+}
+
+fn _http_has_crlf(s: string) -> bool {
+    let n = len(s)
+    for i in 0..n {
+        let ch = char_at(s, i)
+        if ch == "\r" || ch == "\n" {
+            return true
+        }
+    }
+    return false
+}
+
+fn http_get(host: string, port: int, path: string) -> string {
+    require(_http_has_crlf(host) == false && _http_has_crlf(path) == false, "HTTP host/path cannot contain CR or LF")
+    require(len(host) > 0, "HTTP host cannot be empty")
+    require(port > 0 && port <= 65535, "HTTP port must be valid TCP port")
+    let fd = tcp_connect(host, port)
+    if fd < 0 {
+        return ""
+    }
+    mut req = "GET " + path + " HTTP/1.1\r\n"
+    req = req + "Host: " + host + "\r\n"
+    req = req + "User-Agent: NinoHttpClient/1.0\r\n"
+    req = req + "Connection: close\r\n\r\n"
+    tcp_write(fd, req)
+    mut full_resp = ""
+    mut reading = true
+    while reading {
+        let chunk = tcp_read(fd, 8192)
+        if len(chunk) == 0 {
+            reading = false
+        } else {
+            full_resp = full_resp + chunk
+        }
+    }
+    tcp_close(fd)
+    return full_resp
+}
+
+fn http_post_json(host: string, port: int, path: string, json_body: string) -> string {
+    require(_http_has_crlf(host) == false && _http_has_crlf(path) == false, "HTTP host/path cannot contain CR or LF")
+    require(len(host) > 0, "HTTP host cannot be empty")
+    require(port > 0 && port <= 65535, "HTTP port must be valid TCP port")
+    let fd = tcp_connect(host, port)
+    if fd < 0 {
+        return ""
+    }
+    let blen = len(json_body)
+    mut req = "POST " + path + " HTTP/1.1\r\n"
+    req = req + "Host: " + host + "\r\n"
+    req = req + "Content-Type: application/json\r\n"
+    req = req + "Content-Length: " + int_to_str(blen) + "\r\n"
+    req = req + "Connection: close\r\n\r\n"
+    req = req + json_body
+    tcp_write(fd, req)
+    mut full_resp = ""
+    mut reading = true
+    while reading {
+        let chunk = tcp_read(fd, 8192)
+        if len(chunk) == 0 {
+            reading = false
+        } else {
+            full_resp = full_resp + chunk
+        }
+    }
+    tcp_close(fd)
+    return full_resp
+}

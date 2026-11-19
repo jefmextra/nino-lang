@@ -1,0 +1,401 @@
+struct MpcShare {
+    share_id: i64,
+    x: i64,
+    mut y: i64,
+    commitment: str
+}
+
+struct MpcThresholdKey {
+    threshold_k: i64,
+    total_n: i64,
+    prime_mod: i64,
+    generator: i64,
+    mut commitments: [i64],
+    mut shares: [MpcShare]
+}
+
+struct MpcEcPoint {
+    is_inf: bool,
+    x: i64,
+    y: i64
+}
+
+fn mpc_default_prime() -> i64 {
+    return 2305843009213693951
+}
+
+fn mpc_ec_p() -> i64 {
+    return 2305843006314694229
+}
+
+fn mpc_ec_a() -> i64 {
+    return 2305843006314690789
+}
+
+fn mpc_ec_b() -> i64 {
+    return 77658
+}
+
+fn mpc_ec_g() -> MpcEcPoint {
+    return MpcEcPoint { is_inf: false, x: 2, y: 1051889075325909443 }
+}
+
+fn mpc_mod_norm(a: i64, m: i64) -> i64 {
+    if m <= 1 {
+        return 0
+    }
+    mut r = a % m
+    if r < 0 {
+        r = r + m
+    }
+    return r
+}
+
+fn mpc_mod_add(a: i64, b: i64, m: i64) -> i64 {
+    if m <= 1 {
+        return 0
+    }
+    let x = mpc_mod_norm(a, m)
+    let y = mpc_mod_norm(b, m)
+    let room = m - x
+    if y >= room {
+        return y - room
+    }
+    return x + y
+}
+
+fn mpc_mod_sub(a: i64, b: i64, m: i64) -> i64 {
+    if m <= 1 {
+        return 0
+    }
+    let x = mpc_mod_norm(a, m)
+    let y = mpc_mod_norm(b, m)
+    if x >= y {
+        return x - y
+    }
+    return m - (y - x)
+}
+
+fn mpc_mod_mul(a: i64, b: i64, m: i64) -> i64 {
+    if m <= 1 {
+        return 0
+    }
+    mut res = 0
+    mut x = mpc_mod_norm(a, m)
+    mut y = mpc_mod_norm(b, m)
+    while y > 0 {
+        if y % 2 == 1 {
+            res = mpc_mod_add(res, x, m)
+        }
+        x = mpc_mod_add(x, x, m)
+        y = y / 2
+    }
+    return res
+}
+
+fn mpc_mod_pow(base: i64, exp: i64, m: i64) -> i64 {
+    if m <= 1 {
+        return 0
+    }
+    mut res = 1 % m
+    mut cur = mpc_mod_norm(base, m)
+    mut e = exp
+    while e > 0 {
+        if e % 2 == 1 {
+            res = mpc_mod_mul(res, cur, m)
+        }
+        cur = mpc_mod_mul(cur, cur, m)
+        e = e / 2
+    }
+    return res
+}
+
+fn mpc_mod_inv(n: i64, prime_mod: i64) -> i64 {
+    if prime_mod <= 1 {
+        return 0
+    }
+    let pos_n = mpc_mod_norm(n, prime_mod)
+    if pos_n <= 1 {
+        return pos_n
+    }
+    return mpc_mod_pow(pos_n, prime_mod - 2, prime_mod)
+}
+
+fn mpc_ec_sqrt(n: i64) -> i64 {
+    let p = mpc_ec_p()
+    let v = mpc_mod_norm(n, p)
+    if v == 0 {
+        return 0
+    }
+    mut s0 = 0
+    mut d0 = p - 1
+    while d0 % 2 == 0 {
+        d0 = d0 / 2
+        s0 = s0 + 1
+    }
+    mut m_ts = s0
+    mut c_ts = mpc_mod_pow(2, d0, p)
+    mut t_ts = mpc_mod_pow(v, d0, p)
+    mut r_ts = mpc_mod_pow(v, (d0 + 1) / 2, p)
+    while t_ts != 1 {
+        mut i_ts = 0
+        mut tt = t_ts
+        while tt != 1 && i_ts < m_ts {
+            tt = mpc_mod_mul(tt, tt, p)
+            i_ts = i_ts + 1
+        }
+        if i_ts >= m_ts {
+            return -1
+        }
+        mut shift = m_ts - i_ts - 1
+        mut b_ts = c_ts
+        while shift > 0 {
+            b_ts = mpc_mod_mul(b_ts, b_ts, p)
+            shift = shift - 1
+        }
+        m_ts = i_ts
+        c_ts = mpc_mod_mul(b_ts, b_ts, p)
+        t_ts = mpc_mod_mul(t_ts, c_ts, p)
+        r_ts = mpc_mod_mul(r_ts, b_ts, p)
+    }
+    return r_ts
+}
+
+fn mpc_ec_add(p1: MpcEcPoint, p2: MpcEcPoint) -> MpcEcPoint {
+    if p1.is_inf {
+        return p2
+    }
+    if p2.is_inf {
+        return p1
+    }
+    let p = mpc_ec_p()
+    mut lam = 0
+    if p1.x == p2.x {
+        if mpc_mod_add(p1.y, p2.y, p) == 0 {
+            return MpcEcPoint { is_inf: true, x: 0, y: 0 }
+        }
+        let xx = mpc_mod_mul(p1.x, p1.x, p)
+        let num = mpc_mod_add(mpc_mod_mul(3, xx, p), mpc_ec_a(), p)
+        let den = mpc_mod_mul(2, p1.y, p)
+        lam = mpc_mod_mul(num, mpc_mod_inv(den, p), p)
+    } else {
+        let num = mpc_mod_sub(p2.y, p1.y, p)
+        let den = mpc_mod_sub(p2.x, p1.x, p)
+        lam = mpc_mod_mul(num, mpc_mod_inv(den, p), p)
+    }
+    let lam2 = mpc_mod_mul(lam, lam, p)
+    let x3 = mpc_mod_sub(mpc_mod_sub(lam2, p1.x, p), p2.x, p)
+    let y3 = mpc_mod_sub(mpc_mod_mul(lam, mpc_mod_sub(p1.x, x3, p), p), p1.y, p)
+    return MpcEcPoint { is_inf: false, x: x3, y: y3 }
+}
+
+fn mpc_ec_mul(k: i64, pt: MpcEcPoint) -> MpcEcPoint {
+    mut res = MpcEcPoint { is_inf: true, x: 0, y: 0 }
+    mut qpt = pt
+    mut n = k
+    while n > 0 {
+        if n % 2 == 1 {
+            res = mpc_ec_add(res, qpt)
+        }
+        qpt = mpc_ec_add(qpt, qpt)
+        n = n / 2
+    }
+    return res
+}
+
+fn mpc_ec_pack(pt: MpcEcPoint) -> i64 {
+    if pt.is_inf {
+        return -1
+    }
+    let two61 = 2305843009213693952
+    return pt.x + (pt.y % 2) * two61
+}
+
+fn mpc_ec_unpack(packed: i64) -> MpcEcPoint {
+    if packed == -1 {
+        return MpcEcPoint { is_inf: true, x: 0, y: 0 }
+    }
+    if packed < 0 {
+        return MpcEcPoint { is_inf: true, x: -1, y: -1 }
+    }
+    let p = mpc_ec_p()
+    let two61 = 2305843009213693952
+    let lsb = packed / two61
+    let px = packed % two61
+    if px >= p || (lsb != 0 && lsb != 1) {
+        return MpcEcPoint { is_inf: true, x: -1, y: -1 }
+    }
+    let x2 = mpc_mod_mul(px, px, p)
+    let x3 = mpc_mod_mul(x2, px, p)
+    let rhs = mpc_mod_add(mpc_mod_add(x3, mpc_mod_mul(mpc_ec_a(), px, p), p), mpc_ec_b(), p)
+    mut py = mpc_ec_sqrt(rhs)
+    if py < 0 {
+        return MpcEcPoint { is_inf: true, x: -1, y: -1 }
+    }
+    if py % 2 != lsb {
+        py = mpc_mod_sub(0, py, p)
+    }
+    if mpc_mod_mul(py, py, p) != rhs {
+        return MpcEcPoint { is_inf: true, x: -1, y: -1 }
+    }
+    return MpcEcPoint { is_inf: false, x: px, y: py }
+}
+
+fn mpc_split_secret_prime(secret: i64, threshold_k: i64, total_n: i64, prime_mod: i64) -> MpcThresholdKey {
+    require(threshold_k >= 2, "Threshold K must be at least 2")
+    require(total_n >= threshold_k, "Total N must be >= threshold K")
+    require(prime_mod > 65537, "Prime modulus must be safe prime > 16-bit")
+    let use_ec: bool = prime_mod == mpc_default_prime()
+    let g_ec: MpcEcPoint = mpc_ec_g()
+    let int_gen: i64 = 7
+    mut gen_field: i64 = int_gen
+    if use_ec {
+        gen_field = mpc_ec_pack(g_ec)
+    }
+    let s_norm = mpc_mod_norm(secret, prime_mod)
+    mut vss_coms: [i64] = []
+    if use_ec {
+        vss_coms = push(vss_coms, mpc_ec_pack(mpc_ec_mul(s_norm, g_ec)))
+    } else {
+        vss_coms = push(vss_coms, mpc_mod_pow(int_gen, s_norm, prime_mod))
+    }
+    mut coeffs: [i64] = []
+    for deg in 1..threshold_k {
+        let r_ent = csprng_u64()
+        mut pos_r = r_ent % prime_mod
+        if pos_r < 0 {
+            pos_r = -pos_r
+        }
+        let coeff = 1 + (pos_r % (prime_mod - 1))
+        coeffs = push(coeffs, coeff)
+        if use_ec {
+            vss_coms = push(vss_coms, mpc_ec_pack(mpc_ec_mul(coeff, g_ec)))
+        } else {
+            vss_coms = push(vss_coms, mpc_mod_pow(int_gen, coeff, prime_mod))
+        }
+    }
+    mut shares_buf: [MpcShare] = []
+    for i in 1..(total_n + 1) {
+        let xi = i
+        mut yi = s_norm
+        mut x_pow = xi % prime_mod
+        let num_coeffs = len(coeffs)
+        for deg in 0..num_coeffs {
+            let a_m = coeffs[deg]
+            let term = mpc_mod_mul(a_m, x_pow, prime_mod)
+            yi = mpc_mod_add(yi, term, prime_mod)
+            x_pow = mpc_mod_mul(x_pow, xi, prime_mod)
+        }
+        let share_cm = sha256("FELDMAN_SHARE:" + int_to_str(xi) + ":" + int_to_str(yi) + ":" + int_to_str(prime_mod))
+        let share = MpcShare {
+            share_id: xi,
+            x: xi,
+            y: yi,
+            commitment: share_cm
+        }
+        shares_buf = push(shares_buf, share)
+    }
+    return MpcThresholdKey {
+        threshold_k: threshold_k,
+        total_n: total_n,
+        prime_mod: prime_mod,
+        generator: gen_field,
+        commitments: vss_coms,
+        shares: shares_buf
+    }
+}
+
+fn mpc_split_secret(secret: i64, threshold_k: i64, total_n: i64) -> MpcThresholdKey {
+    return mpc_split_secret_prime(secret, threshold_k, total_n, mpc_default_prime())
+}
+
+fn mpc_verify_share_prime(share: MpcShare, prime_mod: i64) -> bool {
+    if share.x <= 0 || share.y < 0 || share.y >= prime_mod {
+        return false
+    }
+    let expected_cm = sha256("FELDMAN_SHARE:" + int_to_str(share.x) + ":" + int_to_str(share.y) + ":" + int_to_str(prime_mod))
+    return share.commitment == expected_cm
+}
+
+fn mpc_verify_share(share: MpcShare) -> bool {
+    return mpc_verify_share_prime(share, mpc_default_prime())
+}
+
+fn mpc_verify_share_vss(share: MpcShare, key: MpcThresholdKey) -> bool {
+    if mpc_verify_share_prime(share, key.prime_mod) == false {
+        return false
+    }
+    if len(key.commitments) != key.threshold_k {
+        return false
+    }
+    let p = key.prime_mod
+    if p == mpc_default_prime() {
+        let g_pt = mpc_ec_unpack(key.generator)
+        if g_pt.x == -1 || g_pt.is_inf {
+            return false
+        }
+        let lhs = mpc_ec_mul(share.y, g_pt)
+        mut rhs = MpcEcPoint { is_inf: true, x: 0, y: 0 }
+        mut x_pow = 1
+        for j in 0..key.threshold_k {
+            let c_pt = mpc_ec_unpack(key.commitments[j])
+            if c_pt.x == -1 {
+                return false
+            }
+            rhs = mpc_ec_add(rhs, mpc_ec_mul(x_pow, c_pt))
+            x_pow = mpc_mod_mul(x_pow, share.x, p)
+        }
+        if lhs.is_inf || rhs.is_inf {
+            return lhs.is_inf && rhs.is_inf
+        }
+        return lhs.x == rhs.x && lhs.y == rhs.y
+    }
+    let lhs_i = mpc_mod_pow(key.generator, share.y, p)
+    mut rhs_i = 1 % p
+    mut x_pow_i = 1
+    for j in 0..key.threshold_k {
+        let c_j = key.commitments[j]
+        let factor = mpc_mod_pow(c_j, x_pow_i, p)
+        rhs_i = mpc_mod_mul(rhs_i, factor, p)
+        x_pow_i = mpc_mod_mul(x_pow_i, share.x, p - 1)
+    }
+    return lhs_i == rhs_i
+}
+
+fn mpc_reconstruct_secret_prime(shares: [MpcShare], threshold_k: i64, prime_mod: i64) -> i64 {
+    require(threshold_k >= 2, "Threshold K must be at least 2")
+    require(len(shares) >= threshold_k, "Insufficient shares to satisfy threshold K")
+    require(prime_mod > 65537, "Prime modulus must be safe prime > 16-bit")
+    mut secret_accum = 0
+    let k = threshold_k
+    for i in 0..k {
+        let si = shares[i]
+        require(mpc_verify_share_prime(si, prime_mod), "Corrupted or invalid share rejected before Lagrange interpolation")
+        for prev in 0..i {
+            require(shares[prev].x != si.x, "Duplicate share coordinate x rejected")
+        }
+        let xi = si.x
+        let yi = si.y % prime_mod
+        mut num = 1
+        mut den = 1
+        for j in 0..k {
+            if i != j {
+                let sj = shares[j]
+                let xj = sj.x
+                let num_term = mpc_mod_sub(0, xj, prime_mod)
+                num = mpc_mod_mul(num, num_term, prime_mod)
+                let den_term = mpc_mod_sub(xi, xj, prime_mod)
+                den = mpc_mod_mul(den, den_term, prime_mod)
+            }
+        }
+        let inv_den = mpc_mod_inv(den, prime_mod)
+        let li = mpc_mod_mul(num, inv_den, prime_mod)
+        let weighted_term = mpc_mod_mul(yi, li, prime_mod)
+        secret_accum = mpc_mod_add(secret_accum, weighted_term, prime_mod)
+    }
+    return secret_accum
+}
+
+fn mpc_reconstruct_secret(shares: [MpcShare], threshold_k: i64) -> i64 {
+    return mpc_reconstruct_secret_prime(shares, threshold_k, mpc_default_prime())
+}

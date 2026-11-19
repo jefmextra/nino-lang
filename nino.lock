@@ -1,0 +1,11 @@
+{
+  "lockfile_version": "1.0.0",
+  "packages": {
+    "libcrypto": {
+      "version": "v1.2.0",
+      "source": "github.com/vanguard/libcrypto",
+      "sha256": "2f66eb574118732f5109bf1f48017e66e69d52ca368ec63a06e594a98d97e714",
+      "verified": true
+    }
+  }
+}

@@ -1,0 +1,108 @@
+fn make_lsp_frame(json_payload: string) -> string {
+    let plen = len(json_payload)
+    let plen_s = int_to_str(plen)
+    return "Content-Length: " + plen_s + "\r\n\r\n" + json_payload
+}
+
+fn contains_sub(haystack: string, needle: string) -> bool {
+    let hlen = len(haystack)
+    let nlen = len(needle)
+    if nlen == 0 {
+        return true
+    }
+    if hlen < nlen {
+        return false
+    }
+    mut i = 0
+    while i <= hlen - nlen {
+        if slice(haystack, i, nlen) == needle {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() -> int {
+    print("================================================================================")
+    print("[Nino Native Language Server Protocol (ninoc lsp) - End-to-End Verification]")
+
+    let msg_init = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":100,\"rootUri\":null,\"capabilities\":{}}}"
+    let msg_initialized = "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
+
+    mut sample_doc = "fn broken_contract(x: int) -> int {\\n"
+    sample_doc = sample_doc + "    require(x > 0, \\\"positive input\\\")\\n"
+    sample_doc = sample_doc + "    ensure(x > 100, \\\"must exceed 100\\\")\\n"
+    sample_doc = sample_doc + "    return x\\n"
+    sample_doc = sample_doc + "}\\n"
+
+    mut msg_open = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{"
+    msg_open = msg_open + "\"uri\":\"file:///test_lsp.nino\",\"languageId\":\"nino\",\"version\":1,\"text\":\"" + sample_doc + "\"}}}"
+
+    mut msg_hover = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{"
+    msg_hover = msg_hover + "\"textDocument\":{\"uri\":\"file:///test_lsp.nino\",\"version\":1},\"position\":{\"line\":1,\"character\":6}}}"
+
+    let msg_shutdown = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+    let msg_exit = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\",\"params\":null}"
+
+    mut full_stream = make_lsp_frame(msg_init)
+    full_stream = full_stream + make_lsp_frame(msg_initialized)
+    full_stream = full_stream + make_lsp_frame(msg_open)
+    full_stream = full_stream + make_lsp_frame(msg_hover)
+    full_stream = full_stream + make_lsp_frame(msg_shutdown)
+    full_stream = full_stream + make_lsp_frame(msg_exit)
+
+    let in_file = "lsp_test_in.rpc"
+    let out_file = "lsp_test_out.rpc"
+    write_file(in_file, full_stream)
+
+    mut bin_cmd = "./ninoc"
+    if is_windows() {
+        bin_cmd = "ninoc.exe"
+    }
+
+    let cmd = bin_cmd + " lsp < " + in_file + " > " + out_file
+    let exit_code = exec_cmd(cmd)
+
+    if file_exists(out_file) == false {
+        file_delete(in_file)
+        print("[Error] LSP server produced no output file")
+        return 1
+    }
+
+    let out_raw = read_file(out_file)
+    file_delete(in_file)
+    file_delete(out_file)
+
+    if exit_code != 0 {
+        print("[Error] LSP server exited with non-zero status: " + int_to_str(exit_code))
+        return 1
+    }
+
+    if contains_sub(out_raw, "\"name\":\"ninoc-lsp\"") == false {
+        print("[Error] Missing initialize capabilities response from ninoc-lsp")
+        return 1
+    }
+    print("  [1/4] JSON-RPC 2.0 Handshake (initialize) : Capabilities Negotiated [OK]")
+
+    if contains_sub(out_raw, "textDocument/publishDiagnostics") == false {
+        print("[Error] Missing publishDiagnostics notification")
+        return 1
+    }
+    if contains_sub(out_raw, "PCC-SAT") == false {
+        print("[Error] Missing real-time Z3 SMT contract refutation diagnostic (PCC-SAT)")
+        return 1
+    }
+    print("  [2/4] Real-Time Z3 SMT Diagnostics        : PCC-SAT Refutation Caught [OK]")
+
+    if contains_sub(out_raw, "\"kind\":\"markdown\"") == false {
+        print("[Error] Missing Markdown hover response")
+        return 1
+    }
+    print("  [3/4] Semantic Hover Inspector            : Markdown Spec Returned [OK]")
+
+    print("  [4/4] Lifecycle Shutdown & Exit           : Clean Exit Code 0 [OK]")
+    print("  Verdict: [NATIVE LSP SERVER & REAL-TIME Z3 DIAGNOSTICS VERIFIED]")
+    print("================================================================================")
+    return 0
+}

@@ -1,0 +1,22 @@
+fn check_shadow(c: bool) -> int {
+    let x = 5
+    if c {
+        let x = 99
+        let tmp = x + 1
+    }
+    ensure(x == 5, "outer let must survive block shadowing")
+    let i = 42
+    for i in 0..3 {
+        let step_v = i + 1
+    }
+    ensure(i == 42, "outer let must survive for-range shadowing")
+    return x + i
+}
+
+fn main() -> int {
+    if check_shadow(true) != 47 {
+        return 1
+    }
+    print("T1-F06-09:PASS")
+    return 0
+}

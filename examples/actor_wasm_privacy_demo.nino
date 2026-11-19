@@ -1,0 +1,91 @@
+import "std/privacy.nino"
+import "std/wasm.nino"
+import "std/actor.nino"
+
+fn execute_in_isolated_context(secret_seed: i64) -> i64 {
+    require(secret_seed > 0, "Session master seed must be strictly positive")
+
+    let attestation = enclave_attest()
+    print("[Integrity Measurement] Process Digest:", attestation["mrenclave"])
+    print("[Integrity Measurement] Status        :", attestation["status"])
+    print("[Integrity Measurement] Hardware TEE  :", attestation["hardware_tee"])
+
+    let encrypted_session_key = (secret_seed * 6364136223846793005 + 1) % 1000000007
+    ensure(encrypted_session_key >= 0, "Session key must be non-negative")
+    return encrypted_session_key
+}
+
+actor VaultWorkerV1 {
+    receive(msg) {
+        if msg == "PING" {
+            return "PONG_FROM_V1"
+        } else if msg == "BALANCE" {
+            return 1000000
+        }
+        return "UNKNOWN_MSG"
+    }
+}
+
+actor VaultWorkerV2 {
+    receive(msg) {
+        if msg == "PING" {
+            return "PONG_FROM_V2_HOT_PATCHED_ATOMICALLY"
+        } else if msg == "BALANCE" {
+            return 2500000
+        }
+        return "V2_SECURE_ACK"
+    }
+}
+
+fn main() {
+    print("================================================================================")
+    print("      NINO PRIVACY, WASM SANDBOX & ACTOR CONCURRENCY DEMO")
+    print("================================================================================")
+
+    print("\n[1/4] DIFFERENTIAL PRIVACY & OBLIVIOUS COMPUTING (std/privacy.nino)")
+    let raw_salaries = [48000.0, 52000.0, 61000.0, 95000.0, 150000.0]
+    let true_mean = (48000.0 + 52000.0 + 61000.0 + 95000.0 + 150000.0) / 5.0
+    print("  -> Raw Dataset Average  :", true_mean)
+
+    let private_mean = dp_mean(raw_salaries, 0.8, 200000.0)
+    print("  -> Oblivious DP Mean    :", private_mean)
+    let is_budget_valid = dp_verify_budget(0.8, 1.5)
+    print("  -> Privacy Budget Status : Bounded within epsilon budget (Verified:", is_budget_valid, ")")
+
+    print("\n[2/4] WEBASSEMBLY MICRO-SANDBOXING ENGINE (std/wasm.nino)")
+    mut sandbox = wasm_spawn("untrusted_crypto_ext.wasm", 16, 10000)
+    let mod_hex = "0061736d0100000001070160027f7f017f030201000710010c636f6d707574655f6861736800000a11010f002000411f6c20016a41c7843d700b"
+    let loaded = wasm_load_hex(sandbox, mod_hex)
+    require(loaded, "Valid binary WebAssembly module must load cleanly into sandbox")
+    print("  -> Wasm Sandbox Created :", sandbox.module_name, "| Max Memory:", sandbox.memory_limit_mb, "MB")
+    print("  -> Initial Gas Budget   :", wasm_gas_remaining(sandbox), "units")
+
+    let res1 = wasm_invoke(sandbox, "compute_hash", [1337, 42])
+    print("  -> Sandbox Guest Call   : compute_hash(1337, 42) ->", res1)
+    print("  -> Gas Remaining        :", wasm_gas_remaining(sandbox), "units")
+    wasm_terminate(sandbox)
+    print("  -> Sandbox Status       : Safely destroyed and memory unmapped.")
+
+    print("\n[3/4] ISOLATED RUNTIME INTEGRITY & SESSION DERIVATION")
+    let enclave_key = execute_in_isolated_context(987654321)
+    print("  -> Derived Session Key:", enclave_key)
+
+    print("\n[4/4] BARE-METAL ACTORS & LIVE ATOMIC HOT-PATCHING")
+    let worker_pid = spawn_actor("VaultWorkerV1")
+    print("  -> Actor Worker Spawned : PID", worker_pid)
+
+    send_message(worker_pid, "PING")
+    let rep1 = actor_receive(worker_pid)
+    print("  -> Message to V1        : PING -> Response:", rep1)
+
+    let patch_ok = actor_hot_patch(worker_pid, "VaultWorkerV2")
+    print("  -> Live Hot-Patching    : Injected VaultWorkerV2 -> Status:", patch_ok)
+
+    send_message(worker_pid, "PING")
+    let rep2 = actor_receive(worker_pid)
+    print("  -> Message Post-Patch   : PING -> Response:", rep2)
+
+    print("\n================================================================================")
+    print("  [SUCCESS] Privacy, Wasm Sandbox & Actor Concurrency Demo Completed!")
+    print("================================================================================")
+}

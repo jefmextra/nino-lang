@@ -1,0 +1,3 @@
+fn matrix_accelerator(val: f64) -> f64 with capability [read_only] {
+    return val * 2.5;
+}

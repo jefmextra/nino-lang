@@ -1,0 +1,24 @@
+import "std/z3.nino"
+import "std/uuid.nino"
+import "std/consensus.nino"
+import "std/mesh.nino"
+
+fn main() -> int {
+    let att = enclave_attest()
+    let zbad = Z3_solver_check(0, 0)
+    let smt_u = z3_solve_smt2("(declare-const x Int)(assert (> x 10))(assert (< x 5))(check-sat)")
+    let u1 = uuid_v4()
+    let u2 = uuid_v4()
+    mut cl = raft_create_cluster(["n1", "n2", "n3"], 2)
+    let e1 = raft_elect_leader(cl, "n1", 1)
+    let e2 = raft_elect_leader(cl, "n2", 1)
+    mut m = mesh_node_init("n1", 9001, "chacha20")
+    mesh_connect_peer(m, "127.0.0.1:9002")
+    mesh_broadcast(m, "hb", "alive")
+    let pkt = mesh_receive(m)
+    let pok = mesh_verify_packet(pkt)
+    require(att["status"] == "SOFTWARE_INTEGRITY_MEASURED" && att["hardware_tee"] == "false" && zbad == 0 && smt_u == "unsat", "honest Z3/enclave failed")
+    require(uuid_is_valid(u1) && uuid_is_valid(u2) && u1 != u2 && e1 && !e2 && pok, "UUID/Raft/Mesh failed")
+    print("T1-F13-01:PASS")
+    return 0
+}

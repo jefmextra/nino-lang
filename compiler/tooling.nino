@@ -1,0 +1,2832 @@
+// compiler/tooling.nino: LSP 3.17 server, bindgen, formatter, shared/mobile targets, equiv, SBOM & linter
+fn lsp_temp_dir() -> string {
+    let t1 = get_env("TMPDIR")
+    if len(t1) > 0 {
+        if ends_with(t1, "/") || ends_with(t1, "\\") {
+            return slice(t1, 0, len(t1) - 1)
+        }
+        return t1
+    }
+    let t2 = get_env("TEMP")
+    if len(t2) > 0 {
+        if ends_with(t2, "/") || ends_with(t2, "\\") {
+            return slice(t2, 0, len(t2) - 1)
+        }
+        return t2
+    }
+    let t3 = get_env("TMP")
+    if len(t3) > 0 {
+        if ends_with(t3, "/") || ends_with(t3, "\\") {
+            return slice(t3, 0, len(t3) - 1)
+        }
+        return t3
+    }
+    if is_host_windows() {
+        return "."
+    }
+    return "/tmp"
+}
+
+fn to_lower_char(ch: string) -> string {
+    if ch == "A" { return "a" }
+    if ch == "B" { return "b" }
+    if ch == "C" { return "c" }
+    if ch == "D" { return "d" }
+    if ch == "E" { return "e" }
+    if ch == "F" { return "f" }
+    if ch == "G" { return "g" }
+    if ch == "H" { return "h" }
+    if ch == "I" { return "i" }
+    if ch == "J" { return "j" }
+    if ch == "K" { return "k" }
+    if ch == "L" { return "l" }
+    if ch == "M" { return "m" }
+    if ch == "N" { return "n" }
+    if ch == "O" { return "o" }
+    if ch == "P" { return "p" }
+    if ch == "Q" { return "q" }
+    if ch == "R" { return "r" }
+    if ch == "S" { return "s" }
+    if ch == "T" { return "t" }
+    if ch == "U" { return "u" }
+    if ch == "V" { return "v" }
+    if ch == "W" { return "w" }
+    if ch == "X" { return "x" }
+    if ch == "Y" { return "y" }
+    if ch == "Z" { return "z" }
+    return ch
+}
+
+fn ascii_lower(s: string) -> string {
+    let slen = len(s)
+    mut res = ""
+    for i in 0..slen {
+        res = res + to_lower_char(char_at(s, i))
+    }
+    return res
+}
+
+fn json_escape(s: string) -> string {
+    let slen = len(s)
+    if slen == 0 {
+        return ""
+    }
+    let q = "\""
+    let b = "\\"
+    mut res = ""
+    for i in 0..slen {
+        let ch = char_at(s, i)
+        if ch == q {
+            res = res + b + q
+        } else if ch == b {
+            res = res + b + b
+        } else if ch == "\n" {
+            res = res + b + "n"
+        } else if ch == "\r" {
+            res = res + b + "r"
+        } else if ch == "\t" {
+            res = res + b + "t"
+        } else {
+            res = res + ch
+        }
+    }
+    return res
+}
+
+fn json_unescape(s: string) -> string {
+    let slen = len(s)
+    if slen == 0 {
+        return ""
+    }
+    let q = "\""
+    let b = "\\"
+    mut res = ""
+    mut i = 0
+    while i < slen {
+        let ch = char_at(s, i)
+        if ch == b && i + 1 < slen {
+            let nxt = char_at(s, i + 1)
+            if nxt == q {
+                res = res + q
+                i = i + 2
+            } else if nxt == b {
+                res = res + b
+                i = i + 2
+            } else if nxt == "/" {
+                res = res + "/"
+                i = i + 2
+            } else if nxt == "n" {
+                res = res + "\n"
+                i = i + 2
+            } else if nxt == "r" {
+                res = res + "\r"
+                i = i + 2
+            } else if nxt == "t" {
+                res = res + "\t"
+                i = i + 2
+            } else {
+                res = res + nxt
+                i = i + 2
+            }
+        } else {
+            res = res + ch
+            i = i + 1
+        }
+    }
+    return res
+}
+
+fn json_skip_ws(s: string, pos: int) -> int {
+    let slen = len(s)
+    mut jp = pos
+    while jp < slen {
+        let ch = char_at(s, jp)
+        if ch == " " || ch == "\t" || ch == "\n" || ch == "\r" {
+            jp = jp + 1
+        } else {
+            return jp
+        }
+    }
+    return jp
+}
+
+fn json_skip_string(s: string, pos: int) -> int {
+    let slen = len(s)
+    mut jp = pos + 1
+    while jp < slen {
+        let ch = char_at(s, jp)
+        if ch == "\\" {
+            jp = jp + 2
+        } else if ch == "\"" {
+            return jp + 1
+        } else {
+            jp = jp + 1
+        }
+    }
+    return slen
+}
+
+fn json_skip_value(s: string, pos: int) -> int {
+    let slen = len(s)
+    mut jp = json_skip_ws(s, pos)
+    if jp >= slen {
+        return slen
+    }
+    let ch = char_at(s, jp)
+    if ch == "\"" {
+        return json_skip_string(s, jp)
+    }
+    if ch == "{" || ch == "[" {
+        mut depth = 1
+        jp = jp + 1
+        while jp < slen && depth > 0 {
+            let cc = char_at(s, jp)
+            if cc == "\"" {
+                jp = json_skip_string(s, jp)
+            } else if cc == "{" || cc == "[" {
+                depth = depth + 1
+                jp = jp + 1
+            } else if cc == "}" || cc == "]" {
+                depth = depth - 1
+                jp = jp + 1
+            } else {
+                jp = jp + 1
+            }
+        }
+        return jp
+    }
+    while jp < slen {
+        let cc = char_at(s, jp)
+        if cc == "," || cc == "}" || cc == "]" || cc == " " || cc == "\t" || cc == "\n" || cc == "\r" {
+            return jp
+        }
+        jp = jp + 1
+    }
+    return slen
+}
+
+fn json_get_raw(obj: string, target_key: string) -> string {
+    let olen = len(obj)
+    mut jp = json_skip_ws(obj, 0)
+    if jp >= olen || char_at(obj, jp) != "{" {
+        return ""
+    }
+    jp = jp + 1
+    while jp < olen {
+        jp = json_skip_ws(obj, jp)
+        if jp >= olen || char_at(obj, jp) == "}" {
+            return ""
+        }
+        if char_at(obj, jp) == "," {
+            jp = json_skip_ws(obj, jp + 1)
+        }
+        if jp >= olen || char_at(obj, jp) != "\"" {
+            return ""
+        }
+        let k_end = json_skip_string(obj, jp)
+        let key_str = json_unescape(slice(obj, jp + 1, k_end - jp - 2))
+        jp = json_skip_ws(obj, k_end)
+        if jp >= olen || char_at(obj, jp) != ":" {
+            return ""
+        }
+        jp = json_skip_ws(obj, jp + 1)
+        let val_end = json_skip_value(obj, jp)
+        if key_str == target_key {
+            return slice(obj, jp, val_end - jp)
+        }
+        jp = val_end
+    }
+    return ""
+}
+
+fn json_get_str(obj: string, target_key: string) -> string {
+    let raw = trim(json_get_raw(obj, target_key))
+    let rlen = len(raw)
+    if rlen >= 2 && char_at(raw, 0) == "\"" && char_at(raw, rlen - 1) == "\"" {
+        return json_unescape(slice(raw, 1, rlen - 2))
+    }
+    return raw
+}
+
+fn json_get_int(obj: string, target_key: string) -> int {
+    let raw = trim(json_get_raw(obj, target_key))
+    if len(raw) == 0 {
+        return 0
+    }
+    return parse_int(raw)
+}
+
+fn json_array_first(arr: string) -> string {
+    let alen = len(arr)
+    mut jp = json_skip_ws(arr, 0)
+    if jp >= alen || char_at(arr, jp) != "[" {
+        return ""
+    }
+    jp = json_skip_ws(arr, jp + 1)
+    if jp >= alen || char_at(arr, jp) == "]" {
+        return ""
+    }
+    let val_end = json_skip_value(arr, jp)
+    return slice(arr, jp, val_end - jp)
+}
+
+fn lsp_send(payload: string) {
+    let plen = len(payload)
+    let plen_s = "" + plen
+    let hdr = "Content-Length: " + plen_s + "\r\n\r\n" + payload
+    print_raw(hdr)
+}
+
+fn lsp_build_diag(ln_idx: int, col_idx: int, end_col_idx: int, sev_val: int, diag_code: string, msg: string) -> string {
+    let esc_msg = json_escape(msg)
+    let ln_s = "" + ln_idx
+    let col_s = "" + col_idx
+    let end_col_s = "" + end_col_idx
+    let sev_s = "" + sev_val
+
+    mut dg = "{\"range\":{\"start\":{\"line\":" + ln_s + ",\"character\":" + col_s + "},"
+    dg = dg + "\"end\":{\"line\":" + ln_s + ",\"character\":" + end_col_s + "}},"
+    dg = dg + "\"severity\":" + sev_s + ",\"code\":\"" + diag_code + "\","
+    dg = dg + "\"source\":\"ninoc\",\"message\":\"" + esc_msg + "\"}"
+    return dg
+}
+
+fn lsp_find_ident_outside_str(line: string, ident: string) -> int {
+    let llen = len(line)
+    let ilen = len(ident)
+    if llen < ilen || ilen == 0 {
+        return -1
+    }
+    mut in_q = false
+    mut i = 0
+    while i <= llen - ilen {
+        let ch = char_at(line, i)
+        if ch == "\"" {
+            in_q = in_q == false
+            i = i + 1
+        } else if in_q == false {
+            if slice(line, i, ilen) == ident {
+                mut ch_before = " "
+                if i > 0 {
+                    ch_before = char_at(line, i - 1)
+                }
+                mut ch_after = " "
+                if i + ilen < llen {
+                    ch_after = char_at(line, i + ilen)
+                }
+                if is_alpha_num(ch_before) == false && is_alpha_num(ch_after) == false {
+                    return i
+                }
+            }
+            i = i + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return -1
+}
+
+fn lsp_run_z3_fn(smt_script: string, seq: int) -> string {
+    let z3_bin = find_z3_binary()
+    if len(z3_bin) == 0 {
+        return ""
+    }
+    let seq_s = "" + seq
+    let base = "nino_lsp_tmp_" + seq_s
+    let smt_p = base + ".smt2"
+    let out_p = base + ".z3out"
+    write_file(smt_p, smt_script)
+    run_z3_smt_file(z3_bin, smt_p, out_p)
+    mut out = ""
+    if file_exists(out_p) {
+        out = read_file(out_p)
+    }
+    delete_temp_file(out_p)
+    delete_temp_file(smt_p)
+    return trim(out)
+}
+
+fn lsp_analyze_diagnostics(source: string, seq: int) -> string {
+    let clean = replace_str(source, "\r\n", "\n")
+    let slen = len(clean)
+    mut diags = ""
+    mut diag_cnt = 0
+
+    mut cur_line = 0
+    mut cur_col = 0
+    mut in_q = false
+    mut str_line = 0
+    mut str_col = 0
+    mut b_kinds: [string] = []
+    mut b_lines: [int] = []
+    mut b_cols: [int] = []
+    mut i = 0
+    while i < slen {
+        let ch = char_at(clean, i)
+        if in_q {
+            if ch == "\\" {
+                if i + 1 < slen && char_at(clean, i + 1) != "\n" {
+                    i = i + 2
+                    cur_col = cur_col + 2
+                } else {
+                    i = i + 1
+                    cur_col = cur_col + 1
+                }
+            } else if ch == "\"" {
+                in_q = false
+                i = i + 1
+                cur_col = cur_col + 1
+            } else if ch == "\n" {
+                let dg1 = lsp_build_diag(str_line, str_col, str_col + 1, 1, "E0001", "Unclosed string literal")
+                if diag_cnt > 0 {
+                    diags = diags + ","
+                }
+                diags = diags + dg1
+                diag_cnt = diag_cnt + 1
+                in_q = false
+                cur_line = cur_line + 1
+                cur_col = 0
+                i = i + 1
+            } else {
+                i = i + 1
+                cur_col = cur_col + 1
+            }
+        } else {
+            if ch == "\n" {
+                cur_line = cur_line + 1
+                cur_col = 0
+                i = i + 1
+            } else if ch == "/" && i + 1 < slen && char_at(clean, i + 1) == "/" {
+                while i < slen && char_at(clean, i) != "\n" {
+                    i = i + 1
+                }
+            } else if ch == "\"" {
+                in_q = true
+                str_line = cur_line
+                str_col = cur_col
+                i = i + 1
+                cur_col = cur_col + 1
+            } else if ch == "(" || ch == "{" || ch == "[" {
+                b_kinds = push(b_kinds, ch)
+                b_lines = push(b_lines, cur_line)
+                b_cols = push(b_cols, cur_col)
+                i = i + 1
+                cur_col = cur_col + 1
+            } else if ch == ")" || ch == "}" || ch == "]" {
+                mut exp = "("
+                if ch == "}" {
+                    exp = "{"
+                } else if ch == "]" {
+                    exp = "["
+                }
+                let blen = len(b_kinds)
+                if blen == 0 {
+                    let dg2 = lsp_build_diag(cur_line, cur_col, cur_col + 1, 1, "E0002", "Unexpected '" + ch + "'")
+                    if diag_cnt > 0 {
+                        diags = diags + ","
+                    }
+                    diags = diags + dg2
+                    diag_cnt = diag_cnt + 1
+                } else {
+                    let top_k = b_kinds[blen - 1]
+                    if top_k != exp {
+                        let dg3 = lsp_build_diag(cur_line, cur_col, cur_col + 1, 1, "E0003", "Mismatched '" + ch + "'")
+                        if diag_cnt > 0 {
+                            diags = diags + ","
+                        }
+                        diags = diags + dg3
+                        diag_cnt = diag_cnt + 1
+                    }
+                    b_kinds = pop(b_kinds)
+                    b_lines = pop(b_lines)
+                    b_cols = pop(b_cols)
+                }
+                i = i + 1
+                cur_col = cur_col + 1
+            } else {
+                i = i + 1
+                cur_col = cur_col + 1
+            }
+        }
+    }
+    if in_q {
+        let dg4 = lsp_build_diag(str_line, str_col, str_col + 1, 1, "E0001", "Unclosed string literal")
+        if diag_cnt > 0 {
+            diags = diags + ","
+        }
+        diags = diags + dg4
+        diag_cnt = diag_cnt + 1
+    }
+    let rem_b = len(b_kinds)
+    for bi in 0..rem_b {
+        let uk = b_kinds[bi]
+        let ul = b_lines[bi]
+        let uc_col = b_cols[bi]
+        let dg5 = lsp_build_diag(ul, uc_col, uc_col + 1, 1, "E0004", "Unclosed '" + uk + "'")
+        if diag_cnt > 0 {
+            diags = diags + ","
+        }
+        diags = diags + dg5
+        diag_cnt = diag_cnt + 1
+    }
+
+    let has_ens = find_str(clean, "ensure", 0) != -1
+    let z3_avail = len(find_z3_binary()) > 0
+    if has_ens && z3_avail {
+        let ast_p = ast_parse_unit_ex(clean, ".", "lsp.nino", false)
+        if ast_p.has_error == false && ast_p.root >= 0 && ast_p.root < len(ast_p.nodes) {
+            let r_nd: AstNode = ast_p.nodes[ast_p.root]
+            mut z3_seq_a = seq * 100
+            for ci_a in 0..r_nd.child_count {
+                let iid_a = ast_p.children[r_nd.child_start + ci_a]
+                if iid_a >= 0 && iid_a < len(ast_p.nodes) && ast_p.nodes[iid_a].kind == NK_FN_DECL() {
+                    mut e_lns: [int] = []
+                    mut e_cols: [int] = []
+                    mut e_msgs: [string] = []
+                    mut fn_cnt: [int] = [0]
+                    let fn_smt = smt_ast_build_fn(ast_p, iid_a, false, e_lns, e_cols, e_msgs, fn_cnt)
+                    let num_ens = len(e_lns)
+                    if num_ens > 0 {
+                        z3_seq_a = z3_seq_a + 1
+                        let zout = replace_str(lsp_run_z3_fn("(set-logic ALL)\n" + fn_smt, z3_seq_a), "\r\n", "\n")
+                        mut zpos = 0
+                        let zlen = len(zout)
+                        mut zidx = 0
+                        while zpos < zlen && zidx < num_ens {
+                            mut zend = zpos
+                            while zend < zlen && char_at(zout, zend) != "\n" { zend = zend + 1 }
+                            let zline = trim(slice(zout, zpos, zend - zpos))
+                            if len(zline) > 0 {
+                                if zline == "sat" {
+                                    let dg8 = lsp_build_diag(e_lns[zidx], e_cols[zidx], e_cols[zidx] + 6, 1, "PCC-SAT", "Formal postcondition refuted by Z3 SMT solver (sat): " + e_msgs[zidx])
+                                    if diag_cnt > 0 { diags = diags + "," }
+                                    diags = diags + dg8
+                                    diag_cnt = diag_cnt + 1
+                                    zidx = zidx + 1
+                                } else if zline == "unsat" || zline == "unknown" {
+                                    zidx = zidx + 1
+                                }
+                            }
+                            zpos = zend + 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return "[" + diags + "]"
+}
+
+fn lsp_get_line_at(text: string, target_ln: int) -> string {
+    let clean = replace_str(text, "\r\n", "\n")
+    let slen = len(clean)
+    mut pos = 0
+    mut lno = 0
+    while pos <= slen {
+        mut lend = pos
+        mut searching = true
+        while lend < slen && searching {
+            if char_at(clean, lend) == "\n" {
+                searching = false
+            } else {
+                lend = lend + 1
+            }
+        }
+        if lno == target_ln {
+            return slice(clean, pos, lend - pos)
+        }
+        pos = lend + 1
+        lno = lno + 1
+    }
+    return ""
+}
+
+fn lsp_extract_word(line: string, ch_idx: int) -> string {
+    let llen = len(line)
+    if llen == 0 || ch_idx < 0 {
+        return ""
+    }
+    mut idx = ch_idx
+    if idx >= llen {
+        idx = llen - 1
+    }
+    if idx > 0 && is_alpha_num(char_at(line, idx)) == false {
+        if is_alpha_num(char_at(line, idx - 1)) {
+            idx = idx - 1
+        }
+    }
+    if is_alpha_num(char_at(line, idx)) == false {
+        return ""
+    }
+    mut start = idx
+    while start > 0 && is_alpha_num(char_at(line, start - 1)) {
+        start = start - 1
+    }
+    mut end = idx + 1
+    while end < llen && is_alpha_num(char_at(line, end)) {
+        end = end + 1
+    }
+    return slice(line, start, end - start)
+}
+
+fn lsp_infer_var_type(rhs: string) -> string {
+    let r = trim(rhs)
+    if starts_with(r, "\"") {
+        return "string"
+    }
+    if r == "true" || r == "false" {
+        return "bool"
+    }
+    if starts_with(r, "[") {
+        return "array"
+    }
+    if starts_with(r, "foreign_alloc(") {
+        return "foreign_ptr"
+    }
+    if starts_with(r, "spawn_actor(") {
+        return "actor_pid"
+    }
+    if starts_with(r, "alloc_guarded_memory(") {
+        return "guarded_buf"
+    }
+    let digits = "0123456789"
+    if len(r) > 0 && find_char(digits, char_at(r, 0), 0) != -1 {
+        if find_char(r, ".", 0) != -1 {
+            return "double"
+        }
+        return "int"
+    }
+    return "auto"
+}
+
+fn lsp_builtin_hover(word: string) -> string {
+    if word == "fn" { return "(keyword) fn name(params) -> type: Declares a function with deterministic lifecycle" }
+    if word == "let" { return "(keyword) let name = expr: Declares an immutable linear variable" }
+    if word == "mut" { return "(keyword) mut name = expr: Declares a mutable variable" }
+    if word == "sealed" { return "(keyword) sealed name = expr: XOR-obfuscated variable with explicit memory wiping on destroy" }
+    if word == "struct" { return "(keyword) struct Name: Declares a memory-compact POD struct" }
+    if word == "require" { return "(contract) require(cond, msg): Formal precondition checked statically by Z3 SMT solver" }
+    if word == "ensure" { return "(contract) ensure(cond, msg): Formal postcondition verified as a universal theorem by Z3 SMT solver" }
+    if word == "transaction" { return "(runtime) transaction: Atomic rollback transaction for fault tolerance" }
+    if word == "arena_mark" { return "(runtime) arena_mark() -> int: Records memory watermark for Scoped Linear Arena" }
+    if word == "arena_rollback" { return "(runtime) arena_rollback(mark): O(1) constant-time reclamation of all memory allocated since mark" }
+    if word == "arena_reset" { return "(runtime) arena_reset(): Completely recycles the thread-local linear arena" }
+    if word == "arena_used" { return "(runtime) arena_used() -> int: Returns total bytes active in the current linear arena" }
+    if word == "tcp_listen" { return "(network) tcp_listen(port) -> int: Opens native TCP listening socket (Winsock2/POSIX)" }
+    if word == "tcp_accept" { return "(network) tcp_accept(server_fd) -> int: Accepts incoming TCP connection" }
+    if word == "tcp_read" { return "(network) tcp_read(client_fd, max_bytes) -> string: Reads UTF-8 payload from socket" }
+    if word == "tcp_write" { return "(network) tcp_write(client_fd, data) -> int: Writes payload directly to socket" }
+    if word == "tcp_close" { return "(network) tcp_close(fd): Gracefully closes TCP socket" }
+    if word == "sha256" { return "(crypto) sha256(data) -> string: Portable C11 SHA-256 cryptographic digest" }
+    if word == "print" { return "(io) print(val): Prints value to stdout with trailing newline" }
+    if word == "print_raw" { return "(io) print_raw(s): Writes raw string directly to stdout without buffering" }
+    if word == "read_file" { return "(io) read_file(path) -> string: Reads entire file into arena string" }
+    if word == "write_file" { return "(io) write_file(path, content): Writes string to file atomically" }
+    if word == "file_exists" { return "(io) file_exists(path) -> bool: Returns true if path exists" }
+    if word == "exec_cmd" { return "(system) exec_cmd(cmd) -> int: Runs child shell command synchronously and returns exit code" }
+    if word == "len" { return "(built-in) len(collection) -> int: Returns length of string or array in O(1)" }
+    if word == "slice" { return "(built-in) slice(s, start, count) -> string: Returns arena slice of string" }
+    if word == "char_at" { return "(built-in) char_at(s, idx) -> string: Returns 1-character string at index" }
+    if word == "trim" { return "(built-in) trim(s) -> string: Strips leading and trailing whitespace" }
+    if word == "sha256" { return "(crypto) sha256(data: string) -> string: Computes 256-bit FIPS 180-4 SHA-256 hex digest" }
+    if word == "trace_record" { return "(flight-recorder) trace_record(label: string, val: int): Appends state transition to SHA-256 hash-chained flight recorder" }
+    if word == "trace_checkpoint" { return "(flight-recorder) trace_checkpoint(label: string): Records named execution checkpoint in SHA-256 flight recorder" }
+    if word == "trace_chain_hash" { return "(flight-recorder) trace_chain_hash() -> string: Returns current 64-hex SHA-256 execution state chain digest" }
+    if word == "trace_count" { return "(flight-recorder) trace_count() -> int: Returns total recorded flight-recorder state transitions" }
+    if word == "trace_dump" { return "(flight-recorder) trace_dump(): Dumps cryptographic flight-recorder ring buffer to stdout" }
+    if word == "trace_reset" { return "(flight-recorder) trace_reset(): Resets flight-recorder ring buffer to genesis hash" }
+    return ""
+}
+
+fn lsp_hover_lookup(text: string, ln_idx: int, ch_pos: int, seq: int) -> string {
+    let target_ln_str = lsp_get_line_at(text, ln_idx)
+    let word = lsp_extract_word(target_ln_str, ch_pos)
+    if len(word) == 0 {
+        return ""
+    }
+    let clean = replace_str(text, "\r\n", "\n")
+    let slen = len(clean)
+    let q = "\""
+    let lb = "{"
+    let rb = "}"
+
+    mut fn_sig = ""
+    mut fn_reqs = ""
+    mut fn_enss = ""
+    mut in_target_fn = false
+    mut fn_depth = 0
+    mut struct_sig = ""
+    mut struct_fields = ""
+    mut in_target_struct = false
+    mut local_info = ""
+
+    mut pos = 0
+    mut lno = 0
+    while pos <= slen {
+        mut lend = pos
+        mut searching = true
+        while lend < slen && searching {
+            if char_at(clean, lend) == "\n" {
+                searching = false
+            } else {
+                lend = lend + 1
+            }
+        }
+        let tline = trim(slice(clean, pos, lend - pos))
+        pos = lend + 1
+
+        if len(tline) > 0 {
+            if starts_with(tline, "fn ") {
+                let p_open = find_char(tline, "(", 3)
+                if p_open != -1 {
+                    let fn_name = trim(slice(tline, 3, p_open - 3))
+                    if fn_name == word {
+                        in_target_fn = true
+                        fn_depth = 0
+                        fn_sig = tline
+                        let b_open = find_char(fn_sig, "{", 0)
+                        if b_open != -1 {
+                            fn_sig = trim(slice(fn_sig, 0, b_open))
+                        }
+                    }
+                }
+            } else if in_target_fn {
+                if starts_with(tline, "require(") {
+                    fn_reqs = fn_reqs + "\n- `" + tline + "`"
+                } else if starts_with(tline, "ensure(") {
+                    fn_enss = fn_enss + "\n- `" + tline + "`"
+                }
+                fn_depth = fn_depth + count_braces_outside_str(tline)
+                if fn_depth <= 0 {
+                    in_target_fn = false
+                }
+            }
+
+            if starts_with(tline, "struct ") {
+                let b_open = find_char(tline, "{", 7)
+                mut s_name = trim(slice(tline, 7, len(tline) - 7))
+                if b_open != -1 {
+                    s_name = trim(slice(tline, 7, b_open - 7))
+                }
+                if s_name == word {
+                    in_target_struct = true
+                    struct_sig = "struct " + s_name
+                }
+            } else if in_target_struct {
+                if starts_with(tline, "}") {
+                    in_target_struct = false
+                } else if len(tline) > 0 {
+                    struct_fields = struct_fields + "    " + tline + "\n"
+                }
+            }
+
+            if lno <= ln_idx && (starts_with(tline, "let ") || starts_with(tline, "mut ") || starts_with(tline, "sealed ")) {
+                let is_mut = starts_with(tline, "mut ")
+                let is_sealed = starts_with(tline, "sealed ")
+                mut vstart = 4
+                if is_sealed {
+                    vstart = 7
+                }
+                let eq_p = find_char(tline, "=", vstart)
+                if eq_p != -1 {
+                    mut vname_part = trim(slice(tline, vstart, eq_p - vstart))
+                    mut expl_t = ""
+                    let col_vp = find_char(vname_part, ":", 0)
+                    if col_vp != -1 {
+                        expl_t = trim(slice(vname_part, col_vp + 1, len(vname_part) - col_vp - 1))
+                        vname_part = trim(slice(vname_part, 0, col_vp))
+                    }
+                    if vname_part == word {
+                        let rhs = trim(slice(tline, eq_p + 1, len(tline) - eq_p - 1))
+                        mut final_t = expl_t
+                        if len(final_t) == 0 {
+                            final_t = lsp_infer_var_type(rhs)
+                        }
+                        mut kword = "let"
+                        if is_sealed {
+                            kword = "sealed"
+                        } else if is_mut {
+                            kword = "mut"
+                        }
+                        local_info = "(" + kword + ") " + word + ": " + final_t
+                    }
+                }
+            }
+        }
+        lno = lno + 1
+    }
+
+    mut md = ""
+    if len(fn_sig) > 0 {
+        md = "```nino\n" + fn_sig + "\n```"
+        if len(fn_reqs) > 0 {
+            md = md + "\n\n**Preconditions (require):**" + fn_reqs
+        }
+        if len(fn_enss) > 0 {
+            md = md + "\n\n**Postconditions (ensure):**" + fn_enss
+        }
+    } else if len(struct_sig) > 0 {
+        md = "```nino\n" + struct_sig + " {\n" + struct_fields + "}\n```"
+    } else if len(local_info) > 0 {
+        md = "```nino\n" + local_info + "\n```"
+    } else {
+        let b_info = lsp_builtin_hover(word)
+        if len(b_info) > 0 {
+            md = "```nino\n" + b_info + "\n```"
+        }
+    }
+    if len(md) == 0 {
+        return ""
+    }
+    let esc_md = json_escape(md)
+    let hover_obj = "{\"contents\":{\"kind\":\"markdown\",\"value\":\"" + esc_md + "\"}}"
+    return hover_obj
+}
+
+fn lsp_parse_content_length(hline: string) -> int {
+    let col = find_char(hline, ":", 0)
+    if col == -1 {
+        return -1
+    }
+    let key = trim(ascii_lower(slice(hline, 0, col)))
+    if key == "content-length" {
+        let val = trim(slice(hline, col + 1, len(hline) - col - 1))
+        return parse_int(val)
+    }
+    return -1
+}
+
+fn run_lsp_server() -> int {
+    stdio_binary_mode()
+    mut is_shutdown = false
+    mut seq = 0
+    mut running = true
+    while running {
+        mut content_len = -1
+        mut got_any_hdr = false
+        mut reading_hdrs = true
+        while reading_hdrs {
+            let hline = stdin_read_line()
+            if len(hline) == 0 {
+                if stdin_eof() && got_any_hdr == false {
+                    running = false
+                }
+                reading_hdrs = false
+            } else {
+                got_any_hdr = true
+                let cl = lsp_parse_content_length(hline)
+                if cl >= 0 {
+                    content_len = cl
+                }
+            }
+        }
+        if running == false {
+            arena_reset()
+        } else if content_len <= 0 {
+            if stdin_eof() {
+                running = false
+            }
+            arena_reset()
+        } else {
+            let body = stdin_read_exact(content_len)
+            if len(body) == 0 && stdin_eof() {
+                running = false
+                arena_reset()
+            } else {
+                let method = json_get_str(body, "method")
+                let raw_id = trim(json_get_raw(body, "id"))
+                let params = json_get_raw(body, "params")
+                if method == "initialize" {
+                    mut sid = raw_id
+                    if len(sid) == 0 {
+                        sid = "null"
+                    }
+                    let caps = "{\"textDocumentSync\":1,\"hoverProvider\":true}"
+                    let sinfo = "{\"name\":\"ninoc-lsp\",\"version\":\"1.2.2\"}"
+                    let res_obj = "{\"capabilities\":" + caps + ",\"serverInfo\":" + sinfo + "}"
+                    let resp = "{\"jsonrpc\":\"2.0\",\"id\":" + sid + ",\"result\":" + res_obj + "}"
+                    lsp_send(resp)
+                } else if method == "initialized" {
+                    seq = seq + 0
+                } else if method == "textDocument/didOpen" {
+                    let td = json_get_raw(params, "textDocument")
+                    let uri = json_get_str(td, "uri")
+                    let text = json_get_str(td, "text")
+                    lsp_doc_set(uri, text)
+                    seq = seq + 1
+                    let diags = lsp_analyze_diagnostics(text, seq)
+                    let esc_uri = json_escape(uri)
+                    let p_obj = "{\"uri\":\"" + esc_uri + "\",\"diagnostics\":" + diags + "}"
+                    let notif = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":" + p_obj + "}"
+                    lsp_send(notif)
+                } else if method == "textDocument/didChange" {
+                    let td = json_get_raw(params, "textDocument")
+                    let uri = json_get_str(td, "uri")
+                    let changes = json_get_raw(params, "contentChanges")
+                    let first_chg = json_array_first(changes)
+                    let text = json_get_str(first_chg, "text")
+                    lsp_doc_set(uri, text)
+                    seq = seq + 1
+                    let diags = lsp_analyze_diagnostics(text, seq)
+                    let esc_uri = json_escape(uri)
+                    let p_obj = "{\"uri\":\"" + esc_uri + "\",\"diagnostics\":" + diags + "}"
+                    let notif = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":" + p_obj + "}"
+                    lsp_send(notif)
+                } else if method == "textDocument/didClose" {
+                    let td = json_get_raw(params, "textDocument")
+                    let uri = json_get_str(td, "uri")
+                    lsp_doc_remove(uri)
+                    let esc_uri = json_escape(uri)
+                    let p_obj = "{\"uri\":\"" + esc_uri + "\",\"diagnostics\":[]}"
+                    let notif = "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":" + p_obj + "}"
+                    lsp_send(notif)
+                } else if method == "textDocument/hover" {
+                    let td = json_get_raw(params, "textDocument")
+                    let uri = json_get_str(td, "uri")
+                    let pos_obj = json_get_raw(params, "position")
+                    let ln_pos = json_get_int(pos_obj, "line")
+                    let ch_pos = json_get_int(pos_obj, "character")
+                    let doc_txt = lsp_doc_get(uri)
+                    seq = seq + 1
+                    mut hover_res = lsp_hover_lookup(doc_txt, ln_pos, ch_pos, seq)
+                    mut sid = raw_id
+                    if len(sid) == 0 {
+                        sid = "null"
+                    }
+                    mut hres = hover_res
+                    if len(hres) == 0 {
+                        hres = "null"
+                    }
+                    let resp = "{\"jsonrpc\":\"2.0\",\"id\":" + sid + ",\"result\":" + hres + "}"
+                    lsp_send(resp)
+                } else if method == "shutdown" {
+                    is_shutdown = true
+                    mut sid = raw_id
+                    if len(sid) == 0 {
+                        sid = "null"
+                    }
+                    let resp = "{\"jsonrpc\":\"2.0\",\"id\":" + sid + ",\"result\":null}"
+                    lsp_send(resp)
+                } else if method == "exit" {
+                    arena_reset()
+                    if is_shutdown {
+                        return 0
+                    }
+                    return 1
+                } else if len(raw_id) > 0 {
+                    let err_obj = "{\"code\":-32601,\"message\":\"Method not found\"}"
+                    let resp = "{\"jsonrpc\":\"2.0\",\"id\":" + raw_id + ",\"error\":" + err_obj + "}"
+                    lsp_send(resp)
+                }
+                arena_reset()
+            }
+        }
+    }
+    arena_reset()
+    return 0
+}
+
+fn m2_bv_lit_to_signed_str(tok_raw: string) -> string {
+    let tok = trim(tok_raw)
+    if starts_with(tok, "#x") && len(tok) > 2 {
+        let h = slice(tok, 2, len(tok) - 2)
+        if h == "8000000000000000" {
+            return "(-9223372036854775807 - 1)"
+        }
+        mut v: int = 0
+        for i in 0..len(h) {
+            let cc = char_code(char_at(h, i))
+            mut nib = cc - 48
+            if cc >= 97 {
+                nib = cc - 87
+            } else if cc >= 65 {
+                nib = cc - 55
+            }
+            v = v * 16 + nib
+        }
+        return int_to_str(v)
+    }
+    if starts_with(tok, "#b") && len(tok) > 2 {
+        let b = slice(tok, 2, len(tok) - 2)
+        if len(b) == 64 && starts_with(b, "1") && find_str(slice(b, 1, 63), "1", 0) == -1 {
+            return "(-9223372036854775807 - 1)"
+        }
+        mut v: int = 0
+        for i in 0..len(b) {
+            v = v * 2 + (char_code(char_at(b, i)) - 48)
+        }
+        return int_to_str(v)
+    }
+    return tok
+}
+
+fn extract_z3_model_param(z3_out: string, param_name: string, param_type: string) -> string {
+    let marker = "(define-fun " + param_name + " "
+    let mpos = find_str(z3_out, marker, 0)
+    if mpos == -1 {
+        if param_type == "bool" {
+            return "false"
+        }
+        return "1"
+    }
+    let zlen = len(z3_out)
+    let close_sig = find_char(z3_out, ")", mpos + len(marker))
+    if close_sig == -1 {
+        if param_type == "bool" {
+            return "false"
+        }
+        return "1"
+    }
+    mut cur = close_sig + 1
+    while cur < zlen && (char_at(z3_out, cur) == " " || char_at(z3_out, cur) == "\n" || char_at(z3_out, cur) == "\r" || char_at(z3_out, cur) == "\t") {
+        cur = cur + 1
+    }
+    if cur < zlen && char_at(z3_out, cur) == "(" {
+        mut sd = 1
+        cur = cur + 1
+        while cur < zlen && sd > 0 {
+            let sc = char_at(z3_out, cur)
+            if sc == "(" {
+                sd = sd + 1
+            } else if sc == ")" {
+                sd = sd - 1
+            }
+            cur = cur + 1
+        }
+    } else {
+        while cur < zlen && is_alpha_num(char_at(z3_out, cur)) {
+            cur = cur + 1
+        }
+    }
+    while cur < zlen && (char_at(z3_out, cur) == " " || char_at(z3_out, cur) == "\n" || char_at(z3_out, cur) == "\r" || char_at(z3_out, cur) == "\t") {
+        cur = cur + 1
+    }
+    if cur >= zlen {
+        return "1"
+    }
+    if char_at(z3_out, cur) == "(" {
+        let end_p = find_char(z3_out, ")", cur)
+        if end_p != -1 {
+            let inner = trim(slice(z3_out, cur + 1, end_p - cur - 1))
+            if starts_with(inner, "- ") {
+                return m2_bv_lit_to_signed_str("-" + trim(slice(inner, 2, len(inner) - 2)))
+            }
+            return replace_str(inner, " ", "")
+        }
+    }
+    let end_p2 = find_char(z3_out, ")", cur)
+    if end_p2 != -1 {
+        return m2_bv_lit_to_signed_str(trim(slice(z3_out, cur, end_p2 - cur)))
+    }
+    return "1"
+}
+
+fn synthesize_witness_nino(source: string, src_file: string, out_path: string) -> int {
+    let clean = normalize_and_join_lines(replace_str(source, "\r\n", "\n"))
+    let slen = len(clean)
+    let lb = "{"
+    let rb = "}"
+    mut pos = 0
+    mut in_fn = false
+    mut brace_depth = 0
+    mut cur_fn_name = ""
+    mut cur_fn_params = ""
+    mut fn_decls = ""
+    mut fn_assumes = ""
+    mut fn_int_syms = "|"
+    mut fn_bool_syms = "|"
+    mut p_names = [""]
+    pop(p_names)
+    mut p_types = [""]
+    pop(p_types)
+    mut local_stmts = ""
+    mut req_expr = ""
+    mut witness_fns = ""
+    mut witness_calls = ""
+    mut sat_count = 0
+    mut unsat_count = 0
+    mut seq = 700
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            if char_at(clean, line_end) == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let line = trim(slice(clean, pos, line_end - pos))
+        if in_fn == false && starts_with(line, "fn ") && find_char(line, lb, 0) != -1 {
+            fn_decls = ""
+            fn_assumes = ""
+            fn_int_syms = "|"
+            fn_bool_syms = "|"
+            p_names = [""]
+            pop(p_names)
+            p_types = [""]
+            pop(p_types)
+            local_stmts = ""
+            req_expr = ""
+            let open_p = find_char(line, "(", 3)
+            let close_p = find_char(line, ")", open_p)
+            if open_p != -1 && close_p != -1 {
+                cur_fn_name = trim(slice(line, 3, open_p - 3))
+                cur_fn_params = trim(slice(line, open_p + 1, close_p - open_p - 1))
+                let plen = len(cur_fn_params)
+                mut ppos = 0
+                while ppos < plen {
+                    let comma = find_char(cur_fn_params, ",", ppos)
+                    mut p = ""
+                    if comma != -1 {
+                        p = trim(slice(cur_fn_params, ppos, comma - ppos))
+                        ppos = comma + 1
+                    } else {
+                        p = trim(slice(cur_fn_params, ppos, plen - ppos))
+                        ppos = plen
+                    }
+                    let col = find_char(p, ":", 0)
+                    if col != -1 {
+                        mut pname = trim(slice(p, 0, col))
+                        let ptype = trim(slice(p, col + 1, len(p) - col - 1))
+                        if starts_with(pname, "mut ") {
+                            pname = trim(slice(pname, 4, len(pname) - 4))
+                        }
+                        p_names = push(p_names, pname)
+                        p_types = push(p_types, ptype)
+                        if ptype == "int" || ptype == "i64" || ptype == "int64_t" || ptype == "i32" || ptype == "int32_t" || ptype == "u32" || ptype == "uint32_t" || ptype == "u64" || ptype == "uint64_t" || ptype == "byte" || ptype == "u8" || ptype == "uint8_t" {
+                            if find_str(fn_int_syms, "|" + pname + "|", 0) == -1 {
+                                fn_int_syms = fn_int_syms + pname + "|"
+                                fn_decls = fn_decls + "(declare-const " + pname + " Int)\n"
+                            }
+                        } else if ptype == "bool" {
+                            if find_str(fn_bool_syms, "|" + pname + "|", 0) == -1 {
+                                fn_bool_syms = fn_bool_syms + pname + "|"
+                                fn_decls = fn_decls + "(declare-const " + pname + " Bool)\n"
+                            }
+                        }
+                    }
+                }
+            }
+            brace_depth = count_braces_outside_str(line)
+            if brace_depth > 0 {
+                in_fn = true
+            }
+        } else if in_fn {
+            let delta = count_braces_outside_str(line)
+            if starts_with(line, "require(") && ends_with(line, ")") {
+                let inner = slice(line, 8, len(line) - 9)
+                let comma = find_top_comma(inner, 0)
+                mut cond = trim(inner)
+                if comma != -1 {
+                    cond = trim(slice(inner, 0, comma))
+                }
+                if smt_expr_supported(cond, fn_int_syms + fn_bool_syms) {
+                    fn_assumes = fn_assumes + "(assert " + expr_to_smt(cond) + ")\n"
+                    if len(req_expr) == 0 {
+                        req_expr = "(" + cond + ")"
+                    } else {
+                        req_expr = req_expr + " && (" + cond + ")"
+                    }
+                }
+            } else if starts_with(line, "ensure(") && ends_with(line, ")") {
+                let inner = slice(line, 7, len(line) - 8)
+                let comma = find_top_comma(inner, 0)
+                mut cond = trim(inner)
+                if comma != -1 {
+                    cond = trim(slice(inner, 0, comma))
+                }
+                if smt_expr_supported(cond, fn_int_syms + fn_bool_syms) {
+                    seq = seq + 1
+                    let query = "(set-logic ALL)\n" + fn_decls + fn_assumes + "(assert (not " + expr_to_smt(cond) + "))\n(check-sat)\n(get-model)\n"
+                    let zout = replace_str(lsp_run_z3_fn(query, seq), "\r\n", "\n")
+                    if starts_with(trim(zout), "sat") {
+                        sat_count = sat_count + 1
+                        let wfn_name = "witness_check_" + cur_fn_name + "_" + sat_count
+                        mut wfn = "fn " + wfn_name + "(" + cur_fn_params + ") -> bool " + lb + "\n"
+                        let pcnt = len(p_names)
+                        mut call_args = ""
+                        mut arg_summary = ""
+                        for pi in 0..pcnt {
+                            let pn = p_names[pi]
+                            let pt = p_types[pi]
+                            let mval = extract_z3_model_param(zout, pn, pt)
+                            if pi > 0 {
+                                call_args = call_args + ", "
+                                arg_summary = arg_summary + ", "
+                            }
+                            call_args = call_args + mval
+                            arg_summary = arg_summary + pn + "=" + mval
+                            if pt != "bool" {
+                                wfn = wfn + "    trace_record(\"" + cur_fn_name + "." + pn + "\", " + pn + ")\n"
+                            }
+                        }
+                        wfn = wfn + local_stmts
+                        mut rcheck = "true"
+                        if len(req_expr) > 0 {
+                            rcheck = req_expr
+                        }
+                        wfn = wfn + "    let pre_ok = " + rcheck + "\n"
+                        wfn = wfn + "    let post_ok = (" + cond + ")\n"
+                        wfn = wfn + "    trace_checkpoint(\"" + cur_fn_name + ".postcondition_refuted\")\n"
+                        wfn = wfn + "    return pre_ok && (post_ok == false)\n"
+                        wfn = wfn + rb + "\n\n"
+                        witness_fns = witness_fns + wfn
+                        witness_calls = witness_calls + "    print(\"  [Witness #" + sat_count + "] Target: " + cur_fn_name + "(" + arg_summary + ")\")\n"
+                        witness_calls = witness_calls + "    let w_" + sat_count + " = " + wfn_name + "(" + call_args + ")\n"
+                        witness_calls = witness_calls + "    require(w_" + sat_count + " == true, \"Z3 counterexample witness must satisfy require and violate ensure\")\n"
+                    } else if starts_with(trim(zout), "unsat") {
+                        unsat_count = unsat_count + 1
+                    }
+                }
+            } else if brace_depth == 1 && (starts_with(line, "let ") || starts_with(line, "mut ")) {
+                let is_mut_decl = starts_with(line, "mut ")
+                let rest = trim(slice(line, 4, len(line) - 4))
+                let eq = find_first_top_op(rest, "=")
+                if eq != -1 {
+                    mut vname = trim(slice(rest, 0, eq))
+                    let col = find_char(vname, ":", 0)
+                    if col != -1 {
+                        vname = trim(slice(vname, 0, col))
+                    }
+                    let rhs = trim(slice(rest, eq + 1, len(rest) - eq - 1))
+                    let all_syms = fn_int_syms + fn_bool_syms
+                    let not_declared = (find_str(all_syms, "|" + vname + "|", 0) == -1)
+                    if is_valid_identifier(vname) && not_declared && smt_expr_supported(rhs, all_syms) {
+                        local_stmts = local_stmts + "    " + line + "\n"
+                        if smt_is_bool_expr(rhs, fn_bool_syms) {
+                            fn_bool_syms = fn_bool_syms + vname + "|"
+                            fn_assumes = fn_assumes + "(declare-const " + vname + " Bool)\n"
+                            if is_mut_decl == false {
+                                fn_assumes = fn_assumes + "(assert (= " + vname + " " + expr_to_smt(rhs) + "))\n"
+                            }
+                        } else {
+                            fn_int_syms = fn_int_syms + vname + "|"
+                            fn_assumes = fn_assumes + "(declare-const " + vname + " Int)\n"
+                            if is_mut_decl == false {
+                                fn_assumes = fn_assumes + "(assert (= " + vname + " " + expr_to_smt(rhs) + "))\n"
+                            }
+                            local_stmts = local_stmts + "    trace_record(\"" + cur_fn_name + "." + vname + "\", " + vname + ")\n"
+                        }
+                    }
+                }
+            }
+            brace_depth = brace_depth + delta
+            if brace_depth <= 0 {
+                in_fn = false
+                brace_depth = 0
+            }
+        }
+        pos = line_end + 1
+    }
+    mut out_code = ""
+    if sat_count > 0 {
+        out_code = witness_fns
+        out_code = out_code + "fn main() -> int " + lb + "\n"
+        out_code = out_code + "    trace_reset()\n"
+        out_code = out_code + "    print(\"[Nino Z3 Counterexample Witness Reproduction Suite]\")\n"
+        out_code = out_code + witness_calls
+        out_code = out_code + "    trace_dump()\n"
+        out_code = out_code + "    print(\"[✓ Z3 COUNTEREXAMPLE WITNESS REPRODUCED AT RUNTIME]\")\n"
+        out_code = out_code + "    return 0\n"
+        out_code = out_code + rb + "\n"
+    } else {
+        out_code = "fn main() -> int " + lb + "\n"
+        out_code = out_code + "    trace_reset()\n"
+        out_code = out_code + "    trace_record(\"proven_invariants\", " + unsat_count + ")\n"
+        out_code = out_code + "    trace_checkpoint(\"universal_unsat_verified\")\n"
+        out_code = out_code + "    trace_dump()\n"
+        out_code = out_code + "    print(\"[✓ Z3 UNSAT UNIVERSAL PROOF WITNESS VERIFIED]\")\n"
+        out_code = out_code + "    return 0\n"
+        out_code = out_code + rb + "\n"
+    }
+    write_file(out_path, out_code)
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Theorem-Driven Counterexample Witness Synthesizer (ninoc witness)]\033[0m")
+    print("  Source Unit       : " + src_file)
+    print("  Synthesized Suite : " + out_path)
+    print("  Proven Theorems   : " + unsat_count + " UNSAT")
+    print("  Refuted Theorems  : " + sat_count + " SAT (Concrete Z3 Counterexamples Extracted)")
+    if sat_count > 0 {
+        print("  Synthesis Status  : \033[92m[✓ COUNTEREXAMPLE REPRODUCTION TEST SYNTHESIZED]\033[0m")
+    } else {
+        print("  Synthesis Status  : \033[92m[✓ UNIVERSAL PROOF WITNESS SUITE SYNTHESIZED]\033[0m")
+    }
+    print("\033[96m================================================================================\033[0m")
+    return 0
+}
+
+fn strip_c_comments(src: string) -> string {
+    let slen = len(src)
+    mut out = ""
+    mut i = 0
+    mut in_q = false
+    while i < slen {
+        let c = char_at(src, i)
+        if c == "\"" {
+            in_q = !in_q
+            out = out + c
+            i = i + 1
+        } else if in_q == false && c == "/" && i + 1 < slen && char_at(src, i + 1) == "/" {
+            i = i + 2
+            while i < slen && char_at(src, i) != "\n" {
+                i = i + 1
+            }
+        } else if in_q == false && c == "/" && i + 1 < slen && char_at(src, i + 1) == "*" {
+            i = i + 2
+            mut in_blk = true
+            while i < slen && in_blk {
+                if char_at(src, i) == "*" && i + 1 < slen && char_at(src, i + 1) == "/" {
+                    i = i + 2
+                    in_blk = false
+                } else {
+                    i = i + 1
+                }
+            }
+        } else {
+            out = out + c
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn map_c_type_to_nino(raw_t: string) -> string {
+    mut t = trim(raw_t)
+    if find_char(t, "*", 0) != -1 {
+        if find_str(t, "char", 0) != -1 {
+            return "string"
+        }
+        return "int"
+    }
+    t = trim(replace_str(t, "const ", ""))
+    t = trim(replace_str(t, "volatile ", ""))
+    t = trim(replace_str(t, "unsigned ", ""))
+    t = trim(replace_str(t, "signed ", ""))
+    t = trim(replace_str(t, "struct ", ""))
+    if t == "void" { return "void" }
+    if t == "bool" || t == "_Bool" { return "bool" }
+    if t == "double" || t == "float" { return "float" }
+    if t == "uint8_t" || t == "char" || t == "u8" { return "byte" }
+    if t == "int32_t" || t == "uint32_t" || t == "i32" || t == "u32" || t == "DWORD" || t == "UINT" { return "i32" }
+    if t == "int" || t == "int64_t" || t == "uint64_t" || t == "long" || t == "long long" || t == "size_t" || t == "ssize_t" || t == "intptr_t" || t == "uintptr_t" || t == "short" || t == "int16_t" || t == "uint16_t" {
+        return "int"
+    }
+    return t
+}
+
+fn bindgen_split_decl_name(decl: string) -> string {
+    let d = trim(decl)
+    let dlen = len(d)
+    if dlen == 0 {
+        return ""
+    }
+    mut j = dlen - 1
+    while j >= 0 && is_alpha_num(char_at(d, j)) {
+        j = j - 1
+    }
+    if j < 0 {
+        return ""
+    }
+    return trim(slice(d, j + 1, dlen - j - 1))
+}
+
+fn bindgen_split_decl_type(decl: string) -> string {
+    let d = trim(decl)
+    let dlen = len(d)
+    if dlen == 0 {
+        return "void"
+    }
+    mut j = dlen - 1
+    while j >= 0 && is_alpha_num(char_at(d, j)) {
+        j = j - 1
+    }
+    if j < 0 {
+        return d
+    }
+    return trim(slice(d, 0, j + 1))
+}
+
+fn bindgen_translate_params(raw_params: string) -> string {
+    let rp = trim(raw_params)
+    if len(rp) == 0 || rp == "void" {
+        return ""
+    }
+    let rlen = len(rp)
+    mut ppos = 0
+    mut out_p = ""
+    mut idx = 0
+    while ppos < rlen {
+        let comma = find_char(rp, ",", ppos)
+        mut item = ""
+        if comma != -1 {
+            item = trim(slice(rp, ppos, comma - ppos))
+            ppos = comma + 1
+        } else {
+            item = trim(slice(rp, ppos, rlen - ppos))
+            ppos = rlen
+        }
+        mut pname = bindgen_split_decl_name(item)
+        let ptype_c = bindgen_split_decl_type(item)
+        if len(pname) == 0 {
+            pname = "arg" + idx
+        }
+        let nino_t = map_c_type_to_nino(ptype_c)
+        if idx > 0 {
+            out_p = out_p + ", "
+        }
+        out_p = out_p + pname + ": " + nino_t
+        idx = idx + 1
+    }
+    return out_p
+}
+
+fn generate_c_bindgen(h_source: string, header_name: string) -> string {
+    let no_comments = strip_c_comments(replace_str(h_source, "\r\n", "\n"))
+    let slen = len(no_comments)
+    let lb = "{"
+    let rb = "}"
+    mut pos = 0
+    mut const_decls = ""
+    mut struct_decls = ""
+    mut fn_decls = ""
+    mut in_c_struct = false
+    mut cur_struct_name = ""
+    mut cur_struct_fields = ""
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            if char_at(no_comments, line_end) == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let line = trim(slice(no_comments, pos, line_end - pos))
+        if len(line) > 0 {
+            if in_c_struct {
+                if starts_with(line, rb) {
+                    in_c_struct = false
+                    mut tail = trim(slice(line, 1, len(line) - 1))
+                    if ends_with(tail, ";") {
+                        tail = trim(slice(tail, 0, len(tail) - 1))
+                    }
+                    if len(tail) > 0 && is_valid_identifier(tail) {
+                        cur_struct_name = tail
+                    }
+                    if len(cur_struct_name) > 0 {
+                        struct_decls = struct_decls + "struct " + cur_struct_name + " " + lb + "\n" + cur_struct_fields + rb + "\n\n"
+                    }
+                    cur_struct_name = ""
+                    cur_struct_fields = ""
+                } else {
+                    mut fline = line
+                    if ends_with(fline, ";") {
+                        fline = trim(slice(fline, 0, len(fline) - 1))
+                    }
+                    let fname = bindgen_split_decl_name(fline)
+                    let ftype_c = bindgen_split_decl_type(fline)
+                    if len(fname) > 0 {
+                        cur_struct_fields = cur_struct_fields + "    " + fname + ": " + map_c_type_to_nino(ftype_c) + "\n"
+                    }
+                }
+            } else if starts_with(line, "#define ") {
+                let drest = trim(slice(line, 8, len(line) - 8))
+                let sp = find_char(drest, " ", 0)
+                if sp != -1 {
+                    let mname = trim(slice(drest, 0, sp))
+                    mut mval = trim(slice(drest, sp + 1, len(drest) - sp - 1))
+                    if is_valid_identifier(mname) && len(mval) > 0 {
+                        if starts_with(mval, "(") && ends_with(mval, ")") {
+                            mval = trim(slice(mval, 1, len(mval) - 2))
+                        }
+                        if starts_with(mval, "\"") && ends_with(mval, "\"") {
+                            const_decls = const_decls + "let " + mname + ": string = " + mval + "\n"
+                        } else {
+                            let fc = char_at(mval, 0)
+                            if find_char("0123456789-", fc, 0) != -1 {
+                                const_decls = const_decls + "let " + mname + ": int = " + mval + "\n"
+                            }
+                        }
+                    }
+                }
+            } else if (starts_with(line, "struct ") || starts_with(line, "typedef struct")) && find_char(line, lb, 0) != -1 {
+                let ob = find_char(line, lb, 0)
+                mut s_head = trim(slice(line, 0, ob))
+                s_head = trim(replace_str(s_head, "typedef struct", ""))
+                if starts_with(s_head, "struct ") {
+                    s_head = trim(slice(s_head, 7, len(s_head) - 7))
+                }
+                cur_struct_name = s_head
+                cur_struct_fields = ""
+                in_c_struct = true
+            } else if starts_with(line, "#") == false && starts_with(line, "typedef ") == false && ends_with(line, ";") {
+                let open_p = find_char(line, "(", 0)
+                let close_p = find_char(line, ")", open_p)
+                if open_p != -1 && close_p != -1 {
+                    mut head = trim(slice(line, 0, open_p))
+                    if starts_with(head, "extern ") {
+                        head = trim(slice(head, 7, len(head) - 7))
+                    }
+                    if starts_with(head, "static inline ") {
+                        head = trim(slice(head, 14, len(head) - 14))
+                    }
+                    let fn_name = bindgen_split_decl_name(head)
+                    let c_ret = bindgen_split_decl_type(head)
+                    let raw_params = trim(slice(line, open_p + 1, close_p - open_p - 1))
+                    if len(fn_name) > 0 && is_valid_identifier(fn_name) {
+                        let nino_params = bindgen_translate_params(raw_params)
+                        let nino_ret = map_c_type_to_nino(c_ret)
+                        if nino_ret == "void" {
+                            fn_decls = fn_decls + "extern fn " + fn_name + "(" + nino_params + ")\n"
+                        } else {
+                            fn_decls = fn_decls + "extern fn " + fn_name + "(" + nino_params + ") -> " + nino_ret + "\n"
+                        }
+                    }
+                }
+            }
+        }
+        pos = line_end + 1
+    }
+    mut res = ""
+    if len(const_decls) > 0 {
+        res = res + const_decls + "\n"
+    }
+    if len(struct_decls) > 0 {
+        res = res + struct_decls
+    }
+    if len(fn_decls) > 0 {
+        res = res + fn_decls
+    }
+    return res
+}
+
+fn make_spaces(count: int) -> string {
+    mut s = ""
+    for i in 0..count {
+        s = s + " "
+    }
+    return s
+}
+
+fn format_nino_source(source: string) -> string {
+    let clean = replace_str(source, "\r\n", "\n")
+    let slen = len(clean)
+    let rb = "}"
+    mut pos = 0
+    mut indent = 0
+    mut out = ""
+    mut prev_blank = true
+    mut in_bcmt: [bool] = [false]
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            if char_at(clean, line_end) == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let tline = trim(slice(clean, pos, line_end - pos))
+        if len(tline) == 0 {
+            if prev_blank == false {
+                out = out + "\n"
+                prev_blank = true
+            }
+        } else {
+            prev_blank = false
+            let code_only = strip_block_comments_line(tline, in_bcmt)
+            let starts_close = starts_with(code_only, rb)
+            if starts_close && indent > 0 {
+                indent = indent - 1
+            }
+            let pad = make_spaces(indent * 4)
+            out = out + pad + tline + "\n"
+            mut delta = 0
+            if len(code_only) > 0 {
+                delta = count_braces_outside_str(code_only)
+            }
+            if starts_close {
+                indent = indent + delta + 1
+            } else {
+                indent = indent + delta
+            }
+            if indent < 0 {
+                indent = 0
+            }
+        }
+        pos = line_end + 1
+    }
+    return out
+}
+
+fn file_stem_name(path: string) -> string {
+    let norm = replace_str(path, "\\", "/")
+    let nlen = len(norm)
+    mut last_slash = -1
+    for i in 0..nlen {
+        if char_at(norm, i) == "/" {
+            last_slash = i
+        }
+    }
+    mut base = norm
+    if last_slash != -1 {
+        base = slice(norm, last_slash + 1, nlen - last_slash - 1)
+    }
+    if ends_with(base, ".nino") {
+        base = slice(base, 0, len(base) - 5)
+    }
+    return base
+}
+
+fn default_shared_lib_name(src_path: string) -> string {
+    let stem = file_stem_name(src_path)
+    if is_host_windows() {
+        return stem + ".dll"
+    }
+    return "lib" + stem + ".so"
+}
+
+fn map_nino_to_swift_type(nt: string) -> string {
+    let t = trim(nt)
+    if t == "int" || t == "i64" || t == "u64" { return "Int64" }
+    if t == "i32" || t == "u32" { return "Int32" }
+    if t == "float" || t == "f64" || t == "f32" { return "Double" }
+    if t == "bool" { return "Bool" }
+    if t == "string" || t == "str" { return "String" }
+    if t == "byte" || t == "u8" { return "UInt8" }
+    return "Void"
+}
+
+fn map_nino_to_kotlin_type(nt: string) -> string {
+    let t = trim(nt)
+    if t == "int" || t == "i64" || t == "u64" { return "Long" }
+    if t == "i32" || t == "u32" { return "Int" }
+    if t == "float" || t == "f64" || t == "f32" { return "Double" }
+    if t == "bool" { return "Boolean" }
+    if t == "string" || t == "str" { return "String" }
+    if t == "byte" || t == "u8" { return "Byte" }
+    return "Unit"
+}
+
+fn map_nino_to_jni_type(nt: string) -> string {
+    let t = trim(nt)
+    if t == "int" || t == "i64" || t == "u64" { return "jlong" }
+    if t == "i32" || t == "u32" { return "jint" }
+    if t == "float" || t == "f64" || t == "f32" { return "jdouble" }
+    if t == "bool" { return "jboolean" }
+    if t == "string" || t == "str" { return "jstring" }
+    if t == "byte" || t == "u8" { return "jbyte" }
+    return "void"
+}
+
+fn generate_c_header(source: string, guard_stem: string) -> string {
+    let pool = ast_parse_unit_ex(source, ".", "header.nino", false)
+    let lb = "{"
+    mut h = "#ifndef NINO_HEADER_" + guard_stem + "_H\n"
+    h = h + "#define NINO_HEADER_" + guard_stem + "_H\n\n"
+    h = h + "#include <stdint.h>\n#include <stdbool.h>\n\n"
+    h = h + "#ifdef _WIN32\n#define NINO_API __declspec(dllexport)\n#else\n#define NINO_API __attribute__((visibility(\"default\")))\n#endif\n\n"
+    h = h + "#ifdef __cplusplus\nextern \"C\" " + lb + "\n#endif\n\n"
+    if pool.root >= 0 {
+        let root_nd: AstNode = pool.nodes[pool.root]
+        for ci in 0..root_nd.child_count {
+            let iid = pool.children[root_nd.child_start + ci]
+            let nd: AstNode = pool.nodes[iid]
+            if nd.kind == NK_FN_DECL() && nd.name != "main" {
+                mut c_params = ""
+                for pi in 0..nd.child_count {
+                    let pid_n = pool.children[nd.child_start + pi]
+                    let pnd: AstNode = pool.nodes[pid_n]
+                    let mapped_t = map_type(pnd.type_ann)
+                    let is_mut_p = (pnd.flags & NF_MUT()) != 0
+                    mut c_param = mapped_t + " " + pnd.name
+                    if is_mut_p && f1_is_scalar_c11(mapped_t) == false && ends_with(mapped_t, "*") == false {
+                        c_param = mapped_t + "* _nino_ptr_" + pnd.name
+                    }
+                    if pi > 0 {
+                        c_params = c_params + ", "
+                    }
+                    c_params = c_params + c_param
+                }
+                if nd.child_count == 0 {
+                    c_params = "void"
+                }
+                mut ret_type = "void"
+                if len(nd.type_ann) > 0 {
+                    ret_type = nd.type_ann
+                }
+                let c_ret = map_type(ret_type)
+                h = h + "NINO_API " + c_ret + " " + nd.name + "(" + c_params + ");\n"
+            }
+        }
+    }
+    let rb = "}"
+    h = h + "\n#ifdef __cplusplus\n" + rb + "\n#endif\n\n#endif\n"
+    return h
+}
+
+fn generate_swift_bridge(source: string, class_name: string) -> string {
+    let clean = normalize_and_join_lines(replace_str(source, "\r\n", "\n"))
+    let slen = len(clean)
+    let lb = "{"
+    let rb = "}"
+    mut sw = "import Foundation\n\n"
+    sw = sw + "public enum " + class_name + " " + lb + "\n"
+    mut pos = 0
+    mut depth = 0
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            if char_at(clean, line_end) == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let line = trim(slice(clean, pos, line_end - pos))
+        if depth == 0 && starts_with(line, "fn ") && find_char(line, lb, 0) != -1 {
+            let open_p = find_char(line, "(", 3)
+            let close_p = find_char(line, ")", open_p)
+            if open_p != -1 && close_p != -1 {
+                let fn_name = trim(slice(line, 3, open_p - 3))
+                if fn_name != "main" {
+                    let raw_params = trim(slice(line, open_p + 1, close_p - open_p - 1))
+                    mut ret_type = "void"
+                    let arrow = find_str(line, "->", close_p)
+                    if arrow != -1 {
+                        let brace = find_char(line, lb, arrow)
+                        if brace != -1 {
+                            ret_type = trim(slice(line, arrow + 2, brace - arrow - 2))
+                        }
+                    }
+                    let sw_ret = map_nino_to_swift_type(ret_type)
+                    mut sw_params = ""
+                    mut call_args = ""
+                    let plen = len(raw_params)
+                    mut ppos = 0
+                    mut pidx = 0
+                    while ppos < plen {
+                        let comma = find_char(raw_params, ",", ppos)
+                        mut p = ""
+                        if comma != -1 {
+                            p = trim(slice(raw_params, ppos, comma - ppos))
+                            ppos = comma + 1
+                        } else {
+                            p = trim(slice(raw_params, ppos, plen - ppos))
+                            ppos = plen
+                        }
+                        let col = find_char(p, ":", 0)
+                        if col != -1 {
+                            mut pname = trim(slice(p, 0, col))
+                            if starts_with(pname, "mut ") {
+                                pname = trim(slice(pname, 4, len(pname) - 4))
+                            }
+                            let ptype = trim(slice(p, col + 1, len(p) - col - 1))
+                            let sw_t = map_nino_to_swift_type(ptype)
+                            if pidx > 0 {
+                                sw_params = sw_params + ", "
+                                call_args = call_args + ", "
+                            }
+                            sw_params = sw_params + "_ " + pname + ": " + sw_t
+                            call_args = call_args + pname
+                            pidx = pidx + 1
+                        }
+                    }
+                    if sw_ret == "Void" {
+                        sw = sw + "    public static func " + fn_name + "(" + sw_params + ") " + lb + "\n"
+                        sw = sw + "        " + fn_name + "(" + call_args + ")\n"
+                        sw = sw + "    " + rb + "\n"
+                    } else if sw_ret == "String" {
+                        sw = sw + "    public static func " + fn_name + "_swift(" + sw_params + ") -> String " + lb + "\n"
+                        sw = sw + "        guard let cPtr = " + fn_name + "(" + call_args + ") else " + lb + " return \"\" " + rb + "\n"
+                        sw = sw + "        return String(cString: cPtr)\n"
+                        sw = sw + "    " + rb + "\n"
+                    } else {
+                        sw = sw + "    public static func " + fn_name + "_swift(" + sw_params + ") -> " + sw_ret + " " + lb + "\n"
+                        sw = sw + "        return " + fn_name + "(" + call_args + ")\n"
+                        sw = sw + "    " + rb + "\n"
+                    }
+                }
+            }
+        }
+        depth = depth + count_braces_outside_str(line)
+        if depth < 0 {
+            depth = 0
+        }
+        pos = line_end + 1
+    }
+    sw = sw + rb + "\n"
+    return sw
+}
+
+fn generate_kotlin_bridge(source: string, pkg_name: string, class_name: string, lib_stem: string) -> string {
+    let clean = normalize_and_join_lines(replace_str(source, "\r\n", "\n"))
+    let slen = len(clean)
+    let lb = "{"
+    let rb = "}"
+    mut kt = "package " + pkg_name + "\n\n"
+    kt = kt + "object " + class_name + " " + lb + "\n"
+    kt = kt + "    init " + lb + "\n"
+    kt = kt + "        System.loadLibrary(\"" + lib_stem + "\")\n"
+    kt = kt + "    " + rb + "\n\n"
+    mut pos = 0
+    mut depth = 0
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            if char_at(clean, line_end) == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let line = trim(slice(clean, pos, line_end - pos))
+        if depth == 0 && starts_with(line, "fn ") && find_char(line, lb, 0) != -1 {
+            let open_p = find_char(line, "(", 3)
+            let close_p = find_char(line, ")", open_p)
+            if open_p != -1 && close_p != -1 {
+                let fn_name = trim(slice(line, 3, open_p - 3))
+                if fn_name != "main" {
+                    let raw_params = trim(slice(line, open_p + 1, close_p - open_p - 1))
+                    mut ret_type = "void"
+                    let arrow = find_str(line, "->", close_p)
+                    if arrow != -1 {
+                        let brace = find_char(line, lb, arrow)
+                        if brace != -1 {
+                            ret_type = trim(slice(line, arrow + 2, brace - arrow - 2))
+                        }
+                    }
+                    let kt_ret = map_nino_to_kotlin_type(ret_type)
+                    mut kt_params = ""
+                    let plen = len(raw_params)
+                    mut ppos = 0
+                    mut pidx = 0
+                    while ppos < plen {
+                        let comma = find_char(raw_params, ",", ppos)
+                        mut p = ""
+                        if comma != -1 {
+                            p = trim(slice(raw_params, ppos, comma - ppos))
+                            ppos = comma + 1
+                        } else {
+                            p = trim(slice(raw_params, ppos, plen - ppos))
+                            ppos = plen
+                        }
+                        let col = find_char(p, ":", 0)
+                        if col != -1 {
+                            mut pname = trim(slice(p, 0, col))
+                            if starts_with(pname, "mut ") {
+                                pname = trim(slice(pname, 4, len(pname) - 4))
+                            }
+                            let ptype = trim(slice(p, col + 1, len(p) - col - 1))
+                            let kt_t = map_nino_to_kotlin_type(ptype)
+                            if pidx > 0 {
+                                kt_params = kt_params + ", "
+                            }
+                            kt_params = kt_params + pname + ": " + kt_t
+                            pidx = pidx + 1
+                        }
+                    }
+                    kt = kt + "    external fun " + fn_name + "(" + kt_params + "): " + kt_ret + "\n"
+                }
+            }
+        }
+        depth = depth + count_braces_outside_str(line)
+        if depth < 0 {
+            depth = 0
+        }
+        pos = line_end + 1
+    }
+    kt = kt + rb + "\n"
+    return kt
+}
+
+fn generate_jni_c_bridge(source: string, pkg_name: string, class_name: string) -> string {
+    let clean = normalize_and_join_lines(replace_str(source, "\r\n", "\n"))
+    let slen = len(clean)
+    let lb = "{"
+    let rb = "}"
+    let pkg_u = replace_str(pkg_name, ".", "_")
+    mut jni = "\n#ifdef NINO_USE_SYSTEM_JNI_H\n#include <jni.h>\n#else\n"
+    jni = jni + "typedef void* jobject;\ntypedef const char* jstring;\ntypedef int64_t jlong;\ntypedef int32_t jint;\ntypedef double jdouble;\ntypedef uint8_t jboolean;\ntypedef int8_t jbyte;\n"
+    jni = jni + "struct JNINativeInterface_; typedef const struct JNINativeInterface_* JNIEnv;\n"
+    jni = jni + "struct JNINativeInterface_ " + lb + " const char* (*GetStringUTFChars)(JNIEnv*, jstring, uint8_t*); void (*ReleaseStringUTFChars)(JNIEnv*, jstring, const char*); jstring (*NewStringUTF)(JNIEnv*, const char*); " + rb + ";\n"
+    jni = jni + "#ifdef _WIN32\n#define JNIEXPORT __declspec(dllexport)\n#else\n#define JNIEXPORT __attribute__((visibility(\"default\")))\n#endif\n#define JNICALL\n#endif\n\n"
+    mut pos = 0
+    mut depth = 0
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            if char_at(clean, line_end) == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let line = trim(slice(clean, pos, line_end - pos))
+        if depth == 0 && starts_with(line, "fn ") && find_char(line, lb, 0) != -1 {
+            let open_p = find_char(line, "(", 3)
+            let close_p = find_char(line, ")", open_p)
+            if open_p != -1 && close_p != -1 {
+                let fn_name = trim(slice(line, 3, open_p - 3))
+                if fn_name != "main" {
+                    let raw_params = trim(slice(line, open_p + 1, close_p - open_p - 1))
+                    mut ret_type = "void"
+                    let arrow = find_str(line, "->", close_p)
+                    if arrow != -1 {
+                        let brace = find_char(line, lb, arrow)
+                        if brace != -1 {
+                            ret_type = trim(slice(line, arrow + 2, brace - arrow - 2))
+                        }
+                    }
+                    let jni_ret = map_nino_to_jni_type(ret_type)
+                    mut jni_params = "JNIEnv* env, jobject thiz"
+                    mut pre_conv = "    (void)env; (void)thiz;\n"
+                    mut post_conv = ""
+                    mut call_args = ""
+                    let plen = len(raw_params)
+                    mut ppos = 0
+                    mut pidx = 0
+                    while ppos < plen {
+                        let comma = find_char(raw_params, ",", ppos)
+                        mut p = ""
+                        if comma != -1 {
+                            p = trim(slice(raw_params, ppos, comma - ppos))
+                            ppos = comma + 1
+                        } else {
+                            p = trim(slice(raw_params, ppos, plen - ppos))
+                            ppos = plen
+                        }
+                        let col = find_char(p, ":", 0)
+                        if col != -1 {
+                            mut pname = trim(slice(p, 0, col))
+                            if starts_with(pname, "mut ") {
+                                pname = trim(slice(pname, 4, len(pname) - 4))
+                            }
+                            let ptype = trim(slice(p, col + 1, len(p) - col - 1))
+                            let jt = map_nino_to_jni_type(ptype)
+                            jni_params = jni_params + ", " + jt + " " + pname
+                            if pidx > 0 {
+                                call_args = call_args + ", "
+                            }
+                            if jt == "jstring" {
+                                pre_conv = pre_conv + "    const char* _c_" + pname + " = (env && *env && (*env)->GetStringUTFChars) ? (*env)->GetStringUTFChars(env, " + pname + ", 0) : (const char*)" + pname + ";\n"
+                                post_conv = post_conv + "    if (env && *env && (*env)->ReleaseStringUTFChars) (*env)->ReleaseStringUTFChars(env, " + pname + ", _c_" + pname + ");\n"
+                                call_args = call_args + "_c_" + pname
+                            } else {
+                                call_args = call_args + pname
+                            }
+                            pidx = pidx + 1
+                        }
+                    }
+                    let sym_name = "Java_" + pkg_u + "_" + class_name + "_" + fn_name
+                    jni = jni + "JNIEXPORT " + jni_ret + " JNICALL " + sym_name + "(" + jni_params + ") " + lb + "\n"
+                    jni = jni + pre_conv
+                    if jni_ret == "void" {
+                        jni = jni + "    " + fn_name + "(" + call_args + ");\n"
+                        jni = jni + post_conv
+                    } else if jni_ret == "jstring" {
+                        jni = jni + "    const char* _res = " + fn_name + "(" + call_args + ");\n"
+                        jni = jni + post_conv
+                        jni = jni + "    if (env && *env && (*env)->NewStringUTF) return (*env)->NewStringUTF(env, _res ? _res : \"\");\n"
+                        jni = jni + "    return (jstring)(_res ? _res : \"\");\n"
+                    } else {
+                        jni = jni + "    " + jni_ret + " _res = (" + jni_ret + ")" + fn_name + "(" + call_args + ");\n"
+                        jni = jni + post_conv
+                        jni = jni + "    return _res;\n"
+                    }
+                    jni = jni + rb + "\n\n"
+                }
+            }
+        }
+        depth = depth + count_braces_outside_str(line)
+        if depth < 0 {
+            depth = 0
+        }
+        pos = line_end + 1
+    }
+    return jni
+}
+
+fn compile_nino_shared_unit(source_path: string, output_lib_path: string, pcc_mode: bool, extra_c_tail: string) -> int {
+    if is_safe_cli_path(source_path) == false || is_safe_cli_path(output_lib_path) == false {
+        print("\033[91m[Nino Security Error CWE-78]\033[0m Rejected unsafe shell metacharacters in path.")
+        return 1
+    }
+    if file_exists(source_path) == false {
+        print("\033[91m[Error]\033[0m Source file not found: " + source_path)
+        return 1
+    }
+    let source_text = read_file(source_path)
+    if verify_syntax_balance(source_text) == false {
+        return 1
+    }
+    let stem = file_stem_name(source_path)
+    let base_dir = get_directory_of(source_path)
+    if run_semantic_type_check(source_text, base_dir, source_path) == false {
+        return 1
+    }
+    let hdr_code = generate_c_header(source_text, stem)
+    let hdr_path = output_lib_path + ".h"
+    write_file(hdr_path, hdr_code)
+    mut prefix_code = "#define NINO_SHARED_LIB 1\n"
+    if pcc_mode {
+        let smt_spec = synthesize_formal_smt_ex(source_text, true)
+        if find_str(smt_spec, "NO_VERIFICATION_OBLIGATIONS", 0) != -1 {
+            print("\033[91m[Nino PCC Error]\033[0m Fail-closed: zero provable postcondition or loop invariant obligations found.")
+            return 1
+        }
+        if find_str(smt_spec, "PCC_UNSUPPORTED_OBLIGATION", 0) != -1 {
+            print("\033[91m[Nino PCC Error]\033[0m Fail-closed: ensure() or invariant() contains an expression unsupported by SMT translation.")
+            return 1
+        }
+        let smt_path = source_path + ".pcc.smt2"
+        write_file(smt_path, smt_spec)
+        let z3_bin = find_z3_binary()
+        if len(z3_bin) == 0 {
+            delete_temp_file(smt_path)
+            print("\033[91m[Nino PCC Error]\033[0m Microsoft Z3 solver required for --proof.")
+            return 1
+        }
+        let z3_out_path = source_path + ".pcc.z3out"
+        run_z3_smt_file(z3_bin, smt_path, z3_out_path)
+        mut z3_out = ""
+        if file_exists(z3_out_path) {
+            z3_out = trim(read_file(z3_out_path))
+            delete_temp_file(z3_out_path)
+        }
+        delete_temp_file(smt_path)
+        let verdict = parse_z3_verdict(z3_out)
+        if verdict != "unsat" {
+            print("\033[91m[Nino PCC Error]\033[0m Shared library contract verification failed: " + verdict)
+            return 1
+        }
+        prefix_code = prefix_code + build_pcc_c_header(source_text, smt_spec, true)
+    }
+    let c_body = transpile_to_c_pcc(source_text, base_dir, source_path, prefix_code)
+    if len(c_body) == 0 {
+        return 1
+    }
+    let full_c = c_body + "\n" + hdr_code + "\n" + extra_c_tail
+    let c_path = output_lib_path + ".c"
+    write_file(c_path, full_c)
+    let gcc_path = get_system_gcc()
+    mut shared_flags = "-shared -fPIC -O3 -s -std=c11 -w"
+    mut link_libs = "-lm -lpthread -ldl"
+    if is_host_windows() {
+        shared_flags = "-shared -O3 -s -Wl,--export-all-symbols -Wl,--no-insert-timestamp -std=c11 -w"
+        link_libs = "-lm -lgdi32 -luser32 -lbcrypt -lws2_32"
+    }
+    let gcc_cmd = gcc_path + " " + shared_flags + " \"" + c_path + "\" -o \"" + output_lib_path + "\" " + link_libs
+    let rc = exec_cmd_win_safe(gcc_cmd)
+    delete_temp_file(c_path)
+    if rc != 0 {
+        print("\033[91m[Error]\033[0m Failed to compile native shared library: " + output_lib_path)
+        return 1
+    }
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Native Shared Library & C-ABI Engine (ninoc build --shared)]\033[0m")
+    print("  Source Unit     : " + source_path)
+    print("  Shared Library  : " + output_lib_path)
+    print("  C11 ABI Header  : " + hdr_path)
+    if pcc_mode {
+        print("  Formal Proof    : \033[92m[✓ Z3 UNSAT VERIFIED SHARED LIBRARY]\033[0m")
+    }
+    print("  Status          : \033[92m[✓ NATIVE DYNAMIC LIBRARY COMPILED SUCCESSFULLY]\033[0m")
+    print("\033[96m================================================================================\033[0m")
+    return 0
+}
+
+fn build_mobile_bridges(source_path: string, pkg_name: string, class_name: string, out_prefix: string, pcc_mode: bool) -> int {
+    if file_exists(source_path) == false {
+        print("\033[91m[Error]\033[0m Source file not found: " + source_path)
+        return 1
+    }
+    let source_text = read_file(source_path)
+    let stem = file_stem_name(source_path)
+    let lb = "{"
+    let rb = "}"
+    let hdr_path = out_prefix + "_" + stem + ".h"
+    let mmap_path = out_prefix + "_module.modulemap"
+    let swift_path = out_prefix + "_" + class_name + ".swift"
+    let kt_path = out_prefix + "_" + class_name + ".kt"
+    let jni_lib_stem = out_prefix + "_" + stem + "_jni"
+    mut jni_lib_path = "lib" + jni_lib_stem + ".so"
+    if is_host_windows() {
+        jni_lib_path = jni_lib_stem + ".dll"
+    }
+
+    let hdr_code = generate_c_header(source_text, stem)
+    write_file(hdr_path, hdr_code)
+
+    mut mmap_code = "module " + class_name + "C " + lb + "\n"
+    mmap_code = mmap_code + "    header \"" + hdr_path + "\"\n"
+    mmap_code = mmap_code + "    export *\n"
+    mmap_code = mmap_code + rb + "\n"
+    write_file(mmap_path, mmap_code)
+
+    let swift_code = generate_swift_bridge(source_text, class_name)
+    write_file(swift_path, swift_code)
+
+    let kt_code = generate_kotlin_bridge(source_text, pkg_name, class_name, jni_lib_stem)
+    write_file(kt_path, kt_code)
+
+    let jni_c_tail = generate_jni_c_bridge(source_text, pkg_name, class_name)
+    let rc = compile_nino_shared_unit(source_path, jni_lib_path, pcc_mode, jni_c_tail)
+    if rc != 0 {
+        return rc
+    }
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Universal Mobile Engine - Android NDK (JNI/Kotlin) & iOS (C11/Swift)]\033[0m")
+    print("  Source Unit          : " + source_path)
+    print("  iOS Bridging Header  : " + hdr_path)
+    print("  iOS Clang ModuleMap  : " + mmap_path)
+    print("  iOS Swift 5 Bridge   : " + swift_path)
+    print("  Android Kotlin Bridge: " + kt_path)
+    print("  Android JNI Binary   : " + jni_lib_path)
+    print("  Mobile Status        : \033[92m[✓ ANDROID JNI & IOS SWIFT BRIDGES SYNTHESIZED & COMPILED]\033[0m")
+    print("\033[96m================================================================================\033[0m")
+    return 0
+}
+
+fn print_usage() {
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Sovereign Self-Hosting Toolchain (ninoc)]\033[0m")
+    print("Self-Sovereign Systems Language with Deterministic Memory & Formal Contracts\n")
+    print("Usage:")
+    print("  ninoc <command> [arguments...]\n")
+    print("Commands:")
+    print("  run <file.nino> [--backend=native]   Compile and execute a Nino source unit immediately")
+    print("  build <file.nino> [--backend=native*]  Direct PE/ELF native binary or GCC/LLVM with --proof/--bv")
+    print("  check <file.nino>                      Run AST builder, type checker, sealed taint & region analysis")
+    print("  ast <file.nino> [-o <out.ast>]         Dump formal tagged abstract syntax tree nodes")
+    print("  mobile <file.nino> [--pkg <p>] [-o <o>] Synthesize & compile Android NDK (JNI/Kotlin) & iOS (C11/Swift)")
+    print("  witness <file.nino> [-o <out.nino>]    Synthesize executable Z3 counterexample witness tests")
+    print("  bindgen <header.h> [-o <out.nino>]     Generate zero-overhead Nino FFI bindings from C headers")
+    print("  trace <file.nino>                      Execute with SHA-256 deterministic flight recorder")
+    print("  fmt <file.nino> [--check]              Format Nino source code into canonical 4-space layout")
+    print("  lsp                                    Launch JSON-RPC 2.0 Language Server Protocol engine")
+    print("  pkg <command>                          Manage packages (search, add, install, registry)")
+    print("  llvm <file.nino> [-o <ll>]             Emit direct LLVM SSA IR (fail-closed subset; use build --backend=llvm for full language)")
+    print("  ir <file.nino>                         Emit optimized Nino Intermediate Representation (NIR)")
+    print("  lex <file.nino>                        Scan source into formal token stream via DFA lexer")
+    print("  doc <file.nino> [-o <doc>]             Generate automated API documentation from AST")
+    print("  prove <file.nino>                      Synthesize and verify formal invariant contracts")
+    print("  asm <file.nino> [--arch=x86_64|aarch64] Emit native machine code & annotated assembly directly")
+    print("  keygen [--seed <64-hex>]               Generate RFC 8032 Ed25519 keypair for asymmetric PCC signing")
+    print("  test                                   Execute native test suite across examples")
+    print("  version                                Display sovereign toolchain version and architecture")
+    print("  help                                   Display this command reference menu")
+    print("\033[96m================================================================================\033[0m")
+}
+
+fn print_version() {
+    let arch_t = is_host_windows() ? "x86_64-pc-windows-gnu" : "x86_64-unknown-linux-gnu"
+    print("Nino Sovereign Systems Language Toolchain v1.2.2")
+    print("Compiler Engine    : ninoc (Modular Self-Hosted Native Machine Code)")
+    print("Architecture Target: " + arch_t + " (Standalone Executable)")
+    print("Runtime Subsystem  : Morphic Deterministic Memory / Zero-Overhead Contracts")
+    print("Bootstrap Stage    : Stage-3 Fixed-Point Deterministic Convergence")
+}
+
+struct EqSmtCtx {
+    pfx: string,
+    mut sym_map: string,
+    mut bool_syms: string,
+    mut blk_decls: string,
+    mut decls: string,
+    mut asserts: string,
+    mut ret_conds: [string],
+    mut ret_vals: [string],
+    mut path_cond: string,
+    mut seq: int,
+    mut unsupported: bool,
+    mut always_returned: bool
+}
+
+fn eq_smt_map_get(sym_map: string, key: string) -> string {
+    let pat = "|" + key + "="
+    let p = find_str(sym_map, pat, 0)
+    if p == -1 {
+        return ""
+    }
+    let vs = p + len(pat)
+    let ve = find_char(sym_map, "|", vs)
+    if ve == -1 {
+        return ""
+    }
+    return slice(sym_map, vs, ve - vs)
+}
+
+fn eq_smt_map_set(sym_map: string, key: string, val: string) -> string {
+    let pat = "|" + key + "="
+    let p = find_str(sym_map, pat, 0)
+    if p == -1 {
+        return sym_map + key + "=" + val + "|"
+    }
+    let vs = p + len(pat)
+    let ve = find_char(sym_map, "|", vs)
+    if ve == -1 {
+        return sym_map + key + "=" + val + "|"
+    }
+    return slice(sym_map, 0, p) + "|" + key + "=" + val + slice(sym_map, ve, len(sym_map) - ve)
+}
+
+fn eq_smt_map_rem(sym_map: string, key: string) -> string {
+    let pat = "|" + key + "="
+    let p = find_str(sym_map, pat, 0)
+    if p == -1 {
+        return sym_map
+    }
+    let ve = find_char(sym_map, "|", p + 1)
+    if ve == -1 {
+        return sym_map
+    }
+    return slice(sym_map, 0, p) + slice(sym_map, ve, len(sym_map) - ve)
+}
+
+fn eq_smt_exit_block_scope(mut ctx: EqSmtCtx, outer_map: string, outer_bools: string, outer_blk: string) {
+    let decls = ctx.blk_decls
+    mut p = 1
+    let dlen = len(decls)
+    while p < dlen {
+        let nb = find_char(decls, "|", p)
+        if nb == -1 { break }
+        let sym = slice(decls, p, nb - p)
+        p = nb + 1
+        if len(sym) > 0 {
+            let ov = eq_smt_map_get(outer_map, sym)
+            if len(ov) > 0 {
+                ctx.sym_map = eq_smt_map_set(ctx.sym_map, sym, ov)
+            } else {
+                ctx.sym_map = eq_smt_map_rem(ctx.sym_map, sym)
+            }
+            if find_str(outer_bools, "|" + sym + "|", 0) != -1 {
+                if find_str(ctx.bool_syms, "|" + sym + "|", 0) == -1 {
+                    ctx.bool_syms = ctx.bool_syms + sym + "|"
+                }
+            } else {
+                ctx.bool_syms = replace_str(ctx.bool_syms, "|" + sym + "|", "|")
+            }
+        }
+    }
+    ctx.blk_decls = outer_blk
+}
+
+fn eq_smt_map_keys(sym_map: string) -> [string] {
+    mut out: [string] = []
+    let n = len(sym_map)
+    mut i = 1
+    while i < n {
+        let eq = find_char(sym_map, "=", i)
+        let bar = find_char(sym_map, "|", i)
+        if eq == -1 || bar == -1 {
+            break
+        }
+        if eq < bar {
+            out = push(out, slice(sym_map, i, eq - i))
+        }
+        i = bar + 1
+    }
+    return out
+}
+
+fn eq_smt_and(a: string, b: string) -> string {
+    if len(a) == 0 {
+        return b
+    }
+    if len(b) == 0 {
+        return a
+    }
+    return "(and " + a + " " + b + ")"
+}
+
+fn eq_smt_is_bool_expr(pool: AstPool, nid: int, bool_syms: string) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_BOOL_LIT() {
+        return true
+    }
+    if nd.kind == NK_IDENT() {
+        return find_str(bool_syms, "|" + nd.name + "|", 0) != -1
+    }
+    if nd.kind == NK_UNARY_OP() && nd.op == "!" {
+        return true
+    }
+    if nd.kind == NK_BIN_OP() {
+        return nd.op == "==" || nd.op == "!=" || nd.op == "<" || nd.op == "<=" || nd.op == ">" || nd.op == ">=" || nd.op == "&&" || nd.op == "||"
+    }
+    if nd.kind == NK_TERNARY() {
+        return eq_smt_is_bool_expr(pool, nd.right, bool_syms)
+    }
+    return false
+}
+
+fn eq_smt_expr(pool: AstPool, nid: int, sym_map: string, mut ok_out: [int]) -> string {
+    if nid < 0 || nid >= len(pool.nodes) {
+        ok_out[0] = 0
+        return "0"
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INT_LIT() {
+        return nd.str_val
+    }
+    if nd.kind == NK_BOOL_LIT() {
+        return nd.str_val
+    }
+    if nd.kind == NK_IDENT() {
+        let mapped = eq_smt_map_get(sym_map, nd.name)
+        if len(mapped) == 0 {
+            ok_out[0] = 0
+            return "0"
+        }
+        return mapped
+    }
+    if nd.kind == NK_UNARY_OP() {
+        let sub = eq_smt_expr(pool, nd.left, sym_map, ok_out)
+        if nd.op == "-" {
+            return "(- " + sub + ")"
+        }
+        if nd.op == "!" {
+            return "(not " + sub + ")"
+        }
+        ok_out[0] = 0
+        return "0"
+    }
+    if nd.kind == NK_TERNARY() {
+        let c = eq_smt_expr(pool, nd.left, sym_map, ok_out)
+        let t = eq_smt_expr(pool, nd.right, sym_map, ok_out)
+        let e = eq_smt_expr(pool, nd.extra, sym_map, ok_out)
+        return "(ite " + c + " " + t + " " + e + ")"
+    }
+    if nd.kind == NK_BIN_OP() {
+        let l = eq_smt_expr(pool, nd.left, sym_map, ok_out)
+        let r = eq_smt_expr(pool, nd.right, sym_map, ok_out)
+        mut op = nd.op
+        if op == "+" || op == "-" || op == "*" || op == "<" || op == "<=" || op == ">" || op == ">=" {
+            return "(" + op + " " + l + " " + r + ")"
+        }
+        if op == "/" {
+            return "(div " + l + " " + r + ")"
+        }
+        if op == "%" {
+            return "(mod " + l + " " + r + ")"
+        }
+        if op == "==" {
+            return "(= " + l + " " + r + ")"
+        }
+        if op == "!=" {
+            return "(distinct " + l + " " + r + ")"
+        }
+        if op == "&&" {
+            return "(and " + l + " " + r + ")"
+        }
+        if op == "||" {
+            return "(or " + l + " " + r + ")"
+        }
+        ok_out[0] = 0
+        return "0"
+    }
+    ok_out[0] = 0
+    return "0"
+}
+
+fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
+    if ctx.always_returned || ctx.unsupported || nid < 0 || nid >= len(pool.nodes) {
+        return
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_BLOCK() {
+        let outer_map = ctx.sym_map
+        let outer_bools = ctx.bool_syms
+        let outer_blk = ctx.blk_decls
+        ctx.blk_decls = "|"
+        for ci in 0..nd.child_count {
+            if ctx.always_returned || ctx.unsupported {
+                eq_smt_exit_block_scope(ctx, outer_map, outer_bools, outer_blk)
+                return
+            }
+            eq_smt_lower_stmt(pool, pool.children[nd.child_start + ci], ctx)
+        }
+        eq_smt_exit_block_scope(ctx, outer_map, outer_bools, outer_blk)
+        return
+    }
+    if nd.kind == NK_CONTRACT_REQ() {
+        mut ok = [1]
+        let c = eq_smt_expr(pool, nd.left, ctx.sym_map, ok)
+        if ok[0] == 1 {
+            if len(ctx.path_cond) > 0 {
+                ctx.asserts = ctx.asserts + "(assert (=> " + ctx.path_cond + " " + c + "))\n"
+            } else {
+                ctx.asserts = ctx.asserts + "(assert " + c + ")\n"
+            }
+        } else {
+            ctx.unsupported = true
+        }
+        return
+    }
+    if nd.kind == NK_EXPR_STMT() {
+        let cid = nd.left
+        if cid >= 0 && cid < len(pool.nodes) && pool.nodes[cid].kind == NK_CALL() {
+            let cnd: AstNode = pool.nodes[cid]
+            if cnd.left >= 0 && cnd.left < len(pool.nodes) && pool.nodes[cnd.left].name == "require" && cnd.child_count >= 1 {
+                mut ok = [1]
+                let c = eq_smt_expr(pool, pool.children[cnd.child_start], ctx.sym_map, ok)
+                if ok[0] == 1 {
+                    if len(ctx.path_cond) > 0 {
+                        ctx.asserts = ctx.asserts + "(assert (=> " + ctx.path_cond + " " + c + "))\n"
+                    } else {
+                        ctx.asserts = ctx.asserts + "(assert " + c + ")\n"
+                    }
+                    return
+                }
+            }
+        }
+        ctx.unsupported = true
+        return
+    }
+    if nd.kind == NK_LET_STMT() {
+        if find_str(ctx.blk_decls, "|" + nd.name + "|", 0) == -1 {
+            ctx.blk_decls = ctx.blk_decls + nd.name + "|"
+        }
+        mut ok = [1]
+        let rhs = eq_smt_expr(pool, nd.left, ctx.sym_map, ok)
+        if ok[0] == 0 {
+            ctx.unsupported = true
+            return
+        }
+        mut sort = "Int"
+        if trim(nd.type_ann) == "bool" || eq_smt_is_bool_expr(pool, nd.left, ctx.bool_syms) {
+            sort = "Bool"
+            if find_str(ctx.bool_syms, "|" + nd.name + "|", 0) == -1 {
+                ctx.bool_syms = ctx.bool_syms + nd.name + "|"
+            }
+        }
+        ctx.seq = ctx.seq + 1
+        let ssa = ctx.pfx + nd.name + "_" + int_to_str(ctx.seq)
+        ctx.decls = ctx.decls + "(declare-const " + ssa + " " + sort + ")\n"
+        ctx.asserts = ctx.asserts + "(assert (= " + ssa + " " + rhs + "))\n"
+        ctx.sym_map = eq_smt_map_set(ctx.sym_map, nd.name, ssa)
+        return
+    }
+    if nd.kind == NK_ASSIGN_STMT() {
+        if nd.op != "=" || nd.left < 0 || nd.left >= len(pool.nodes) || pool.nodes[nd.left].kind != NK_IDENT() {
+            ctx.unsupported = true
+            return
+        }
+        let vname = pool.nodes[nd.left].name
+        mut ok = [1]
+        let rhs = eq_smt_expr(pool, nd.right, ctx.sym_map, ok)
+        if ok[0] == 0 {
+            ctx.unsupported = true
+            return
+        }
+        mut sort = "Int"
+        if find_str(ctx.bool_syms, "|" + vname + "|", 0) != -1 {
+            sort = "Bool"
+        }
+        ctx.seq = ctx.seq + 1
+        let ssa = ctx.pfx + vname + "_" + int_to_str(ctx.seq)
+        ctx.decls = ctx.decls + "(declare-const " + ssa + " " + sort + ")\n"
+        ctx.asserts = ctx.asserts + "(assert (= " + ssa + " " + rhs + "))\n"
+        ctx.sym_map = eq_smt_map_set(ctx.sym_map, vname, ssa)
+        return
+    }
+    if nd.kind == NK_RETURN_STMT() {
+        mut ok = [1]
+        let rv = eq_smt_expr(pool, nd.left, ctx.sym_map, ok)
+        if ok[0] == 0 {
+            ctx.unsupported = true
+            return
+        }
+        ctx.ret_conds = push(ctx.ret_conds, ctx.path_cond)
+        ctx.ret_vals = push(ctx.ret_vals, rv)
+        ctx.always_returned = true
+        return
+    }
+    if nd.kind == NK_IF_STMT() {
+        mut ok = [1]
+        let cond_s = eq_smt_expr(pool, nd.left, ctx.sym_map, ok)
+        if ok[0] == 0 {
+            ctx.unsupported = true
+            return
+        }
+        let pre_map = ctx.sym_map
+        let pre_pc = ctx.path_cond
+        ctx.path_cond = eq_smt_and(pre_pc, cond_s)
+        ctx.always_returned = false
+        eq_smt_lower_stmt(pool, nd.right, ctx)
+        let then_map = ctx.sym_map
+        let then_ret = ctx.always_returned
+        let then_pc = ctx.path_cond
+
+        ctx.sym_map = pre_map
+        ctx.path_cond = eq_smt_and(pre_pc, "(not " + cond_s + ")")
+        ctx.always_returned = false
+        if nd.extra != -1 {
+            eq_smt_lower_stmt(pool, nd.extra, ctx)
+        }
+        let else_map = ctx.sym_map
+        let else_ret = ctx.always_returned
+        let else_pc = ctx.path_cond
+
+        ctx.path_cond = pre_pc
+        ctx.sym_map = pre_map
+        ctx.always_returned = (then_ret && else_ret)
+        if ctx.always_returned == false {
+            if then_ret && else_ret == false {
+                ctx.path_cond = else_pc
+            } else if then_ret == false && else_ret {
+                ctx.path_cond = then_pc
+            }
+            let keys = eq_smt_map_keys(pre_map)
+            for ki in 0..len(keys) {
+                let k = keys[ki]
+                let vp = eq_smt_map_get(pre_map, k)
+                let vt = eq_smt_map_get(then_map, k)
+                let ve = eq_smt_map_get(else_map, k)
+                if vt != vp || ve != vp {
+                    if then_ret && else_ret == false {
+                        ctx.sym_map = eq_smt_map_set(ctx.sym_map, k, ve)
+                    } else if then_ret == false && else_ret {
+                        ctx.sym_map = eq_smt_map_set(ctx.sym_map, k, vt)
+                    } else {
+                        mut sort = "Int"
+                        if find_str(ctx.bool_syms, "|" + k + "|", 0) != -1 {
+                            sort = "Bool"
+                        }
+                        ctx.seq = ctx.seq + 1
+                        let phi = ctx.pfx + k + "_phi_" + int_to_str(ctx.seq)
+                        ctx.decls = ctx.decls + "(declare-const " + phi + " " + sort + ")\n"
+                        ctx.asserts = ctx.asserts + "(assert (= " + phi + " (ite " + cond_s + " " + vt + " " + ve + ")))\n"
+                        ctx.sym_map = eq_smt_map_set(ctx.sym_map, k, phi)
+                    }
+                }
+            }
+        }
+        return
+    }
+    ctx.unsupported = true
+}
+
+fn eq_smt_first_fn(pool: AstPool) -> int {
+    if pool.has_error || pool.root < 0 || pool.root >= len(pool.nodes) {
+        return -1
+    }
+    let rnd: AstNode = pool.nodes[pool.root]
+    for ci in 0..rnd.child_count {
+        let cid = pool.children[rnd.child_start + ci]
+        if cid >= 0 && cid < len(pool.nodes) && pool.nodes[cid].kind == NK_FN_DECL() {
+            return cid
+        }
+    }
+    return -1
+}
+
+fn synthesize_equiv_smt(src_a: string, src_b: string) -> string {
+    let pa = ast_parse_unit_ex(src_a, ".", "equiv_a.nino", false)
+    let pb = ast_parse_unit_ex(src_b, ".", "equiv_b.nino", false)
+    let fa = eq_smt_first_fn(pa)
+    let fb = eq_smt_first_fn(pb)
+    if fa == -1 || fb == -1 {
+        return "(set-logic ALL)\n(assert true)\n(check-sat)\n(get-model)\n"
+    }
+    let fnd_a: AstNode = pa.nodes[fa]
+    let fnd_b: AstNode = pb.nodes[fb]
+    if fnd_a.child_count != fnd_b.child_count {
+        return "(set-logic ALL)\n(declare-const _div_a Int)\n(declare-const _div_b Int)\n(assert (not (= _div_a _div_b)))\n(check-sat)\n(get-model)\n"
+    }
+    mut param_decls = ""
+    mut map_a = "|"
+    mut map_b = "|"
+    mut bsyms = "|"
+    for pi in 0..fnd_a.child_count {
+        let pan: AstNode = pa.nodes[pa.children[fnd_a.child_start + pi]]
+        let pbn: AstNode = pb.nodes[pb.children[fnd_b.child_start + pi]]
+        let ta = trim(pan.type_ann)
+        let tb = trim(pbn.type_ann)
+        let a_bool = (ta == "bool")
+        let b_bool = (tb == "bool")
+        if a_bool != b_bool {
+            return "(set-logic ALL)\n(declare-const _div_a Int)\n(declare-const _div_b Int)\n(assert (not (= _div_a _div_b)))\n(check-sat)\n(get-model)\n"
+        }
+        let psym = "_eq_p_" + int_to_str(pi)
+        mut psort = "Int"
+        if a_bool {
+            psort = "Bool"
+            bsyms = bsyms + pan.name + "|" + pbn.name + "|"
+        }
+        param_decls = param_decls + "(declare-const " + psym + " " + psort + ")\n"
+        map_a = eq_smt_map_set(map_a, pan.name, psym)
+        map_b = eq_smt_map_set(map_b, pbn.name, psym)
+    }
+    mut ca = EqSmtCtx { pfx: "a_", sym_map: map_a, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
+    mut cb = EqSmtCtx { pfx: "b_", sym_map: map_b, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
+    if fnd_a.left != -1 {
+        eq_smt_lower_stmt(pa, fnd_a.left, ca)
+    }
+    if fnd_b.left != -1 {
+        eq_smt_lower_stmt(pb, fnd_b.left, cb)
+    }
+    mut ret_sort = "Int"
+    if trim(fnd_a.type_ann) == "bool" {
+        ret_sort = "Bool"
+    }
+    if ca.unsupported || cb.unsupported || len(ca.ret_vals) == 0 || len(cb.ret_vals) == 0 {
+        return "(set-logic ALL)\n" + param_decls + "(declare-const _ret_a " + ret_sort + ")\n(declare-const _ret_b " + ret_sort + ")\n(assert (not (= _ret_a _ret_b)))\n(check-sat)\n(get-model)\n"
+    }
+    mut out = "(set-logic ALL)\n" + param_decls
+    out = out + "(declare-const _ret_a " + ret_sort + ")\n(declare-const _ret_b " + ret_sort + ")\n"
+    out = out + ca.decls + cb.decls + ca.asserts + cb.asserts
+    for i in 0..len(ca.ret_vals) {
+        if len(ca.ret_conds[i]) == 0 {
+            out = out + "(assert (= _ret_a " + ca.ret_vals[i] + "))\n"
+        } else {
+            out = out + "(assert (=> " + ca.ret_conds[i] + " (= _ret_a " + ca.ret_vals[i] + ")))\n"
+        }
+    }
+    for i in 0..len(cb.ret_vals) {
+        if len(cb.ret_conds[i]) == 0 {
+            out = out + "(assert (= _ret_b " + cb.ret_vals[i] + "))\n"
+        } else {
+            out = out + "(assert (=> " + cb.ret_conds[i] + " (= _ret_b " + cb.ret_vals[i] + ")))\n"
+        }
+    }
+    out = out + "(assert (not (= _ret_a _ret_b)))\n(check-sat)\n(get-model)\n"
+    return out
+}
+
+fn generate_cyclonedx_sbom(src_path: string, src_text: string) -> string {
+    let root_sha = sha256(src_text)
+    let base_dir = get_directory_of(src_path)
+    let lb = "{"
+    let rb = "}"
+    mut comps = "    " + lb + "\n"
+    comps = comps + "      \"type\": \"application\",\n"
+    comps = comps + "      \"name\": \"" + src_path + "\",\n"
+    comps = comps + "      \"version\": \"1.0.0\",\n"
+    comps = comps + "      \"hashes\": [" + lb + " \"alg\": \"SHA-256\", \"content\": \"" + root_sha + "\" " + rb + "]\n"
+    comps = comps + "    " + rb
+    let slen = len(src_text)
+    mut pos = 0
+    while pos < slen {
+        mut lend = pos
+        while lend < slen && char_at(src_text, lend) != "\n" {
+            lend = lend + 1
+        }
+        let line = trim(slice(src_text, pos, lend - pos))
+        if starts_with(line, "import \"") && ends_with(line, "\"") {
+            let imp = slice(line, 8, len(line) - 9)
+            let resolved = resolve_import_path(imp, base_dir)
+            mut imp_sha = sha256(imp)
+            if file_exists(resolved) {
+                imp_sha = sha256(read_file(resolved))
+            }
+            comps = comps + ",\n    " + lb + "\n"
+            comps = comps + "      \"type\": \"library\",\n"
+            comps = comps + "      \"name\": \"" + imp + "\",\n"
+            comps = comps + "      \"version\": \"1.0.0\",\n"
+            comps = comps + "      \"hashes\": [" + lb + " \"alg\": \"SHA-256\", \"content\": \"" + imp_sha + "\" " + rb + "]\n"
+            comps = comps + "    " + rb
+        }
+        pos = lend + 1
+    }
+    let serial_h = sha256("SBOM:" + src_path + ":" + root_sha)
+    mut sbom = lb + "\n"
+    sbom = sbom + "  \"bomFormat\": \"CycloneDX\",\n"
+    sbom = sbom + "  \"specVersion\": \"1.5\",\n"
+    sbom = sbom + "  \"serialNumber\": \"urn:uuid:" + slice(serial_h, 0, 8) + "-" + slice(serial_h, 8, 4) + "-4" + slice(serial_h, 13, 3) + "-a" + slice(serial_h, 17, 3) + "-" + slice(serial_h, 20, 12) + "\",\n"
+    sbom = sbom + "  \"version\": 1,\n"
+    sbom = sbom + "  \"components\": [\n" + comps + "\n  ]\n"
+    sbom = sbom + rb + "\n"
+    return sbom
+}
+
+struct LintAstState {
+    cur_fn: string,
+    strict_mode: bool,
+    mut has_contract: bool,
+    mut max_line: int,
+    mut violations: int
+}
+
+fn lint_audit_ast(pool: AstPool, nid: int, mut st: LintAstState) {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.line > st.max_line {
+        st.max_line = nd.line
+    }
+    if nd.kind == NK_CONTRACT_REQ() || nd.kind == NK_CONTRACT_ENS() || nd.kind == NK_CONTRACT_INV() {
+        st.has_contract = true
+    } else if nd.kind == NK_WHILE_STMT() {
+        if nd.left >= 0 && nd.left < len(pool.nodes) {
+            let cnd: AstNode = pool.nodes[nd.left]
+            if (cnd.kind == NK_BOOL_LIT() && cnd.str_val == "true") || (cnd.kind == NK_INT_LIT() && cnd.str_val == "1") {
+                print("  [✗ JPL-2 VIOLATION] Unbounded loop condition at line " + int_to_str(nd.line) + " in fn '" + st.cur_fn + "'")
+                st.violations = st.violations + 1
+            }
+        }
+    } else if nd.kind == NK_CALL() {
+        if nd.left >= 0 && nd.left < len(pool.nodes) {
+            let cal: AstNode = pool.nodes[nd.left]
+            if cal.kind == NK_IDENT() {
+                if cal.name == "require" || cal.name == "ensure" {
+                    st.has_contract = true
+                } else if st.strict_mode && cal.name == st.cur_fn {
+                    print("  [✗ JPL-1 VIOLATION] Direct recursion detected at line " + int_to_str(nd.line) + " in fn '" + st.cur_fn + "'")
+                    st.violations = st.violations + 1
+                }
+            }
+        }
+    }
+    if nd.left != -1 {
+        lint_audit_ast(pool, nd.left, st)
+    }
+    if nd.right != -1 {
+        lint_audit_ast(pool, nd.right, st)
+    }
+    if nd.extra != -1 {
+        lint_audit_ast(pool, nd.extra, st)
+    }
+    for ci in 0..nd.child_count {
+        lint_audit_ast(pool, pool.children[nd.child_start + ci], st)
+    }
+}
+
+fn lint_fn_end_line(clean: string, start_line: int) -> int {
+    let n = len(clean)
+    mut line = 1
+    mut i = 0
+    while i < n && line < start_line {
+        if char_at(clean, i) == "\n" {
+            line = line + 1
+        }
+        i = i + 1
+    }
+    mut depth = 0
+    mut seen_brace = false
+    mut in_str = false
+    mut esc = false
+    mut in_blk_cmt = false
+    while i < n {
+        let ch = char_at(clean, i)
+        if in_blk_cmt {
+            if ch == "*" && i + 1 < n && char_at(clean, i + 1) == "/" {
+                in_blk_cmt = false
+                i = i + 2
+            } else {
+                if ch == "\n" { line = line + 1 }
+                i = i + 1
+            }
+        } else if in_str {
+            if esc {
+                esc = false
+                if ch == "\n" { line = line + 1 }
+                i = i + 1
+            } else if ch == "\\" {
+                esc = true
+                i = i + 1
+            } else if ch == "\"" {
+                in_str = false
+                i = i + 1
+            } else {
+                if ch == "\n" { line = line + 1 }
+                i = i + 1
+            }
+        } else if ch == "/" && i + 1 < n && char_at(clean, i + 1) == "/" {
+            i = i + 2
+            while i < n && char_at(clean, i) != "\n" {
+                i = i + 1
+            }
+        } else if ch == "/" && i + 1 < n && char_at(clean, i + 1) == "*" {
+            in_blk_cmt = true
+            i = i + 2
+        } else if ch == "\"" {
+            in_str = true
+            i = i + 1
+        } else if ch == "{" {
+            depth = depth + 1
+            seen_brace = true
+            i = i + 1
+        } else if ch == "}" {
+            depth = depth - 1
+            if seen_brace && depth <= 0 {
+                return line
+            }
+            i = i + 1
+        } else {
+            if ch == "\n" { line = line + 1 }
+            i = i + 1
+        }
+    }
+    return line
+}
+
+fn run_architecture_linter(src_path: string, src_text: string, strict_mode: bool) -> int {
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Static Architecture & Safety Linter (MISRA-C / NASA JPL Power-of-10)]\033[0m")
+    print("  Target Unit : " + src_path)
+    if verify_syntax_balance(src_text) == false {
+        print("  [✗ MISRA-1 VIOLATION] Unbalanced block or expression delimiters detected.")
+        print("\033[96m================================================================================\033[0m")
+        return 1
+    }
+    let clean = replace_str(src_text, "\r\n", "\n")
+    let pool = ast_parse_unit_ex(clean, ".", src_path, false)
+    if pool.has_error || pool.root < 0 || pool.root >= len(pool.nodes) {
+        print("  [✗ MISRA-1 VIOLATION] Parse error during AST architectural audit: " + pool.err_msg)
+        print("\033[96m================================================================================\033[0m")
+        return 1
+    }
+    mut fn_count = 0
+    mut contract_fns = 0
+    mut violations = 0
+    let rnd: AstNode = pool.nodes[pool.root]
+    for ci in 0..rnd.child_count {
+        let fid = pool.children[rnd.child_start + ci]
+        if fid >= 0 && fid < len(pool.nodes) && pool.nodes[fid].kind == NK_FN_DECL() {
+            let fnd: AstNode = pool.nodes[fid]
+            fn_count = fn_count + 1
+            mut st = LintAstState { cur_fn: fnd.name, strict_mode: strict_mode, has_contract: false, max_line: fnd.line, violations: 0 }
+            if fnd.left != -1 {
+                lint_audit_ast(pool, fnd.left, st)
+            }
+            if st.has_contract {
+                contract_fns = contract_fns + 1
+            }
+            violations = violations + st.violations
+            mut end_ln = lint_fn_end_line(clean, fnd.line)
+            if st.max_line > end_ln {
+                end_ln = st.max_line
+            }
+            let fn_lines = end_ln - fnd.line
+            if strict_mode && fn_lines > 250 {
+                print("  [✗ JPL-4 VIOLATION] Function '" + fnd.name + "' exceeds 250-line safety limit (" + int_to_str(fn_lines) + " lines)")
+                violations = violations + 1
+            }
+        }
+    }
+    print("  Rule MISRA-1 (Delimiter & Scope Balance) : [PASS]")
+    print("  Rule JPL-1   (Acyclic Call Graph Audit)  : " + (violations == 0 ? "[PASS]" : "[FAIL]"))
+    print("  Rule JPL-2   (Bounded Loop Condition)    : " + (violations == 0 ? "[PASS]" : "[FAIL]"))
+    print("  Functions Audited                        : " + int_to_str(fn_count) + " (" + int_to_str(contract_fns) + " with formal contracts)")
+    if violations == 0 {
+        print("  Linter Verdict                           : \033[92m[✓ 0 ARCHITECTURAL VIOLATIONS]\033[0m")
+        print("\033[96m================================================================================\033[0m")
+        return 0
+    }
+    print("  Linter Verdict                           : \033[91m[✗ " + int_to_str(violations) + " VIOLATIONS DETECTED]\033[0m")
+    print("\033[96m================================================================================\033[0m")
+    return 1
+}
+

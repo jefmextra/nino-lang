@@ -1,0 +1,24 @@
+fn pq_kem_new_session(level: i32) -> dict {
+    let kp = pq_generate_keypair(level)
+    return kp
+}
+
+fn pq_kem_client_handshake(public_key: string) -> dict {
+    let enc = pq_encapsulate(public_key)
+    return enc
+}
+
+fn pq_kem_server_derive(ciphertext: string, private_key: string) -> string {
+    let shared_secret = pq_decapsulate(ciphertext, private_key)
+    return shared_secret
+}
+
+fn pq_sign_payload(message: string, private_key: string) -> string {
+    let sig = pq_sign(message, private_key)
+    return sig
+}
+
+fn pq_verify_payload(message: string, signature: string, public_key: string) -> bool {
+    let is_valid = pq_verify(message, signature, public_key)
+    return is_valid
+}

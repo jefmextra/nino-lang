@@ -1,0 +1,95 @@
+import "std/str.nino"
+import "std/json.nino"
+import "std/http.nino"
+import "std/uuid.nino"
+
+struct TransferReceipt {
+    tx_id: string,
+    sender: string,
+    amount: int,
+    new_balance: int,
+    settled: bool
+}
+
+fn verify_solvency_debit(balance: int, debit_amount: int) -> int {
+    require(balance >= 1000, "Account balance must meet minimum reserve")
+    require(debit_amount > 0 && debit_amount <= 500, "Debit must be positive and within single-tx limit")
+    let remaining = balance - debit_amount
+    ensure(remaining >= 500, "Post-debit reserve invariant must hold")
+    return remaining
+}
+
+fn main() -> int {
+    print("================================================================================")
+    print("[Industrial Pilot 1: FinTech High-Assurance Ledger Microservice]")
+    print("================================================================================")
+
+    trace_reset()
+    let db = db_sqlite_open(":memory:")
+    db_sqlite_exec(db, "CREATE TABLE accounts (id INTEGER, owner TEXT, balance REAL)")
+    db_sqlite_exec(db, "INSERT INTO accounts VALUES (101, 'Alice_Treasury', 2500.0)")
+    db_sqlite_exec(db, "INSERT INTO accounts VALUES (102, 'Bob_Custody', 1800.0)")
+
+    let redis = db_redis_connect(":memory:", 0)
+    require(db_redis_cmd(redis, "PING", []) == "PONG", "KV idempotency engine must respond PONG")
+
+    let sql_json = db_query_json(db, "SELECT id, owner, balance FROM accounts WHERE balance > 2000.0")
+    require(str_contains(sql_json, "Alice_Treasury"), "One-call db_query_json must serialize Alice_Treasury row")
+    print("  [1/4] One-Call SQL-to-JSON Query Engine     : " + sql_json)
+
+    let new_bal = verify_solvency_debit(2500, 350)
+    require(new_bal == 2150, "Formal solvency debit must yield 2150")
+    trace_record("ledger_debit_alice", new_bal)
+
+    let tx_uuid = "tx_seed_101" |> str_trim() |> str_to_upper() |> uuid_v4_from_seed()
+    let receipt = TransferReceipt {
+        tx_id: tx_uuid,
+        sender: "Alice_Treasury",
+        amount: 350,
+        new_balance: new_bal,
+        settled: true
+    }
+
+    let receipt_json = receipt |> TransferReceipt_to_json()
+    let decoded_receipt = receipt_json |> TransferReceipt_from_json()
+    require(TransferReceipt_eq(receipt, decoded_receipt), "Compile-time struct JSON roundtrip must be lossless")
+    print("  [2/4] Zero-Boilerplate Struct JSON Synthesis: " + receipt_json)
+
+    let srv_fd = tcp_listen(18941)
+    require(srv_fd >= 0, "Microservice TCP listener must bind port 18941")
+    let baseline_arena = arena_used()
+
+    for cycle in 0..3 {
+        let mark = arena_mark()
+        let cli_fd = tcp_connect("127.0.0.1", 18941)
+        require(cli_fd >= 0, "Client must connect to ledger microservice")
+        let acc_fd = tcp_accept(srv_fd)
+        require(acc_fd >= 0, "Server must accept incoming ledger connection")
+
+        let req_payload = "POST /v1/transfer HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n" + receipt_json
+        tcp_write(cli_fd, req_payload)
+        let raw_in = tcp_read(acc_fd, 4096)
+        let body_in = raw_in |> http_extract_body()
+        let req_obj = body_in |> TransferReceipt_from_json()
+        require(req_obj.amount == 350, "Parsed HTTP request struct amount must equal 350")
+
+        let http_resp = http_build_json_response(200, "OK", req_obj |> TransferReceipt_to_json())
+        tcp_write(acc_fd, http_resp)
+        let raw_out = tcp_read(cli_fd, 4096)
+        require((raw_out |> http_extract_status_code()) == 200, "HTTP response status must be 200")
+
+        tcp_close(acc_fd)
+        tcp_close(cli_fd)
+        arena_rollback(mark)
+    }
+    tcp_close(srv_fd)
+
+    let after_arena = arena_used()
+    require(after_arena == baseline_arena, "Scoped linear arena must exhibit 0-byte memory growth across requests")
+    print("  [3/4] Live HTTP/1.1 Loopback & Arena Memory : 0 bytes leaked across 3 request cycles")
+    print("  [4/4] SHA-256 Flight Recorder Audit Chain   : " + trace_chain_hash())
+    print("================================================================================")
+    print("SUCCESS: FinTech High-Assurance Ledger Microservice Pilot Verified!")
+    print("================================================================================")
+    return 0
+}

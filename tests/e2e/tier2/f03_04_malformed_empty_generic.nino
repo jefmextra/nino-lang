@@ -1,0 +1,6 @@
+fn main() -> int {
+    let bad_opt: Option<> = (Option_int){ .is_some = false, .val = 0 }
+    let bad_res: Result<int, > = (Result_int_string){ .is_ok = true, .ok_val = 1, .err_val = "" }
+    print(bad_opt.is_some, bad_res.is_ok)
+    return 0
+}

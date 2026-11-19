@@ -1,0 +1,9 @@
+fn smash(mut x: [int]) {
+    x[0] = 999
+}
+
+fn main() -> int {
+    let a = [1, 2, 3]
+    smash(a)
+    return a[0]
+}

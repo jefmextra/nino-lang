@@ -1,0 +1,1162 @@
+// compiler/common.nino: String utilities, diagnostics, import resolution & line normalization
+fn is_space(ch: string) -> bool {
+    if ch == " " || ch == "\t" || ch == "\r" || ch == "\n" {
+        return true
+    }
+    return false
+}
+
+fn trim(s: string) -> string {
+    let slen = len(s)
+    if slen == 0 {
+        return ""
+    }
+    mut start = 0
+    mut searching = true
+    while start < slen && searching {
+        let ch = char_at(s, start)
+        if is_space(ch) {
+            start = start + 1
+        } else {
+            searching = false
+        }
+    }
+    if start >= slen {
+        return ""
+    }
+    mut end = slen - 1
+    mut searching_end = true
+    while end >= start && searching_end {
+        let ch = char_at(s, end)
+        if is_space(ch) {
+            end = end - 1
+        } else {
+            searching_end = false
+        }
+    }
+    return slice(s, start, end - start + 1)
+}
+
+fn starts_with(s: string, prefix: string) -> bool {
+    let plen = len(prefix)
+    if len(s) < plen {
+        return false
+    }
+    return slice(s, 0, plen) == prefix
+}
+
+fn ends_with(s: string, suffix: string) -> bool {
+    let slen = len(suffix)
+    let total_len = len(s)
+    if total_len < slen {
+        return false
+    }
+    return slice(s, total_len - slen, slen) == suffix
+}
+
+fn find_char(s: string, target: string, start: int) -> int {
+    let slen = len(s)
+    for i in start..slen {
+        if char_at(s, i) == target {
+            return i
+        }
+    }
+    return -1
+}
+
+fn count_char(s: string, target: string) -> int {
+    let slen = len(s)
+    mut count = 0
+    for i in 0..slen {
+        if char_at(s, i) == target {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+fn find_str(s: string, target: string, start: int) -> int {
+    let slen = len(s)
+    let tlen = len(target)
+    if tlen == 0 {
+        return start
+    }
+    let first_c = char_at(target, 0)
+    let limit = slen - tlen + 1
+    for i in start..limit {
+        if char_at(s, i) == first_c {
+            if tlen == 1 || slice(s, i, tlen) == target {
+                return i
+            }
+        }
+    }
+    return -1
+}
+
+fn count_substr_occurrences(s: string, sub: string) -> int {
+    let slen = len(s)
+    let sublen = len(sub)
+    if sublen == 0 || slen < sublen {
+        return 0
+    }
+    mut count = 0
+    mut pos = 0
+    while pos <= slen - sublen {
+        let f = find_str(s, sub, pos)
+        if f != -1 {
+            count = count + 1
+            pos = f + sublen
+        } else {
+            pos = slen + 1
+        }
+    }
+    return count
+}
+
+fn replace_str(s: string, old_s: string, new_s: string) -> string {
+    let slen = len(s)
+    let olen = len(old_s)
+    if olen == 0 || slen == 0 {
+        return s
+    }
+    if find_str(s, old_s, 0) == -1 {
+        return s
+    }
+    mut res = ""
+    mut hi_chunk = ""
+    mut mid_chunk = ""
+    mut sub_chunk = ""
+    mut cnt = 0
+    mut pos = 0
+    while pos < slen {
+        let f = find_str(s, old_s, pos)
+        if f == -1 {
+            sub_chunk = sub_chunk + slice(s, pos, slen - pos)
+            pos = slen
+        } else {
+            sub_chunk = sub_chunk + slice(s, pos, f - pos) + new_s
+            pos = f + olen
+            cnt = cnt + 1
+            if cnt % 16 == 0 {
+                mid_chunk = mid_chunk + sub_chunk
+                sub_chunk = ""
+                if cnt % 256 == 0 {
+                    hi_chunk = hi_chunk + mid_chunk
+                    mid_chunk = ""
+                    if cnt % 4096 == 0 {
+                        res = res + hi_chunk
+                        hi_chunk = ""
+                    }
+                }
+            }
+        }
+    }
+    return res + hi_chunk + mid_chunk + sub_chunk
+}
+
+fn is_alpha_num(ch: string) -> bool {
+    let alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    return find_char(alpha, ch, 0) != -1
+}
+
+fn is_valid_identifier(s: string) -> bool {
+    let slen = len(s)
+    if slen == 0 {
+        return false
+    }
+    let digits = "0123456789"
+    if find_char(digits, char_at(s, 0), 0) != -1 {
+        return false
+    }
+    for i in 0..slen {
+        let ch = char_at(s, i)
+        if is_alpha_num(ch) == false {
+            return false
+        }
+    }
+    return true
+}
+
+fn is_digits(s: string) -> bool {
+    let slen = len(s)
+    if slen == 0 {
+        return false
+    }
+    for i in 0..slen {
+        let cc = char_code(char_at(s, i))
+        if cc < 48 || cc > 57 {
+            return false
+        }
+    }
+    return true
+}
+
+fn count_braces_outside_str(line: string) -> int {
+    let llen = len(line)
+    mut delta = 0
+    mut in_q = false
+    mut in_bcmt = false
+    mut i = 0
+    while i < llen {
+        let ch = char_at(line, i)
+        if in_bcmt {
+            if ch == "*" && i + 1 < llen && char_at(line, i + 1) == "/" {
+                in_bcmt = false
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+            continue
+        }
+        if !in_q && ch == "/" && i + 1 < llen && char_at(line, i + 1) == "/" {
+            break
+        }
+        if !in_q && ch == "/" && i + 1 < llen && char_at(line, i + 1) == "*" {
+            in_bcmt = true
+            i = i + 2
+            continue
+        }
+        if ch == "\"" {
+            mut bcount = 0
+            mut bj = i - 1
+            while bj >= 0 && char_at(line, bj) == "\\" {
+                bcount = bcount + 1
+                bj = bj - 1
+            }
+            if bcount % 2 == 0 {
+                in_q = !in_q
+            }
+        } else if in_q == false {
+            if ch == "{" {
+                delta = delta + 1
+            } else if ch == "}" {
+                delta = delta - 1
+            }
+        }
+        i = i + 1
+    }
+    return delta
+}
+
+fn find_top_comma(s: string, start: int) -> int {
+    let slen = len(s)
+    mut paren_depth = 0
+    mut brace_depth = 0
+    mut bracket_depth = 0
+    mut in_q = false
+    for i in start..slen {
+        let ch = char_at(s, i)
+        if ch == "\"" {
+            mut bcount = 0
+            mut bj = i - 1
+            while bj >= start && char_at(s, bj) == "\\" {
+                bcount = bcount + 1
+                bj = bj - 1
+            }
+            if bcount % 2 == 0 {
+                in_q = !in_q
+            }
+        } else if in_q == false {
+            if ch == "(" {
+                paren_depth = paren_depth + 1
+            } else if ch == ")" {
+                paren_depth = paren_depth - 1
+            } else if ch == "{" {
+                brace_depth = brace_depth + 1
+            } else if ch == "}" {
+                brace_depth = brace_depth - 1
+            } else if ch == "[" {
+                bracket_depth = bracket_depth + 1
+            } else if ch == "]" {
+                bracket_depth = bracket_depth - 1
+            } else if ch == "," && paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
+                return i
+            }
+        }
+    }
+    return -1
+}
+
+fn type_find_matching_gt(s: string, open_lt: int) -> int {
+    let n = len(s)
+    if open_lt < 0 || open_lt >= n {
+        return -1
+    }
+    mut gd = 0
+    mut i = open_lt
+    while i < n {
+        let ch = char_at(s, i)
+        if ch == "<" {
+            gd = gd + 1
+        } else if ch == ">" {
+            gd = gd - 1
+            if gd == 0 {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn type_split_top_args(inner: string) -> [string] {
+    mut out: [string] = []
+    let t = trim(inner)
+    let n = len(t)
+    if n == 0 {
+        return out
+    }
+    mut start = 0
+    mut ad = 0
+    mut bd = 0
+    mut pd = 0
+    mut cd = 0
+    for i in 0..n {
+        let ch = char_at(t, i)
+        if ch == "<" {
+            ad = ad + 1
+        } else if ch == ">" {
+            if ad > 0 {
+                ad = ad - 1
+            }
+        } else if ch == "[" {
+            bd = bd + 1
+        } else if ch == "]" {
+            if bd > 0 {
+                bd = bd - 1
+            }
+        } else if ch == "(" {
+            pd = pd + 1
+        } else if ch == ")" {
+            if pd > 0 {
+                pd = pd - 1
+            }
+        } else if ch == "{" {
+            cd = cd + 1
+        } else if ch == "}" {
+            if cd > 0 {
+                cd = cd - 1
+            }
+        } else if ch == "," && ad == 0 && bd == 0 && pd == 0 && cd == 0 {
+            let part = trim(slice(t, start, i - start))
+            out = push(out, part)
+            start = i + 1
+        }
+    }
+    let tail = trim(slice(t, start, n - start))
+    out = push(out, tail)
+    return out
+}
+
+fn mangle_nino_type(raw_t: string) -> string {
+    let t = trim(raw_t)
+    if t == "int" || t == "i64" {
+        return "int"
+    }
+    if t == "str" || t == "string" {
+        return "string"
+    }
+    if t == "float" || t == "f64" {
+        return "float"
+    }
+    if starts_with(t, "[") && ends_with(t, "]") && len(t) >= 2 {
+        let inn = trim(slice(t, 1, len(t) - 2))
+        return "Arr_" + mangle_nino_type(inn)
+    }
+    let lt = find_char(t, "<", 0)
+    if lt != -1 && ends_with(t, ">") {
+        let gt = type_find_matching_gt(t, lt)
+        if gt == len(t) - 1 {
+            let head = trim(slice(t, 0, lt))
+            let inn = trim(slice(t, lt + 1, gt - lt - 1))
+            let args = type_split_top_args(inn)
+            mut res = head
+            let ac = len(args)
+            for i in 0..ac {
+                res = res + "_" + mangle_nino_type(args[i])
+            }
+            return res
+        }
+    }
+    return replace_str(t, " ", "_")
+}
+
+fn map_type(raw_t: string) -> string {
+    let t = trim(raw_t)
+    if t == "OptionI64" || t == "OptionStr" || t == "ResultI64" || t == "ResultStr" {
+        return t
+    }
+    if starts_with(t, "Array<") && ends_with(t, ">") {
+        let inner = trim(slice(t, 6, len(t) - 7))
+        return map_type("[" + inner + "]")
+    }
+    let lt = find_char(t, "<", 0)
+    if lt != -1 && ends_with(t, ">") {
+        let gt = type_find_matching_gt(t, lt)
+        if gt == len(t) - 1 {
+            let head = trim(slice(t, 0, lt))
+            if head == "Option" || head == "Result" || head == "Pair" || head == "Box" || head == "Stack" || head == "Queue" {
+                return mangle_nino_type(t)
+            }
+        }
+    }
+    if t == "[str]" || t == "[string]" {
+        return "const char**"
+    }
+    if starts_with(t, "[") && ends_with(t, "]") {
+        let inner = trim(slice(t, 1, len(t) - 2))
+        if inner == "str" || inner == "string" {
+            return "const char**"
+        }
+        let mapped = map_type(inner)
+        if mapped == "void" || inner == "any" {
+            return "void**"
+        }
+        return mapped + "*"
+    }
+    if t == "int" || t == "i64" {
+        return "int64_t"
+    }
+    if t == "i32" {
+        return "int32_t"
+    }
+    if t == "u32" {
+        return "uint32_t"
+    }
+    if t == "u64" {
+        return "uint64_t"
+    }
+    if t == "byte" || t == "u8" {
+        return "uint8_t"
+    }
+    if t == "string" || t == "str" {
+        return "const char*"
+    }
+    if t == "bool" {
+        return "bool"
+    }
+    if t == "float" || t == "f64" {
+        return "double"
+    }
+    if t == "f32" {
+        return "float"
+    }
+    if t == "void" {
+        return "void"
+    }
+    if t == "any" || t == "dict" || t == "list" {
+        return "void*"
+    }
+    return t
+}
+
+fn is_host_windows() -> bool {
+    let os_env = get_env("OS")
+    if os_env == "Windows_NT" {
+        return true
+    }
+    if len(get_env("WINDIR")) > 0 || len(get_env("SystemRoot")) > 0 {
+        return true
+    }
+    if file_exists("C:\\Windows\\System32\\cmd.exe") {
+        return true
+    }
+    return false
+}
+
+fn null_redir() -> string {
+    if is_host_windows() {
+        return ">nul 2>&1"
+    }
+    return ">/dev/null 2>&1"
+}
+
+fn delete_temp_file(path: string) {
+    if len(path) == 0 {
+        return
+    }
+    file_delete(path)
+    if file_exists(path) {
+        if is_host_windows() {
+            let bs = "\\"
+            let win_p = replace_str(path, "/", bs)
+            exec_cmd("del /f /q \"" + win_p + "\" " + null_redir())
+        } else {
+            exec_cmd("rm -f \"" + path + "\" " + null_redir())
+        }
+    }
+}
+
+fn prepare_run_cmd(s: string) -> string {
+    if is_host_windows() {
+        let bs = "\\"
+        let win_s = replace_str(s, "/", bs)
+        return "\"" + win_s + "\""
+    }
+    let norm = replace_str(s, "\\", "/")
+    if find_char(norm, "/", 0) == -1 {
+        return "\"./" + norm + "\""
+    }
+    return "\"" + norm + "\""
+}
+
+fn default_exe_name(source_path: string) -> string {
+    let slen = len(source_path)
+    if is_host_windows() {
+        if ends_with(source_path, ".nino") && slen > 5 {
+            return slice(source_path, 0, slen - 5) + ".exe"
+        }
+        return source_path + ".exe"
+    }
+    if ends_with(source_path, ".nino") && slen > 5 {
+        return slice(source_path, 0, slen - 5)
+    }
+    return source_path + ".out"
+}
+
+fn get_directory_of(path: string) -> string {
+    let plen = len(path)
+    mut last_slash = -1
+    for i in 0..plen {
+        let ch = char_at(path, i)
+        if ch == "/" || ch == "\\" {
+            last_slash = i
+        }
+    }
+    if last_slash == -1 {
+        return "."
+    }
+    return slice(path, 0, last_slash)
+}
+
+fn exec_cmd_win_safe(cmd: string) -> int {
+    if is_host_windows() && starts_with(cmd, "\"") {
+        return exec_cmd("\"" + cmd + "\"")
+    }
+    return exec_cmd(cmd)
+}
+
+fn run_z3_smt_file(z3_bin: string, smt_path: string, out_path: string) -> int {
+    if is_host_windows() {
+        let bs = "\\"
+        mut zb = trim(z3_bin)
+        if starts_with(zb, "\"") == false && find_char(zb, " ", 0) != -1 {
+            zb = "\"" + zb + "\""
+        }
+        let sp = replace_str(smt_path, "/", bs)
+        let op = replace_str(out_path, "/", bs)
+        let cmd = zb + " -T:15 -t:10000 -smt2 \"" + sp + "\" > \"" + op + "\" 2>&1"
+        return exec_cmd_win_safe(cmd)
+    }
+    let cmd = z3_bin + " -T:15 -t:10000 -smt2 \"" + smt_path + "\" > \"" + out_path + "\" 2>&1"
+    return exec_cmd(cmd)
+}
+
+fn find_z3_binary() -> string {
+    let exe_dir = get_directory_of(argv(0))
+    let env_nino = get_env("NINO_HOME")
+    let bs = "\\"
+    if is_host_windows() {
+        if file_exists("tools/z3.exe") {
+            return "tools\\z3.exe"
+        }
+        if file_exists("bin/z3.exe") {
+            return "bin\\z3.exe"
+        }
+        if len(exe_dir) > 0 {
+            let e1 = exe_dir + "/tools/z3.exe"
+            if file_exists(e1) {
+                let w1 = replace_str(e1, "/", bs)
+                return "\"" + w1 + "\""
+            }
+            let e2 = exe_dir + "/z3.exe"
+            if file_exists(e2) {
+                let w2 = replace_str(e2, "/", bs)
+                return "\"" + w2 + "\""
+            }
+            let e3 = exe_dir + "/../tools/z3.exe"
+            if file_exists(e3) {
+                let w3 = replace_str(e3, "/", bs)
+                return "\"" + w3 + "\""
+            }
+        }
+        if len(env_nino) > 0 {
+            let h1 = env_nino + "/tools/z3.exe"
+            if file_exists(h1) {
+                let wh1 = replace_str(h1, "/", bs)
+                return "\"" + wh1 + "\""
+            }
+        }
+        if exec_cmd("z3 --version " + null_redir()) == 0 {
+            return "z3"
+        }
+        return ""
+    }
+    if file_exists("tools/z3") {
+        return "./tools/z3"
+    }
+    if file_exists("bin/z3") {
+        return "./bin/z3"
+    }
+    if len(exe_dir) > 0 {
+        let e1 = exe_dir + "/tools/z3"
+        if file_exists(e1) {
+            return "\"" + e1 + "\""
+        }
+        let e2 = exe_dir + "/z3"
+        if file_exists(e2) {
+            return "\"" + e2 + "\""
+        }
+        let e3 = exe_dir + "/../tools/z3"
+        if file_exists(e3) {
+            return "\"" + e3 + "\""
+        }
+    }
+    if len(env_nino) > 0 {
+        let h1 = env_nino + "/tools/z3"
+        if file_exists(h1) {
+            return "\"" + h1 + "\""
+        }
+    }
+    if exec_cmd("z3 --version " + null_redir()) == 0 {
+        return "z3"
+    }
+    return ""
+}
+
+fn emit_rustc_style_diag(file_path: string, line_no: int, col_no: int, error_code: string, error_kind: string, message: string, code_snippet: string, pointer_len: int, note_text: string) {
+    print("\033[91merror[" + error_code + "]: " + message + "\033[0m")
+    print("  \033[94m-->\033[0m " + file_path + ":" + line_no + ":" + col_no)
+    print("   \033[94m|\033[0m")
+    let l_str = "" + line_no
+    print(" " + l_str + " \033[94m|\033[0m    " + code_snippet)
+    mut carets = ""
+    mut ci = 0
+    let c_target = pointer_len > 0 ? pointer_len : len(code_snippet)
+    while ci < c_target {
+        carets = carets + "^"
+        ci = ci + 1
+    }
+    mut pad = ""
+    mut pi = 1
+    while pi < col_no {
+        pad = pad + " "
+        pi = pi + 1
+    }
+    print("   \033[94m|\033[0m    " + pad + "\033[91m" + carets + " " + error_kind + "\033[0m")
+    print("   \033[94m|\033[0m")
+    if len(note_text) > 0 {
+        print("   \033[94m=\033[0m \033[93mnote:\033[0m " + note_text)
+    }
+    print("")
+}
+
+fn resolve_import_path(imp: string, base_dir: string) -> string {
+    mut target = imp
+    if ends_with(target, ".nino") == false {
+        target = target + ".nino"
+    }
+    if starts_with(target, "pkg/") || starts_with(target, "@pkg/") {
+        mut p_target = target
+        if starts_with(p_target, "@pkg/") {
+            p_target = "pkg/" + slice(p_target, 5, len(p_target) - 5)
+        }
+        if file_exists(p_target) {
+            return p_target
+        }
+        let p_mod = slice(p_target, 0, len(p_target) - 5) + "/module.nino"
+        if file_exists(p_mod) {
+            return p_mod
+        }
+    }
+    let local_path = base_dir + "/" + target
+    if file_exists(local_path) {
+        return local_path
+    }
+    let parent_path = base_dir + "/../" + target
+    if file_exists(parent_path) {
+        return parent_path
+    }
+    if file_exists(target) {
+        return target
+    }
+    let env_nino = get_env("NINO_HOME")
+    let exe_dir = get_directory_of(argv(0))
+    if starts_with(target, "std/") == false {
+        let base_with_std = base_dir + "/std/" + target
+        if file_exists(base_with_std) {
+            return base_with_std
+        }
+        let parent_with_std = base_dir + "/../std/" + target
+        if file_exists(parent_with_std) {
+            return parent_with_std
+        }
+        let cwd_std = "std/" + target
+        if file_exists(cwd_std) {
+            return cwd_std
+        }
+        if len(env_nino) > 0 {
+            let env_std = env_nino + "/std/" + target
+            if file_exists(env_std) {
+                return env_std
+            }
+        }
+        if len(exe_dir) > 0 {
+            let exe_std = exe_dir + "/std/" + target
+            if file_exists(exe_std) {
+                return exe_std
+            }
+            let exe_parent_std = exe_dir + "/../std/" + target
+            if file_exists(exe_parent_std) {
+                return exe_parent_std
+            }
+        }
+    } else {
+        if len(env_nino) > 0 {
+            let env_target = env_nino + "/" + target
+            if file_exists(env_target) {
+                return env_target
+            }
+        }
+        if len(exe_dir) > 0 {
+            let exe_target = exe_dir + "/" + target
+            if file_exists(exe_target) {
+                return exe_target
+            }
+            let exe_parent_target = exe_dir + "/../" + target
+            if file_exists(exe_parent_target) {
+                return exe_parent_target
+            }
+        }
+    }
+    return target
+}
+
+fn expand_all_imports(source: string, visited: string, base_dir: string) -> string {
+    mut accumulated = ""
+    mut mid_chunk = ""
+    mut sub_chunk = ""
+    mut lcnt = 0
+    mut cur_visited = visited
+    let slen = len(source)
+    mut pos = 0
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            let ch = char_at(source, line_end)
+            if ch == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let line = trim(slice(source, pos, line_end - pos))
+        if starts_with(line, "import \"") && ends_with(line, "\"") {
+            let raw_path = slice(line, 8, len(line) - 9)
+            let actual_path = resolve_import_path(raw_path, base_dir)
+            let tag = "|" + actual_path + "|"
+            if find_str(cur_visited, tag, 0) == -1 {
+                cur_visited = cur_visited + tag
+                if file_exists(actual_path) {
+                    let imp_source = read_file(actual_path)
+                    let imp_base = get_directory_of(actual_path)
+                    let expanded_sub = expand_all_imports(imp_source, cur_visited, imp_base)
+                    sub_chunk = sub_chunk + expanded_sub + "\n"
+                }
+            }
+        } else {
+            sub_chunk = sub_chunk + line + "\n"
+        }
+        lcnt = lcnt + 1
+        if lcnt % 32 == 0 {
+            mid_chunk = mid_chunk + sub_chunk
+            sub_chunk = ""
+            if lcnt % 512 == 0 {
+                accumulated = accumulated + mid_chunk
+                mid_chunk = ""
+            }
+        }
+        pos = line_end + 1
+    }
+    return accumulated + mid_chunk + sub_chunk
+}
+
+fn strip_line_comment(raw_line: string) -> string {
+    if find_str(raw_line, "//", 0) == -1 {
+        return raw_line
+    }
+    let rlen = len(raw_line)
+    mut in_q = false
+    for i in 0..rlen {
+        let ch = char_at(raw_line, i)
+        if ch == "\"" {
+            mut bcount = 0
+            mut bj = i - 1
+            while bj >= 0 && char_at(raw_line, bj) == "\\" {
+                bcount = bcount + 1
+                bj = bj - 1
+            }
+            if bcount % 2 == 0 {
+                in_q = !in_q
+            }
+        } else if in_q == false && ch == "/" && i + 1 < rlen && char_at(raw_line, i + 1) == "/" {
+            return trim(slice(raw_line, 0, i))
+        }
+    }
+    return raw_line
+}
+
+fn normalize_and_join_lines(source: string) -> string {
+    let clean_s = replace_str(source, "\r\n", "\n")
+    let slen = len(clean_s)
+    mut result = ""
+    mut mid_chunk = ""
+    mut sub_chunk = ""
+    mut lcnt = 0
+    mut pos = 0
+    mut in_multi_expr = false
+    mut accumulated_expr = ""
+    while pos < slen {
+        mut line_end = pos
+        mut searching = true
+        while line_end < slen && searching {
+            let ch = char_at(clean_s, line_end)
+            if ch == "\n" {
+                searching = false
+            } else {
+                line_end = line_end + 1
+            }
+        }
+        let raw_line = strip_line_comment(trim(slice(clean_s, pos, line_end - pos)))
+        mut emit_line = ""
+        mut has_emit = false
+        if in_multi_expr {
+            accumulated_expr = accumulated_expr + " " + raw_line
+            let cp = count_char(accumulated_expr, "(") - count_char(accumulated_expr, ")")
+            let cb = count_char(accumulated_expr, "{") - count_char(accumulated_expr, "}")
+            let cbr = count_char(accumulated_expr, "[") - count_char(accumulated_expr, "]")
+            let is_op_cont = ends_with(raw_line, "+") || ends_with(raw_line, "-") || ends_with(raw_line, "*") || ends_with(raw_line, "/") || ends_with(raw_line, "%") || ends_with(raw_line, "&&") || ends_with(raw_line, "||") || ends_with(raw_line, "=") || ends_with(raw_line, "==") || ends_with(raw_line, "!=")
+            if is_op_cont == false && cp <= 0 && cb <= 0 && cbr <= 0 {
+                emit_line = accumulated_expr + "\n"
+                has_emit = true
+                accumulated_expr = ""
+                in_multi_expr = false
+            }
+        } else {
+            let is_block_def = starts_with(raw_line, "struct ") || starts_with(raw_line, "fn ") || starts_with(raw_line, "if ") || starts_with(raw_line, "while ") || starts_with(raw_line, "for ") || starts_with(raw_line, "else") || starts_with(raw_line, "} else") || starts_with(raw_line, "match ") || starts_with(raw_line, "guard ") || starts_with(raw_line, "transact") || starts_with(raw_line, "compensate") || starts_with(raw_line, "} compensate") || starts_with(raw_line, "actor ") || starts_with(raw_line, "comptime") || starts_with(raw_line, "inline_asm") || starts_with(raw_line, "receive")
+            let has_open_b = ends_with(raw_line, "{") && (is_block_def == false)
+            let has_open_arr = ends_with(raw_line, "[")
+            let has_open_p = ends_with(raw_line, "(")
+            let is_op_cont = ends_with(raw_line, "+") || ends_with(raw_line, "-") || ends_with(raw_line, "*") || ends_with(raw_line, "/") || ends_with(raw_line, "%") || ends_with(raw_line, "&&") || ends_with(raw_line, "||") || ends_with(raw_line, "=") || ends_with(raw_line, "==") || ends_with(raw_line, "!=")
+            if is_op_cont || has_open_p || has_open_arr || has_open_b {
+                in_multi_expr = true
+                accumulated_expr = raw_line
+            } else {
+                emit_line = raw_line + "\n"
+                has_emit = true
+            }
+        }
+        if has_emit {
+            sub_chunk = sub_chunk + emit_line
+            lcnt = lcnt + 1
+            if lcnt % 32 == 0 {
+                mid_chunk = mid_chunk + sub_chunk
+                sub_chunk = ""
+                if lcnt % 512 == 0 {
+                    result = result + mid_chunk
+                    mid_chunk = ""
+                }
+            }
+        }
+        pos = line_end + 1
+    }
+    if in_multi_expr {
+        sub_chunk = sub_chunk + accumulated_expr + "\n"
+    }
+    return result + mid_chunk + sub_chunk
+}
+
+fn is_interp_expr(expr: string) -> bool {
+    let elen = len(expr)
+    if elen == 0 {
+        return false
+    }
+    if find_char(expr, ";", 0) != -1 || find_char(expr, "\n", 0) != -1 || find_char(expr, "{", 0) != -1 || find_char(expr, "}", 0) != -1 || find_char(expr, ":", 0) != -1 || find_char(expr, "\\", 0) != -1 {
+        return false
+    }
+    if starts_with(expr, "if ") || starts_with(expr, "return ") || starts_with(expr, "struct ") || starts_with(expr, "static ") || starts_with(expr, "typedef ") || starts_with(expr, "void ") || starts_with(expr, "NULL") {
+        return false
+    }
+    mut paren_depth = 0
+    for i in 0..elen {
+        let ch = char_at(expr, i)
+        if ch == "(" {
+            paren_depth = paren_depth + 1
+        } else if ch == ")" {
+            paren_depth = paren_depth - 1
+        } else if ch == "," {
+            if paren_depth <= 0 {
+                return false
+            }
+        } else if ch == "\"" {
+            mut is_esc = false
+            if i > 0 {
+                if char_at(expr, i - 1) == "\\" {
+                    is_esc = true
+                }
+            }
+            if !is_esc {
+                return false
+            }
+        }
+    }
+    if paren_depth != 0 {
+        return false
+    }
+    return true
+}
+
+fn find_first_top_op(expr: string, op: string) -> int {
+    let elen = len(expr)
+    let oplen = len(op)
+    mut in_quotes = false
+    mut paren_depth = 0
+    mut brace_depth = 0
+    mut bracket_depth = 0
+    for i in 0..elen {
+        let ch = char_at(expr, i)
+        if ch == "\"" {
+            mut bcount = 0
+            mut bj = i - 1
+            while bj >= 0 && char_at(expr, bj) == "\\" {
+                bcount = bcount + 1
+                bj = bj - 1
+            }
+            if bcount % 2 == 0 {
+                in_quotes = !in_quotes
+            }
+        } else {
+            if in_quotes == false {
+                if ch == "(" {
+                    paren_depth = paren_depth + 1
+                } else if ch == ")" {
+                    paren_depth = paren_depth - 1
+                } else if ch == "{" {
+                    brace_depth = brace_depth + 1
+                } else if ch == "}" {
+                    brace_depth = brace_depth - 1
+                } else if ch == "[" {
+                    bracket_depth = bracket_depth + 1
+                } else if ch == "]" {
+                    bracket_depth = bracket_depth - 1
+                } else {
+                    if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
+                        if i + oplen <= elen {
+                            if slice(expr, i, oplen) == op {
+                                return i
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return -1
+}
+
+fn find_top_binary_op(expr: string, op: string) -> int {
+    let elen = len(expr)
+    let oplen = len(op)
+    mut in_quotes = false
+    mut paren_depth = 0
+    mut brace_depth = 0
+    mut bracket_depth = 0
+    mut op_found = -1
+    for i in 0..elen {
+        let ch = char_at(expr, i)
+        if ch == "\"" {
+            mut bcount = 0
+            mut bj = i - 1
+            while bj >= 0 && char_at(expr, bj) == "\\" {
+                bcount = bcount + 1
+                bj = bj - 1
+            }
+            if bcount % 2 == 0 {
+                in_quotes = !in_quotes
+            }
+        } else {
+            if in_quotes == false {
+                if ch == "(" {
+                    paren_depth = paren_depth + 1
+                } else if ch == ")" {
+                    paren_depth = paren_depth - 1
+                } else if ch == "{" {
+                    brace_depth = brace_depth + 1
+                } else if ch == "}" {
+                    brace_depth = brace_depth - 1
+                } else if ch == "[" {
+                    bracket_depth = bracket_depth + 1
+                } else if ch == "]" {
+                    bracket_depth = bracket_depth - 1
+                } else {
+                    if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
+                        if i + oplen <= elen {
+                            if slice(expr, i, oplen) == op {
+                                mut is_binary = true
+                                if op == "<" {
+                                    if i + 1 < elen {
+                                        let next_ch = char_at(expr, i + 1)
+                                        if next_ch == "<" || next_ch == "=" {
+                                            is_binary = false
+                                        }
+                                    }
+                                    if i > 0 && char_at(expr, i - 1) == "<" {
+                                        is_binary = false
+                                    }
+                                } else if op == ">" {
+                                    if i + 1 < elen {
+                                        let next_ch = char_at(expr, i + 1)
+                                        if next_ch == ">" || next_ch == "=" {
+                                            is_binary = false
+                                        }
+                                    }
+                                    if i > 0 {
+                                        let prv = char_at(expr, i - 1)
+                                        if prv == ">" || prv == "-" || prv == "|" {
+                                            is_binary = false
+                                        }
+                                    }
+                                } else if op == "&" {
+                                    if i + 1 < elen && char_at(expr, i + 1) == "&" {
+                                        is_binary = false
+                                    }
+                                    if i > 0 && char_at(expr, i - 1) == "&" {
+                                        is_binary = false
+                                    }
+                                    mut prev_ja = i - 1
+                                    while prev_ja >= 0 && char_at(expr, prev_ja) == " " {
+                                        prev_ja = prev_ja - 1
+                                    }
+                                    if prev_ja < 0 {
+                                        is_binary = false
+                                    } else {
+                                        let pcha = char_at(expr, prev_ja)
+                                        if pcha == "(" || pcha == "[" || pcha == "{" || pcha == "=" || pcha == "," {
+                                            is_binary = false
+                                        }
+                                    }
+                                } else if op == "|" {
+                                    if i + 1 < elen && (char_at(expr, i + 1) == "|" || char_at(expr, i + 1) == ">") {
+                                        is_binary = false
+                                    }
+                                    if i > 0 && char_at(expr, i - 1) == "|" {
+                                        is_binary = false
+                                    }
+                                } else if op == "-" || op == "+" {
+                                    mut prev_j = i - 1
+                                    while prev_j >= 0 && char_at(expr, prev_j) == " " {
+                                        prev_j = prev_j - 1
+                                    }
+                                    if prev_j < 0 {
+                                        is_binary = false
+                                    } else {
+                                        let pch = char_at(expr, prev_j)
+                                        if pch == "(" || pch == "[" || pch == "{" || pch == "=" || pch == "+" || pch == "-" || pch == "*" || pch == "/" || pch == "%" || pch == "<" || pch == ">" || pch == "!" || pch == "&" || pch == "|" || pch == "," {
+                                            is_binary = false
+                                        }
+                                    }
+                                }
+                                if is_binary {
+                                    op_found = i
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return op_found
+}
+
+fn find_param_comma(s: string, start: int) -> int {
+    let slen = len(s)
+    mut depth = 0
+    for i in start..slen {
+        let ch = char_at(s, i)
+        if ch == "(" || ch == "[" || ch == "{" || ch == "<" {
+            depth = depth + 1
+        } else if ch == ")" || ch == "]" || ch == "}" || ch == ">" {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if ch == "," && depth == 0 {
+            return i
+        }
+    }
+    return -1
+}
+
+fn parse_int(s: string) -> int {
+    let slen = len(s)
+    mut n = 0
+    for i in 0..slen {
+        let ch = char_at(s, i)
+        let code = char_code(ch)
+        if code >= 48 && code <= 57 {
+            n = n * 10 + (code - 48)
+        }
+    }
+    return n
+}
+
+fn c11_sub_get_type(sub: string, vname: string) -> string {
+    let key = "|@c11t:" + vname + "="
+    let p = find_str(sub, key, 0)
+    if p == -1 {
+        return ""
+    }
+    let s = p + len(key)
+    let e = find_char(sub, "|", s)
+    if e == -1 {
+        return ""
+    }
+    return slice(sub, s, e - s)
+}
+
+fn sem_is_single_call(ex: string, op_p: int) -> bool {
+    let elen = len(ex)
+    if op_p < 0 || elen == 0 || char_at(ex, elen - 1) != ")" {
+        return false
+    }
+    mut pd = 0
+    mut in_q = false
+    mut i = op_p
+    while i < elen {
+        let ch = char_at(ex, i)
+        if ch == "\"" {
+            mut bc = 0
+            mut bj = i - 1
+            while bj >= op_p && char_at(ex, bj) == "\\" {
+                bc = bc + 1
+                bj = bj - 1
+            }
+            if bc % 2 == 0 {
+                in_q = !in_q
+            }
+        } else if in_q == false {
+            if ch == "(" {
+                pd = pd + 1
+            } else if ch == ")" {
+                pd = pd - 1
+                if pd == 0 {
+                    return i == elen - 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+

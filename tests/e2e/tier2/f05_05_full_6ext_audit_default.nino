@@ -1,0 +1,23 @@
+fn main() -> int {
+    let digest = sha256("nino_c11_default_audit")
+    mut cfg = { "mode": "default" }
+    cfg["step"] = 42
+    mut arr = [10, 20]
+    arr = push(arr, 30)
+    mut sum_loop = 0
+    for v in arr {
+        sum_loop = sum_loop + v
+    }
+    let mapped = arr_map(arr, |x| x + 5)
+    let total = arr_reduce(mapped, 0, |acc, x| acc + x)
+    mut tx = 1
+    transact {
+        tx = 2
+        abort "tx_abort"
+    } compensate {
+        tx = 7
+    }
+    require(len(digest) == 64 && cfg["mode"] == "default" && cfg["step"] == "42" && sum_loop == 60 && total == 75 && tx == 7, "default C11 dict/for-in/push/sha256/transact audit failed")
+    print("T2-F05-05:PASS")
+    return 0
+}

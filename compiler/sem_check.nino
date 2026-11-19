@@ -1,0 +1,1568 @@
+// compiler/sem_check.nino: Static type, mutability, sealed-taint, region-lifetime & capability verifier
+struct SemCtx {
+    mut sym: SymTable,
+    file_name: string,
+    mut has_error: bool,
+    mut cur_fn_ret: string,
+    mut cur_fn_cap: string,
+    mut arena_depth: int,
+    mut mark_names: [string],
+    mut mark_depths: [int]
+}
+
+fn sem_norm_nino_type(raw_t: string) -> string {
+    let t = trim(raw_t)
+    if len(t) == 0 {
+        return ""
+    }
+    if t == "i64" || t == "int" || t == "int64_t" {
+        return "int"
+    }
+    if t == "str" || t == "string" || t == "const char*" {
+        return "string"
+    }
+    if t == "f64" || t == "float" || t == "double" {
+        return "float"
+    }
+    if t == "int32_t" {
+        return "i32"
+    }
+    if t == "uint32_t" {
+        return "u32"
+    }
+    if t == "uint64_t" {
+        return "u64"
+    }
+    if t == "uint8_t" {
+        return "byte"
+    }
+    if t == "i32" || t == "u32" || t == "u64" || t == "byte" || t == "u8" {
+        return t
+    }
+    if t == "bool" || t == "void" || t == "any" || t == "dict" || t == "list" {
+        return t
+    }
+    if starts_with(t, "Array<") && ends_with(t, ">") {
+        let inn = trim(slice(t, 6, len(t) - 7))
+        return "[" + sem_norm_nino_type(inn) + "]"
+    }
+    if starts_with(t, "[") && ends_with(t, "]") && len(t) >= 2 {
+        let inn = trim(slice(t, 1, len(t) - 2))
+        return "[" + sem_norm_nino_type(inn) + "]"
+    }
+    let lt = find_char(t, "<", 0)
+    if lt != -1 && ends_with(t, ">") {
+        let gt = type_find_matching_gt(t, lt)
+        if gt == len(t) - 1 {
+            let head = trim(slice(t, 0, lt))
+            if head == "Option" || head == "Result" || head == "Pair" || head == "Box" || head == "Stack" || head == "Queue" {
+                return mangle_nino_type(t)
+            }
+        }
+    }
+    return t
+}
+
+fn sem_is_num_type(raw_t: string) -> bool {
+    let t = sem_norm_nino_type(raw_t)
+    return t == "int" || t == "float" || t == "f32" || t == "i32" || t == "u32" || t == "u64" || t == "byte" || t == "u8"
+}
+
+fn sem_is_scalar_safe_type(raw_t: string) -> bool {
+    let t = sem_norm_nino_type(raw_t)
+    return t == "int" || t == "float" || t == "f32" || t == "i32" || t == "u32" || t == "u64" || t == "byte" || t == "u8" || t == "bool" || t == "void"
+}
+
+fn sem_ast_types_compat(expected_raw: string, actual_raw: string) -> bool {
+    let ex = sem_norm_nino_type(expected_raw)
+    let ac = sem_norm_nino_type(actual_raw)
+    if len(ex) == 0 || len(ac) == 0 {
+        return true
+    }
+    if ex == "any" || ac == "any" {
+        return true
+    }
+    if ex == ac {
+        return true
+    }
+    if starts_with(ex, "[") && ac == "[any]" {
+        return true
+    }
+    if starts_with(ac, "[") && ex == "[any]" {
+        return true
+    }
+    if ex == "[any]" && starts_with(ac, "[") {
+        return true
+    }
+    if ex == "float" && (ac == "int" || ac == "f32") {
+        return true
+    }
+    if (ex == "int" || ex == "i32" || ex == "u32" || ex == "u64" || ex == "byte" || ex == "u8") && (ac == "int" || ac == "i32" || ac == "u32" || ac == "u64" || ac == "byte" || ac == "u8") {
+        return true
+    }
+    if (ex == "dict" || ex == "list") && ac == "any" {
+        return true
+    }
+    if ex == "list" && starts_with(ac, "[") {
+        return true
+    }
+    if ac == "list" && starts_with(ex, "[") {
+        return true
+    }
+    if starts_with(ex, "Result_") && ends_with(ex, "_string") && starts_with(ac, "Result_") && find_str(slice(ac, 7, len(ac) - 7), "_", 0) == -1 {
+        let base_e = slice(ex, 0, len(ex) - 7)
+        if base_e == ac {
+            return true
+        }
+    }
+    if map_type(expected_raw) == map_type(actual_raw) {
+        return true
+    }
+    return false
+}
+
+fn sem_param_needs_mut_arg(p_info: ParamInfo) -> bool {
+    if p_info.is_mut == false {
+        return false
+    }
+    if p_info.is_ptr_writeback {
+        return true
+    }
+    let pt = sem_norm_nino_type(p_info.nino_type)
+    if f1_is_arr_nino_type(pt) || pt == "list" || pt == "dict" {
+        return true
+    }
+    let ct = map_type(p_info.nino_type)
+    return pt != "any" && f1_is_scalar_c11(ct) == false && ends_with(ct, "*") == false
+}
+
+fn sem_err(pool: AstPool, mut sctx: SemCtx, nd: AstNode, code: string, kind: string, msg: string, hlen: int, note: string) {
+    if sctx.has_error {
+        return
+    }
+    let f = true
+    sctx.has_error = f
+    let snip = lower_diag_line_text(pool, nd.file_id, nd.line)
+    mut fnm = lower_node_file_name(pool, nd.file_id)
+    if len(sctx.file_name) > 0 && nd.file_id == 0 {
+        fnm = sctx.file_name
+    }
+    emit_rustc_style_diag(fnm, nd.line, nd.col, code, kind, msg, snip, hlen, note)
+}
+
+fn sem_is_synth_helper(sym: SymTable, fn_name: string) -> bool {
+    if starts_with(fn_name, "_nino_") || starts_with(fn_name, "nino_") {
+        return true
+    }
+    if ends_with(fn_name, "_to_json") || ends_with(fn_name, "_from_json") || ends_with(fn_name, "_eq") {
+        return true
+    }
+    if starts_with(fn_name, "some_") || starts_with(fn_name, "none_") || starts_with(fn_name, "ok_") || starts_with(fn_name, "err_") || starts_with(fn_name, "box_") || starts_with(fn_name, "make_pair_") {
+        return true
+    }
+    if starts_with(fn_name, "Option_") || starts_with(fn_name, "Result_") || starts_with(fn_name, "Pair_") || starts_with(fn_name, "Box_") {
+        return true
+    }
+    if fn_name == "print" || fn_name == "len" || fn_name == "push" || fn_name == "pop" || fn_name == "arr_map" || fn_name == "arr_filter" || fn_name == "arr_reduce" || fn_name == "argc" || fn_name == "argv" || fn_name == "char_code" || fn_name == "read_file" || fn_name == "file_exists" || fn_name == "file_delete" || fn_name == "exec_cmd" || fn_name == "char_at" || fn_name == "slice" || fn_name == "write_file" || fn_name == "exit" {
+        return true
+    }
+    return false
+}
+
+fn sem_synth_ret_type(fn_name: string) -> string {
+    if ends_with(fn_name, "_to_json") {
+        return "string"
+    }
+    if ends_with(fn_name, "_eq") || ends_with(fn_name, "_is_some") || ends_with(fn_name, "_is_ok") {
+        return "bool"
+    }
+    return ""
+}
+
+fn sem_mark_push(mut sctx: SemCtx, mvar: string, depth_val: int) {
+    mut mns = sctx.mark_names
+    mut mds = sctx.mark_depths
+    mns = push(mns, mvar)
+    mds = push(mds, depth_val)
+    sctx.mark_names = mns
+    sctx.mark_depths = mds
+}
+
+fn sem_mark_find_depth(sctx: SemCtx, mvar: string) -> int {
+    let n = len(sctx.mark_names)
+    mut i = n - 1
+    while i >= 0 {
+        if sctx.mark_names[i] == mvar {
+            return sctx.mark_depths[i]
+        }
+        i = i - 1
+    }
+    return sctx.arena_depth
+}
+
+fn sem_apply_rollback(mut sctx: SemCtx, rb_depth: int) {
+    if rb_depth <= 0 {
+        return
+    }
+    let n = len(sctx.sym.entries)
+    for i in 0..n {
+        mut e: SymbolInfo = sctx.sym.entries[i]
+        if e.active && (e.kind == SK_VAR() || e.kind == SK_PARAM()) && e.tainted_at_depth >= rb_depth && e.is_pinned == false {
+            let rb_t = true
+            e.is_rolled_back = rb_t
+            sym_update(sctx.sym, i, e)
+        }
+    }
+    let next_d = rb_depth - 1
+    sctx.arena_depth = next_d
+    mut mns = sctx.mark_names
+    mut mds = sctx.mark_depths
+    while len(mds) > 0 && mds[len(mds) - 1] >= rb_depth {
+        mns = pop(mns)
+        mds = pop(mds)
+    }
+    sctx.mark_names = mns
+    sctx.mark_depths = mds
+}
+
+fn sem_expr_taint_depth(pool: AstPool, nid: int, sctx: SemCtx) -> int {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return 0
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INT_LIT() || nd.kind == NK_FLOAT_LIT() || nd.kind == NK_BOOL_LIT() || nd.kind == NK_STR_LIT() || nd.kind == NK_NIL_LIT() {
+        return 0
+    }
+    if sem_is_scalar_safe_type(nd.inferred_type) {
+        return 0
+    }
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind == NK_IDENT() && (cal.name == "region_pin" || cal.name == "arena_mark" || cal.name == "arena_used") {
+            return 0
+        }
+        if sctx.arena_depth > 0 {
+            return sctx.arena_depth
+        }
+    }
+    if nd.kind == NK_IDENT() {
+        let sid = sym_lookup(sctx.sym, nd.name)
+        if sid != -1 {
+            let e: SymbolInfo = sctx.sym.entries[sid]
+            if e.is_sealed || e.is_pinned {
+                return 0
+            }
+            if sem_is_scalar_safe_type(e.nino_type) {
+                return 0
+            }
+            return e.tainted_at_depth
+        }
+        return 0
+    }
+    mut md = 0
+    if nd.kind == NK_STR_INTERP() || nd.kind == NK_BIN_OP() || nd.kind == NK_ARRAY_LIT() || nd.kind == NK_DICT_LIT() || nd.kind == NK_STRUCT_LIT() {
+        if sctx.arena_depth > 0 {
+            md = sctx.arena_depth
+        }
+    }
+    let ld = sem_expr_taint_depth(pool, nd.left, sctx)
+    if ld > md { md = ld }
+    let rd = sem_expr_taint_depth(pool, nd.right, sctx)
+    if rd > md { md = rd }
+    let ed = sem_expr_taint_depth(pool, nd.extra, sctx)
+    if ed > md { md = ed }
+    for ci in 0..nd.child_count {
+        let cid = pool.children[nd.child_start + ci]
+        let cd = sem_expr_taint_depth(pool, cid, sctx)
+        if cd > md { md = cd }
+    }
+    return md
+}
+
+fn sem_expr_has_sealed(pool: AstPool, nid: int, sym: SymTable) -> string {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return ""
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind == NK_IDENT() {
+            if cal.name == "unseal" || cal.name == "unseal_i64" || cal.name == "seal_destroy" || cal.name == "enclave_attest" || cal.name == "len" || starts_with(cal.name, "zk_") || starts_with(cal.name, "zkp_") {
+                return ""
+            }
+        }
+    }
+    if nd.kind == NK_IDENT() {
+        let sid = sym_lookup(sym, nd.name)
+        if sid != -1 {
+            let e: SymbolInfo = sym.entries[sid]
+            if e.is_sealed || e.sealed_tainted {
+                return nd.name
+            }
+        }
+        return ""
+    }
+    let r1 = sem_expr_has_sealed(pool, nd.left, sym)
+    if len(r1) > 0 { return r1 }
+    let r2 = sem_expr_has_sealed(pool, nd.right, sym)
+    if len(r2) > 0 { return r2 }
+    let r3 = sem_expr_has_sealed(pool, nd.extra, sym)
+    if len(r3) > 0 { return r3 }
+    for ci in 0..nd.child_count {
+        let cid = pool.children[nd.child_start + ci]
+        let r4 = sem_expr_has_sealed(pool, cid, sym)
+        if len(r4) > 0 { return r4 }
+    }
+    return ""
+}
+
+fn sem_is_io_sink(fnm: string) -> bool {
+    return fnm == "print" || fnm == "write_file" || fnm == "file_write" || fnm == "fs_write_text" || fnm == "fs_append_text" || fnm == "tcp_write" || fnm == "http_post" || fnm == "http_put" || fnm == "stderr_write" || fnm == "print_raw"
+}
+
+fn sem_cap_allows(cap_spec: string, op_cat: string) -> bool {
+    if len(cap_spec) == 0 || len(op_cat) == 0 {
+        return true
+    }
+    let w = "," + replace_str(cap_spec, " ", "") + ","
+    let has_ro = find_str(w, ",read_only,", 0) != -1
+    let no_net = find_str(w, ",!network,", 0) != -1 || find_str(w, ",!net,", 0) != -1 || find_str(w, ",!io,", 0) != -1
+    let no_disk = find_str(w, ",!disk,", 0) != -1 || find_str(w, ",!fs,", 0) != -1 || find_str(w, ",!io,", 0) != -1
+    let no_exec = find_str(w, ",!exec,", 0) != -1 || find_str(w, ",!io,", 0) != -1
+    if op_cat == "network" || op_cat == "net" {
+        return !(no_net || has_ro)
+    }
+    if op_cat == "disk_read" || op_cat == "disk_r" {
+        return !no_disk
+    }
+    if op_cat == "disk_write" || op_cat == "disk_w" {
+        return !(no_disk || has_ro)
+    }
+    if op_cat == "exec" {
+        return !(no_exec || has_ro)
+    }
+    if op_cat == "mem_write" || op_cat == "mem_w" {
+        return !has_ro
+    }
+    return true
+}
+
+fn sem_builtin_cap_cat(fnm: string) -> string {
+    if fnm == "tcp_connect" || fnm == "tcp_listen" || fnm == "tcp_accept" || fnm == "tcp_read" || fnm == "tcp_write" || fnm == "tcp_close" || fnm == "http_get" || fnm == "http_post" || fnm == "http_put" || fnm == "http_delete" || fnm == "http_listen" || fnm == "http_serve" || fnm == "db_postgres_connect" || fnm == "db_postgres_query" || fnm == "db_postgres_exec" || fnm == "db_redis_connect" || fnm == "db_redis_cmd" {
+        return "network"
+    }
+    if fnm == "write_file" || fnm == "file_write" || fnm == "nino_write_file" || fnm == "nino_write_hex_file" || fnm == "file_delete" || fnm == "nino_file_delete" || fnm == "fs_write_text" || fnm == "fs_append_text" || fnm == "fs_mkdir" || fnm == "fs_remove" || fnm == "db_exec" || fnm == "db_sqlite_exec" {
+        return "disk_write"
+    }
+    if fnm == "read_file" || fnm == "file_read" || fnm == "nino_read_file" || fnm == "file_exists" || fnm == "nino_file_exists" || fnm == "fs_read_text" || fnm == "fs_list_dir" || fnm == "db_sqlite_open" || fnm == "db_sqlite_query" || fnm == "db_query" || fnm == "db_query_json" {
+        return "disk_read"
+    }
+    if fnm == "exec_cmd" || fnm == "nino_exec_cmd" {
+        return "exec"
+    }
+    if fnm == "alloc_memory" || fnm == "free_memory" || fnm == "write_byte" || fnm == "write_i32" {
+        return "mem_write"
+    }
+    return ""
+}
+
+fn sem_cap_tag_for_cat(cat: string) -> string {
+    if cat == "network" { return "net" }
+    if cat == "disk_write" { return "disk_w" }
+    if cat == "disk_read" { return "disk_r" }
+    if cat == "exec" { return "exec" }
+    if cat == "mem_write" { return "mem_w" }
+    return ""
+}
+
+fn sem_collect_node_cap_effects(pool: AstPool, nid: int, sym: SymTable) -> string {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return ""
+    }
+    let nd: AstNode = pool.nodes[nid]
+    mut eff = "|"
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind == NK_IDENT() {
+            let bcat = sem_builtin_cap_cat(cal.name)
+            if len(bcat) > 0 {
+                eff = sem_pipe_add(eff, sem_cap_tag_for_cat(bcat))
+            }
+            let csid = sym_lookup(sym, cal.name)
+            if csid != -1 {
+                let ce: SymbolInfo = sym.entries[csid]
+                if len(ce.cap_effects) > 0 {
+                    if find_str(ce.cap_effects, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
+                    if find_str(ce.cap_effects, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
+                    if find_str(ce.cap_effects, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
+                    if find_str(ce.cap_effects, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
+                    if find_str(ce.cap_effects, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
+                }
+            }
+        }
+    }
+    if nd.left != -1 {
+        let el = sem_collect_node_cap_effects(pool, nd.left, sym)
+        if len(el) > 0 {
+            if find_str(el, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
+            if find_str(el, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
+            if find_str(el, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
+            if find_str(el, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
+            if find_str(el, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
+        }
+    }
+    if nd.right != -1 {
+        let er = sem_collect_node_cap_effects(pool, nd.right, sym)
+        if len(er) > 0 {
+            if find_str(er, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
+            if find_str(er, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
+            if find_str(er, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
+            if find_str(er, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
+            if find_str(er, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
+        }
+    }
+    if nd.extra != -1 {
+        let ee = sem_collect_node_cap_effects(pool, nd.extra, sym)
+        if len(ee) > 0 {
+            if find_str(ee, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
+            if find_str(ee, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
+            if find_str(ee, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
+            if find_str(ee, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
+            if find_str(ee, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
+        }
+    }
+    for ci in 0..nd.child_count {
+        let cid = pool.children[nd.child_start + ci]
+        let ec = sem_collect_node_cap_effects(pool, cid, sym)
+        if len(ec) > 0 {
+            if find_str(ec, "|net|", 0) != -1 { eff = sem_pipe_add(eff, "net") }
+            if find_str(ec, "|disk_w|", 0) != -1 { eff = sem_pipe_add(eff, "disk_w") }
+            if find_str(ec, "|disk_r|", 0) != -1 { eff = sem_pipe_add(eff, "disk_r") }
+            if find_str(ec, "|exec|", 0) != -1 { eff = sem_pipe_add(eff, "exec") }
+            if find_str(ec, "|mem_w|", 0) != -1 { eff = sem_pipe_add(eff, "mem_w") }
+        }
+    }
+    return eff
+}
+
+fn sem_check_expr(mut pool: AstPool, nid: int, mut sctx: SemCtx) -> string {
+    if nid < 0 || nid >= len(pool.nodes) || sctx.has_error {
+        return ""
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INT_LIT() {
+        lower_set_node_types(pool, nid, "int", "int64_t")
+        return "int"
+    }
+    if nd.kind == NK_FLOAT_LIT() {
+        lower_set_node_types(pool, nid, "float", "double")
+        return "float"
+    }
+    if nd.kind == NK_BOOL_LIT() {
+        lower_set_node_types(pool, nid, "bool", "bool")
+        return "bool"
+    }
+    if nd.kind == NK_NIL_LIT() {
+        lower_set_node_types(pool, nid, "any", "void*")
+        return "any"
+    }
+    if nd.kind == NK_STR_LIT() {
+        lower_set_node_types(pool, nid, "string", "const char*")
+        return "string"
+    }
+    if nd.kind == NK_STR_INTERP() {
+        for ci in 0..nd.child_count {
+            let cid = pool.children[nd.child_start + ci]
+            let ct = sem_check_expr(pool, cid, sctx)
+            if sctx.has_error {
+                return "string"
+            }
+            let ignore_ct = ct
+        }
+        lower_set_node_types(pool, nid, "string", "const char*")
+        return "string"
+    }
+    if nd.kind == NK_IDENT() {
+        let sid = sym_lookup(sctx.sym, nd.name)
+        if sid == -1 {
+            if sem_is_synth_helper(sctx.sym, nd.name) == false {
+                sem_err(pool, sctx, nd, "E0425", "semantic_error", "Undeclared identifier '" + nd.name + "'", len(nd.name), "declare '" + nd.name + "' before use or check spelling/scope")
+            }
+            return ""
+        }
+        let e: SymbolInfo = sctx.sym.entries[sid]
+        if e.is_rolled_back {
+            sem_err(pool, sctx, nd, "E0515", "memory_safety", "Use of region-bound value '" + nd.name + "' after arena_rollback()", len(nd.name), "pin escaping values with region_pin(" + nd.name + ") before rolling back the arena mark")
+            return ""
+        }
+        lower_set_node_types(pool, nid, e.nino_type, e.c11_type)
+        return sem_norm_nino_type(e.nino_type)
+    }
+    if nd.kind == NK_UNARY_OP() {
+        let lt = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return "" }
+        if nd.op == "!" || nd.op == "not" {
+            if len(lt) > 0 && lt != "bool" && lt != "any" {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Logical negation operator '!' requires 'bool' operand, found '" + lt + "'", 1, "provide a boolean expression for '!'")
+                return ""
+            }
+            lower_set_node_types(pool, nid, "bool", "bool")
+            return "bool"
+        }
+        if nd.op == "&" {
+            lower_set_node_types(pool, nid, "any", "void*")
+            return "any"
+        }
+        if len(lt) > 0 && sem_is_num_type(lt) == false && lt != "any" {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Unary operator '" + nd.op + "' requires numeric operand, found '" + lt + "'", 1, "use an integer or floating-point operand")
+            return ""
+        }
+        lower_set_node_types(pool, nid, lt, map_type(lt))
+        return lt
+    }
+    if nd.kind == NK_TERNARY() {
+        let ct = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return "" }
+        if len(ct) > 0 && ct != "bool" && ct != "any" {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Ternary condition must be 'bool', found '" + ct + "'", 1, "condition before '?' must evaluate to bool")
+            return ""
+        }
+        let tt = sem_check_expr(pool, nd.right, sctx)
+        if sctx.has_error { return "" }
+        let et = sem_check_expr(pool, nd.extra, sctx)
+        if sctx.has_error { return "" }
+        if sem_ast_types_compat(tt, et) == false {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Ternary branch type mismatch: '" + tt + "' vs '" + et + "'", 1, "both ternary branches must have compatible types")
+            return ""
+        }
+        mut rnt = tt
+        if len(rnt) == 0 { rnt = et }
+        lower_set_node_types(pool, nid, rnt, map_type(rnt))
+        return rnt
+    }
+    if nd.kind == NK_BIN_OP() {
+        let lt = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return "" }
+        let rt = sem_check_expr(pool, nd.right, sctx)
+        if sctx.has_error { return "" }
+        let op = nd.op
+        if op == "&&" || op == "||" || op == "and" || op == "or" {
+            if (len(lt) > 0 && lt != "bool" && lt != "any") || (len(rt) > 0 && rt != "bool" && rt != "any") {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Logical operator '" + op + "' requires 'bool' operands, found '" + lt + "' and '" + rt + "'", len(op), "ensure both sides of '" + op + "' have type bool")
+                return ""
+            }
+            lower_set_node_types(pool, nid, "bool", "bool")
+            return "bool"
+        }
+        if op == "==" || op == "!=" {
+            if sem_ast_types_compat(lt, rt) == false && sem_ast_types_compat(rt, lt) == false {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Cannot compare incompatible types '" + lt + "' and '" + rt + "' with '" + op + "'", len(op), "compare values of matching types")
+                return ""
+            }
+            lower_set_node_types(pool, nid, "bool", "bool")
+            return "bool"
+        }
+        if op == "<" || op == "<=" || op == ">" || op == ">=" {
+            if (len(lt) > 0 && sem_is_num_type(lt) == false && lt != "string" && lt != "any") || (len(rt) > 0 && sem_is_num_type(rt) == false && rt != "string" && rt != "any") || (lt == "string" && rt != "string" && rt != "any") || (rt == "string" && lt != "string" && lt != "any") {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Relational operator '" + op + "' cannot compare '" + lt + "' and '" + rt + "'", len(op), "use compatible ordered operands")
+                return ""
+            }
+            lower_set_node_types(pool, nid, "bool", "bool")
+            return "bool"
+        }
+        if op == "+" {
+            if lt == "string" || rt == "string" {
+                lower_set_node_types(pool, nid, "string", "const char*")
+                return "string"
+            }
+            if (len(lt) > 0 && sem_is_num_type(lt) == false && lt != "any") || (len(rt) > 0 && sem_is_num_type(rt) == false && rt != "any") {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Operator '+' cannot add '" + lt + "' and '" + rt + "'", 1, "operands to '+' must be numeric or string")
+                return ""
+            }
+            mut res_t = "int"
+            if lt == "float" || rt == "float" { res_t = "float" }
+            lower_set_node_types(pool, nid, res_t, map_type(res_t))
+            return res_t
+        }
+        if op == "-" || op == "*" || op == "/" || op == "%" {
+            if (len(lt) > 0 && sem_is_num_type(lt) == false && lt != "any") || (len(rt) > 0 && sem_is_num_type(rt) == false && rt != "any") {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Arithmetic operator '" + op + "' requires numeric operands, found '" + lt + "' and '" + rt + "'", len(op), "convert non-numeric values before arithmetic")
+                return ""
+            }
+            mut res_t = "int"
+            if lt == "float" || rt == "float" { res_t = "float" }
+            lower_set_node_types(pool, nid, res_t, map_type(res_t))
+            return res_t
+        }
+        if op == "<<" || op == ">>" || op == "&" || op == "|" || op == "^" {
+            if (len(lt) > 0 && sem_is_num_type(lt) == false && lt != "any") || (len(rt) > 0 && sem_is_num_type(rt) == false && rt != "any") || lt == "float" || rt == "float" {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Bitwise operator '" + op + "' requires integer operands, found '" + lt + "' and '" + rt + "'", len(op), "use integer operands for bitwise operations")
+                return ""
+            }
+            lower_set_node_types(pool, nid, "int", "int64_t")
+            return "int"
+        }
+        return ""
+    }
+    if nd.kind == NK_ARRAY_LIT() {
+        mut el_t = "any"
+        for ci in 0..nd.child_count {
+            let cid = pool.children[nd.child_start + ci]
+            let ct = sem_check_expr(pool, cid, sctx)
+            if sctx.has_error { return "" }
+            if ci == 0 && len(ct) > 0 {
+                el_t = ct
+            } else if len(el_t) > 0 && el_t != "any" && sem_ast_types_compat(el_t, ct) == false {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Array literal element type mismatch: expected '" + el_t + "', found '" + ct + "'", 1, "all elements in an array literal must have compatible types")
+                return ""
+            }
+        }
+        let arr_t = "[" + el_t + "]"
+        lower_set_node_types(pool, nid, arr_t, map_type(arr_t))
+        return arr_t
+    }
+    if nd.kind == NK_DICT_LIT() {
+        for ci in 0..nd.child_count {
+            let eid = pool.children[nd.child_start + ci]
+            let ent: AstNode = pool.nodes[eid]
+            let kt = sem_check_expr(pool, ent.left, sctx)
+            if sctx.has_error { return "" }
+            let vt = sem_check_expr(pool, ent.right, sctx)
+            if sctx.has_error { return "" }
+            let ignore_kv = len(kt) + len(vt)
+        }
+        lower_set_node_types(pool, nid, "dict", "NinoDict*")
+        return "dict"
+    }
+    if nd.kind == NK_STRUCT_LIT() {
+        let sname = sem_norm_nino_type(nd.name)
+        let sid = sym_lookup(sctx.sym, sname)
+        for ci in 0..nd.child_count {
+            let fid_n = pool.children[nd.child_start + ci]
+            let fnd: AstNode = pool.nodes[fid_n]
+            let vt = sem_check_expr(pool, fnd.left, sctx)
+            if sctx.has_error { return "" }
+            if sid != -1 {
+                let f_exp = lower_resolve_member_nino_type(sctx.sym, sname, fnd.name)
+                if len(f_exp) > 0 && sem_ast_types_compat(f_exp, vt) == false {
+                    sem_err(pool, sctx, fnd, "E0308", "type_error", "Field '" + fnd.name + "' on '" + sname + "' expects '" + sem_norm_nino_type(f_exp) + "', found '" + vt + "'", len(fnd.name), "align field initializer type with struct declaration")
+                    return ""
+                }
+            }
+        }
+        lower_set_node_types(pool, nid, sname, map_type(sname))
+        return sname
+    }
+    if nd.kind == NK_MEMBER() {
+        let obj_t = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return "" }
+        let obj_c = map_type(obj_t)
+        let f_nt = lower_resolve_member_nino_type(sctx.sym, obj_c, nd.name)
+        let f_ct = lower_resolve_member_type(sctx.sym, obj_c, nd.name)
+        let res_nt = sem_norm_nino_type(f_nt)
+        if len(f_nt) == 0 && len(obj_c) > 0 {
+            let sid_c = sym_lookup(sctx.sym, obj_c)
+            if sid_c != -1 {
+                let se_chk: SymbolInfo = sctx.sym.entries[sid_c]
+                if se_chk.kind == SK_STRUCT() {
+                    sem_err(pool, sctx, nd, "E0308", "type_error", "Struct '" + obj_c + "' has no field named '" + nd.name + "'", len(nd.name), "check struct field names")
+                    return ""
+                }
+            }
+        }
+        lower_set_node_types(pool, nid, res_nt, f_ct)
+        return res_nt
+    }
+    if nd.kind == NK_INDEX() {
+        let tt = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return "" }
+        let it = sem_check_expr(pool, nd.right, sctx)
+        if sctx.has_error { return "" }
+        if tt == "dict" {
+            if len(it) > 0 && it != "string" && sem_is_num_type(it) == false && it != "any" {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Invalid dict index key type '" + it + "'", 1, "dict keys must be string or numeric")
+                return ""
+            }
+            lower_set_node_types(pool, nid, "string", "const char*")
+            return "string"
+        }
+        if starts_with(tt, "[") && ends_with(tt, "]") {
+            if len(it) > 0 && it == "string" {
+                lower_set_node_types(pool, nid, "string", "const char*")
+                return "string"
+            }
+            if len(it) > 0 && sem_is_num_type(it) == false && it != "any" {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Array index must be integer, found '" + it + "'", 1, "index arrays with int")
+                return ""
+            }
+            let elem_t = sem_norm_nino_type(slice(tt, 1, len(tt) - 2))
+            lower_set_node_types(pool, nid, elem_t, map_type(elem_t))
+            return elem_t
+        }
+        if tt == "string" {
+            if len(it) > 0 && it == "string" {
+                lower_set_node_types(pool, nid, "string", "const char*")
+                return "string"
+            }
+            if len(it) > 0 && sem_is_num_type(it) == false && it != "any" {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "String index must be integer, found '" + it + "'", 1, "index strings with int")
+                return ""
+            }
+            lower_set_node_types(pool, nid, "string", "const char*")
+            return "string"
+        }
+        if tt == "any" || len(tt) == 0 {
+            return "any"
+        }
+        sem_err(pool, sctx, nd, "E0308", "type_error", "Type '" + tt + "' cannot be indexed", 1, "only arrays, dictionaries, and strings support indexing")
+        return ""
+    }
+    if nd.kind == NK_CALL() || nd.kind == NK_PIPE() {
+        mut fn_name = ""
+        mut arg_ids: [int] = []
+        if nd.kind == NK_PIPE() {
+            arg_ids = push(arg_ids, nd.left)
+            let rhs_nd: AstNode = pool.nodes[nd.right]
+            if rhs_nd.kind == NK_CALL() {
+                let cal_nd: AstNode = pool.nodes[rhs_nd.left]
+                fn_name = cal_nd.name
+                for ci in 0..rhs_nd.child_count {
+                    arg_ids = push(arg_ids, pool.children[rhs_nd.child_start + ci])
+                }
+            } else if rhs_nd.kind == NK_IDENT() {
+                fn_name = rhs_nd.name
+            }
+        } else {
+            let cal_nd: AstNode = pool.nodes[nd.left]
+            fn_name = cal_nd.name
+            for ci in 0..nd.child_count {
+                arg_ids = push(arg_ids, pool.children[nd.child_start + ci])
+            }
+        }
+        let acnt = len(arg_ids)
+        if (fn_name == "arr_filter" || fn_name == "arr_map") && acnt == 2 {
+            let arr_t = sem_check_expr(pool, arg_ids[0], sctx)
+            if sctx.has_error { return "" }
+            mut el_t = "any"
+            if starts_with(arr_t, "[") && ends_with(arr_t, "]") {
+                el_t = sem_norm_nino_type(slice(arr_t, 1, len(arr_t) - 2))
+            }
+            let lam_nd: AstNode = pool.nodes[arg_ids[1]]
+            if lam_nd.kind != NK_LAMBDA() || lam_nd.child_count < 1 {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Expected lambda closure as second argument to '" + fn_name + "'", len(fn_name), "use |x| expr syntax")
+                return ""
+            }
+            let p_nd: AstNode = pool.nodes[pool.children[lam_nd.child_start]]
+            let sc_blk = SCOPE_BLOCK()
+            sym_push_scope(sctx.sym, sc_blk, sctx.arena_depth)
+            mut pi = sym_info_empty()
+            pi.kind = SK_PARAM()
+            pi.nino_type = el_t
+            pi.c11_type = map_type(el_t)
+            sym_insert(sctx.sym, p_nd.name, pi)
+            let body_t = sem_check_expr(pool, lam_nd.left, sctx)
+            sym_pop_scope(sctx.sym)
+            if sctx.has_error { return "" }
+            if fn_name == "arr_filter" {
+                if len(body_t) > 0 && body_t != "bool" && body_t != "any" {
+                    sem_err(pool, sctx, lam_nd, "E0308", "type_error", "Predicate in arr_filter() must return 'bool', found '" + body_t + "'", 1, "return a boolean expression from the filter closure")
+                    return ""
+                }
+                lower_set_node_types(pool, nid, arr_t, map_type(arr_t))
+                return arr_t
+            }
+            let mapped_t = "[" + body_t + "]"
+            lower_set_node_types(pool, nid, mapped_t, map_type(mapped_t))
+            return mapped_t
+        }
+        if fn_name == "arr_reduce" && acnt == 3 {
+            let arr_t = sem_check_expr(pool, arg_ids[0], sctx)
+            if sctx.has_error { return "" }
+            let init_t = sem_check_expr(pool, arg_ids[1], sctx)
+            if sctx.has_error { return "" }
+            mut el_t = "any"
+            if starts_with(arr_t, "[") && ends_with(arr_t, "]") {
+                el_t = sem_norm_nino_type(slice(arr_t, 1, len(arr_t) - 2))
+            }
+            let lam_nd: AstNode = pool.nodes[arg_ids[2]]
+            if lam_nd.kind != NK_LAMBDA() || lam_nd.child_count < 2 {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Expected 2-argument lambda |acc, x| in arr_reduce()", len(fn_name), "use |acc, x| expr syntax")
+                return ""
+            }
+            let p0_nd: AstNode = pool.nodes[pool.children[lam_nd.child_start]]
+            let p1_nd: AstNode = pool.nodes[pool.children[lam_nd.child_start + 1]]
+            let sc_blk = SCOPE_BLOCK()
+            sym_push_scope(sctx.sym, sc_blk, sctx.arena_depth)
+            mut pi0 = sym_info_empty()
+            pi0.kind = SK_PARAM()
+            pi0.nino_type = init_t
+            pi0.c11_type = map_type(init_t)
+            sym_insert(sctx.sym, p0_nd.name, pi0)
+            mut pi1 = sym_info_empty()
+            pi1.kind = SK_PARAM()
+            pi1.nino_type = el_t
+            pi1.c11_type = map_type(el_t)
+            sym_insert(sctx.sym, p1_nd.name, pi1)
+            let body_t = sem_check_expr(pool, lam_nd.left, sctx)
+            sym_pop_scope(sctx.sym)
+            if sctx.has_error { return "" }
+            if sem_ast_types_compat(init_t, body_t) == false {
+                sem_err(pool, sctx, lam_nd, "E0308", "type_error", "Type mismatch in arr_reduce() accumulator: expected '" + init_t + "', found '" + body_t + "'", 1, "ensure reducer body returns same type as initial accumulator")
+                return ""
+            }
+            lower_set_node_types(pool, nid, init_t, map_type(init_t))
+            return init_t
+        }
+        mut arg_ts: [string] = []
+        for ai in 0..acnt {
+            let at = sem_check_expr(pool, arg_ids[ai], sctx)
+            if sctx.has_error { return "" }
+            arg_ts = push(arg_ts, at)
+        }
+        if sem_is_io_sink(fn_name) {
+            for ai in 0..acnt {
+                let sv = sem_expr_has_sealed(pool, arg_ids[ai], sctx.sym)
+                if len(sv) > 0 {
+                    sem_err(pool, sctx, nd, "E0042", "security_error", "Cannot leak sealed secret or alias '" + sv + "' through " + fn_name + "() without explicit unseal()", len(sv), "confidential memory enclaves must be explicitly unsealed with unseal(" + sv + ")")
+                    return ""
+                }
+            }
+        }
+        if len(sctx.cur_fn_cap) > 0 {
+            let bcat = sem_builtin_cap_cat(fn_name)
+            if len(bcat) > 0 && sem_cap_allows(sctx.cur_fn_cap, bcat) == false {
+                sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids calling '" + fn_name + "()' (" + bcat + ")", len(fn_name), "remove '" + fn_name + "()' or relax capability constraints")
+                return ""
+            }
+        }
+        if fn_name != "unseal" && fn_name != "unseal_i64" && fn_name != "seal_is_locked" && fn_name != "seal_destroy" && fn_name != "enclave_attest" && fn_name != "len" && starts_with(fn_name, "zk_") == false && starts_with(fn_name, "zkp_") == false {
+            for pi_s in 0..acnt {
+                let sv_s = sem_expr_has_sealed(pool, arg_ids[pi_s], sctx.sym)
+                if len(sv_s) > 0 {
+                    sem_err(pool, sctx, nd, "E0042", "security_error", "Cannot pass sealed secret or alias '" + sv_s + "' into function '" + fn_name + "()' without explicit unseal()", len(sv_s), "explicitly call unseal(" + sv_s + ") rather than passing sealed secrets directly")
+                    return ""
+                }
+            }
+        }
+        if fn_name == "push" && acnt == 2 {
+            let res_pt = arg_ts[0]
+            if len(res_pt) > 0 && res_pt != "[any]" {
+                lower_set_node_types(pool, nid, res_pt, map_type(res_pt))
+                return res_pt
+            }
+            let inf_p = "[" + arg_ts[1] + "]"
+            lower_set_node_types(pool, nid, inf_p, map_type(inf_p))
+            return inf_p
+        }
+        if fn_name == "pop" && acnt == 1 {
+            lower_set_node_types(pool, nid, arg_ts[0], map_type(arg_ts[0]))
+            return arg_ts[0]
+        }
+        if fn_name == "region_pin" && acnt >= 1 {
+            lower_set_node_types(pool, nid, arg_ts[0], map_type(arg_ts[0]))
+            return arg_ts[0]
+        }
+        if fn_name == "unseal" && acnt >= 1 {
+            if sem_is_num_type(arg_ts[0]) || arg_ts[0] == "bool" {
+                lower_set_node_types(pool, nid, arg_ts[0], map_type(arg_ts[0]))
+                return arg_ts[0]
+            }
+            lower_set_node_types(pool, nid, "string", "const char*")
+            return "string"
+        }
+        let fn_sid = sym_lookup(sctx.sym, fn_name)
+        if fn_sid == -1 {
+            if sem_is_synth_helper(sctx.sym, fn_name) == false {
+                sem_err(pool, sctx, nd, "E0425", "semantic_error", "Call to undeclared function '" + fn_name + "'", len(fn_name), "declare '" + fn_name + "' before calling it")
+                return ""
+            }
+            let srt = sem_synth_ret_type(fn_name)
+            lower_set_node_types(pool, nid, srt, map_type(srt))
+            return srt
+        }
+        let fe: SymbolInfo = sctx.sym.entries[fn_sid]
+        if len(sctx.cur_fn_cap) > 0 && len(fe.cap_effects) > 0 {
+            if find_str(fe.cap_effects, "|net|", 0) != -1 && sem_cap_allows(sctx.cur_fn_cap, "network") == false {
+                sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids calling '" + fn_name + "()' (uses network)", len(fn_name), "callee uses network operations forbidden by capability matrix")
+                return ""
+            }
+            if find_str(fe.cap_effects, "|disk_w|", 0) != -1 && sem_cap_allows(sctx.cur_fn_cap, "disk_write") == false {
+                sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids calling '" + fn_name + "()' (uses disk write)", len(fn_name), "callee writes to disk which is forbidden by capability matrix")
+                return ""
+            }
+            if find_str(fe.cap_effects, "|disk_r|", 0) != -1 && sem_cap_allows(sctx.cur_fn_cap, "disk_read") == false {
+                sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids calling '" + fn_name + "()' (uses disk read)", len(fn_name), "callee reads from disk which is forbidden by capability matrix")
+                return ""
+            }
+            if find_str(fe.cap_effects, "|exec|", 0) != -1 && sem_cap_allows(sctx.cur_fn_cap, "exec") == false {
+                sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids calling '" + fn_name + "()' (executes external command)", len(fn_name), "callee executes subprocesses forbidden by capability matrix")
+                return ""
+            }
+            if find_str(fe.cap_effects, "|mem_w|", 0) != -1 && sem_cap_allows(sctx.cur_fn_cap, "mem_write") == false {
+                sem_err(pool, sctx, nd, "E0043", "capability_error", "Function capability [" + sctx.cur_fn_cap + "] forbids calling '" + fn_name + "()' (mutates raw memory)", len(fn_name), "callee performs memory writes forbidden by read_only capability")
+                return ""
+            }
+        }
+        if fe.kind == SK_FN() || fe.kind == SK_EXTERN_FN() {
+            if fe.max_arity > 0 || fe.min_arity > 0 || acnt > 0 {
+                if fe.max_arity >= fe.min_arity && (acnt < fe.min_arity || acnt > fe.max_arity) {
+                    sem_err(pool, sctx, nd, "E0061", "type_error", "Function '" + fn_name + "' expects " + int_to_str(fe.min_arity) + " argument(s), found " + int_to_str(acnt), len(fn_name), "adjust argument count to match signature")
+                    return ""
+                }
+            }
+            for pi in 0..acnt {
+                if fn_name != "unseal" && fn_name != "unseal_i64" && fn_name != "seal_is_locked" && fn_name != "seal_destroy" && fn_name != "enclave_attest" && fn_name != "len" && starts_with(fn_name, "zk_") == false && starts_with(fn_name, "zkp_") == false {
+                    let sv_p = sem_expr_has_sealed(pool, arg_ids[pi], sctx.sym)
+                    if len(sv_p) > 0 {
+                        sem_err(pool, sctx, nd, "E0042", "security_error", "Cannot pass sealed secret or alias '" + sv_p + "' into function '" + fn_name + "()' without explicit unseal()", len(sv_p), "explicitly call unseal(" + sv_p + ") at an authorized sink rather than passing sealed secrets across function boundaries")
+                        return ""
+                    }
+                }
+                if pi < fe.child_count {
+                    let p_info: ParamInfo = sctx.sym.params[fe.child_start + pi]
+                    let p_exp = sem_norm_nino_type(p_info.nino_type)
+                    if len(p_exp) > 0 && p_exp != "any" && sem_ast_types_compat(p_exp, arg_ts[pi]) == false {
+                        sem_err(pool, sctx, nd, "E0308", "type_error", "Argument " + int_to_str(pi + 1) + " of '" + fn_name + "' expects '" + p_exp + "', found '" + arg_ts[pi] + "'", len(fn_name), "pass an argument matching parameter '" + p_info.name + "'")
+                        return ""
+                    }
+                    if sem_param_needs_mut_arg(p_info) {
+                        mut acur = arg_ids[pi]
+                        while acur >= 0 && acur < len(pool.nodes) && (pool.nodes[acur].kind == NK_MEMBER() || pool.nodes[acur].kind == NK_INDEX()) {
+                            acur = pool.nodes[acur].left
+                        }
+                        if acur >= 0 && acur < len(pool.nodes) && pool.nodes[acur].kind == NK_IDENT() {
+                            let aname = pool.nodes[acur].name
+                            let asid = sym_lookup(sctx.sym, aname)
+                            if asid != -1 {
+                                let ase: SymbolInfo = sctx.sym.entries[asid]
+                                if ase.is_mut == false && ase.is_morphic == false {
+                                    sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot pass immutable variable '" + aname + "' to 'mut' parameter '" + p_info.name + "' of '" + fn_name + "()'", len(aname), "declare '" + aname + "' with 'mut' before passing it to a mutable parameter")
+                                    return ""
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let rnt = sem_norm_nino_type(fe.ret_nino_type)
+        lower_set_node_types(pool, nid, rnt, fe.ret_c11_type)
+        return rnt
+    }
+    return ""
+}
+
+fn sem_expr_unwrap_push(pool: AstPool, nid: int, mut sctx: SemCtx, var_name: string) -> int {
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind == NK_IDENT() && cal.name == "push" && nd.child_count == 2 {
+            let a0_id = pool.children[nd.child_start]
+            let a1_id = pool.children[nd.child_start + 1]
+            let a0: AstNode = pool.nodes[a0_id]
+            if a0.kind == NK_IDENT() && a0.name == var_name {
+                return sem_expr_taint_depth(pool, a1_id, sctx)
+            }
+        }
+    }
+    return -1
+}
+
+fn sem_check_stmt(mut pool: AstPool, nid: int, mut sctx: SemCtx) {
+    if nid < 0 || nid >= len(pool.nodes) || sctx.has_error {
+        return
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_BLOCK() {
+        let sc_blk = SCOPE_BLOCK()
+        sym_push_scope(sctx.sym, sc_blk, sctx.arena_depth)
+        for ci in 0..nd.child_count {
+            let cid = pool.children[nd.child_start + ci]
+            sem_check_stmt(pool, cid, sctx)
+            if sctx.has_error {
+                sym_pop_scope(sctx.sym)
+                return
+            }
+        }
+        sym_pop_scope(sctx.sym)
+        return
+    }
+    if nd.kind == NK_LET_STMT() || nd.kind == NK_GLOBAL_LET() {
+        let ex_sid = sym_lookup_current(sctx.sym, nd.name)
+        if ex_sid != -1 {
+            sem_err(pool, sctx, nd, "E0428", "semantic_error", "Redeclaration of variable '" + nd.name + "' in same scope", len(nd.name), "rename variable or use assignment instead of let/mut")
+            return
+        }
+        let rhs_t = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        let ann_t = sem_norm_nino_type(nd.type_ann)
+        if len(ann_t) > 0 && sem_ast_types_compat(ann_t, rhs_t) == false {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Type mismatch in declaration of '" + nd.name + "': expected '" + ann_t + "', found '" + rhs_t + "'", len(nd.name), "align variable annotation with assigned expression")
+            return
+        }
+        mut res_t = ann_t
+        if len(res_t) == 0 {
+            res_t = rhs_t
+        }
+        mut is_pin_rhs = false
+        mut is_mark_rhs = false
+        if nd.left >= 0 && nd.left < len(pool.nodes) {
+            let rnd: AstNode = pool.nodes[nd.left]
+            if rnd.kind == NK_CALL() && rnd.left >= 0 && rnd.left < len(pool.nodes) {
+                let cal: AstNode = pool.nodes[rnd.left]
+                if cal.kind == NK_IDENT() && cal.name == "region_pin" {
+                    is_pin_rhs = true
+                } else if cal.kind == NK_IDENT() && cal.name == "arena_mark" {
+                    is_mark_rhs = true
+                }
+            }
+        }
+        if is_mark_rhs {
+            let nxt_ad = sctx.arena_depth + 1
+            sctx.arena_depth = nxt_ad
+            sem_mark_push(sctx, nd.name, nxt_ad)
+            res_t = "int"
+        }
+        let is_mut = (nd.flags & NF_MUT()) != 0
+        let is_sealed = (nd.flags & NF_SEALED()) != 0
+        let is_morphic = (nd.flags & NF_MORPHIC()) != 0
+        mut taint_d = 0
+        if is_sealed == false && is_pin_rhs == false && is_mark_rhs == false {
+            taint_d = sem_expr_taint_depth(pool, nd.left, sctx)
+            if taint_d == 0 && sctx.arena_depth > 0 && sem_is_scalar_safe_type(res_t) == false {
+                if nd.left >= 0 && nd.left < len(pool.nodes) {
+                    let rnd2: AstNode = pool.nodes[nd.left]
+                    if rnd2.kind != NK_STR_LIT() {
+                        taint_d = sctx.arena_depth
+                    }
+                }
+            }
+        }
+        let has_sealed = len(sem_expr_has_sealed(pool, nd.left, sctx.sym)) > 0
+        mut info = sym_info_empty()
+        info.kind = SK_VAR()
+        info.nino_type = res_t
+        info.c11_type = map_type(res_t)
+        info.is_mut = is_mut
+        info.is_sealed = is_sealed
+        info.sealed_tainted = has_sealed
+        info.is_morphic = is_morphic
+        info.region_depth = sctx.arena_depth
+        info.tainted_at_depth = taint_d
+        info.is_pinned = is_pin_rhs
+        info.decl_line = nd.line
+        sym_insert(sctx.sym, nd.name, info)
+        return
+    }
+    if nd.kind == NK_ASSIGN_STMT() {
+        let l_nd: AstNode = pool.nodes[nd.left]
+        if l_nd.kind == NK_IDENT() {
+            let sid = sym_lookup(sctx.sym, l_nd.name)
+            if sid == -1 {
+                sem_err(pool, sctx, l_nd, "E0425", "semantic_error", "Assignment to undeclared variable '" + l_nd.name + "'", len(l_nd.name), "declare with 'mut' before assigning")
+                return
+            }
+            let se: SymbolInfo = sctx.sym.entries[sid]
+            if se.is_mut == false && se.is_morphic == false {
+                sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot mutate immutable variable '" + l_nd.name + "' (declared with 'let')", len(l_nd.name), "variables declared with 'let' are immutable; use 'mut' to allow mutation")
+                return
+            }
+            let rhs_t = sem_check_expr(pool, nd.right, sctx)
+            if sctx.has_error { return }
+            if sem_ast_types_compat(se.nino_type, rhs_t) == false {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Cannot assign '" + rhs_t + "' to variable '" + l_nd.name + "' of type '" + sem_norm_nino_type(se.nino_type) + "'", len(l_nd.name), "align assigned expression type with variable type")
+                return
+            }
+            let push_td = sem_expr_unwrap_push(pool, nd.right, sctx, l_nd.name)
+            mut new_se: SymbolInfo = sctx.sym.entries[sid]
+            let hs = len(sem_expr_has_sealed(pool, nd.right, sctx.sym)) > 0
+            new_se.sealed_tainted = hs
+            mut pin_rhs = false
+            if nd.right >= 0 && nd.right < len(pool.nodes) {
+                let rnd3: AstNode = pool.nodes[nd.right]
+                if rnd3.kind == NK_CALL() && rnd3.left >= 0 && rnd3.left < len(pool.nodes) {
+                    let cal3: AstNode = pool.nodes[rnd3.left]
+                    if cal3.kind == NK_IDENT() && cal3.name == "region_pin" {
+                        pin_rhs = true
+                    }
+                }
+            }
+            if push_td != -1 {
+                if push_td > new_se.tainted_at_depth {
+                    new_se.tainted_at_depth = push_td
+                }
+            } else if pin_rhs {
+                let td0 = 0
+                let rb0 = false
+                let pt = true
+                new_se.tainted_at_depth = td0
+                new_se.is_rolled_back = rb0
+                new_se.is_pinned = pt
+            } else {
+                let rhs_td = sem_expr_taint_depth(pool, nd.right, sctx)
+                new_se.tainted_at_depth = rhs_td
+                let rb_f = false
+                new_se.is_rolled_back = rb_f
+            }
+            sym_update(sctx.sym, sid, new_se)
+            return
+        }
+        if l_nd.kind == NK_MEMBER() {
+            mut rcur = l_nd.left
+            while rcur >= 0 && rcur < len(pool.nodes) && pool.nodes[rcur].kind == NK_MEMBER() {
+                rcur = pool.nodes[rcur].left
+            }
+            if rcur >= 0 && rcur < len(pool.nodes) && pool.nodes[rcur].kind == NK_IDENT() {
+                let r_name = pool.nodes[rcur].name
+                let rsid = sym_lookup(sctx.sym, r_name)
+                if rsid != -1 {
+                    let rse: SymbolInfo = sctx.sym.entries[rsid]
+                    if rse.is_mut == false && rse.is_morphic == false {
+                        sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot mutate field '" + l_nd.name + "' of immutable variable '" + r_name + "' (declared with 'let')", len(r_name), "declare '" + r_name + "' with 'mut' to allow member mutation")
+                        return
+                    }
+                }
+            }
+            let obj_t = sem_check_expr(pool, l_nd.left, sctx)
+            if sctx.has_error { return }
+            let s_nm = strip_generic_args(sem_norm_nino_type(obj_t))
+            let st_sid = sym_lookup(sctx.sym, s_nm)
+            if st_sid != -1 {
+                let st_e: SymbolInfo = sctx.sym.entries[st_sid]
+                if st_e.kind == SK_STRUCT() {
+                    for fi in 0..st_e.child_count {
+                        let finfo: FieldInfo = sctx.sym.fields[st_e.child_start + fi]
+                        if finfo.name == l_nd.name && finfo.is_mut == false {
+                            sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot mutate immutable struct field '" + s_nm + "." + l_nd.name + "'", len(l_nd.name), "declare field with 'mut " + l_nd.name + ": ...' on struct '" + s_nm + "'")
+                            return
+                        }
+                    }
+                }
+            }
+            let rhs_t = sem_check_expr(pool, nd.right, sctx)
+            if sctx.has_error { return }
+            let obj_c = map_type(obj_t)
+            let f_exp = lower_resolve_member_nino_type(sctx.sym, obj_c, l_nd.name)
+            if len(f_exp) > 0 && sem_ast_types_compat(f_exp, rhs_t) == false {
+                sem_err(pool, sctx, nd, "E0308", "type_error", "Field '" + l_nd.name + "' expects '" + sem_norm_nino_type(f_exp) + "', found '" + rhs_t + "'", len(l_nd.name), "assign a value matching the struct field type")
+                return
+            }
+            let obj_nd: AstNode = pool.nodes[l_nd.left]
+            if obj_nd.kind == NK_IDENT() {
+                let osid = sym_lookup(sctx.sym, obj_nd.name)
+                if osid != -1 {
+                    mut oe: SymbolInfo = sctx.sym.entries[osid]
+                    let td = sem_expr_taint_depth(pool, nd.right, sctx)
+                    if td > oe.tainted_at_depth {
+                        oe.tainted_at_depth = td
+                        sym_update(sctx.sym, osid, oe)
+                    }
+                }
+            }
+            return
+        }
+        if l_nd.kind == NK_INDEX() {
+            mut rcur = l_nd.left
+            while rcur >= 0 && rcur < len(pool.nodes) && (pool.nodes[rcur].kind == NK_INDEX() || pool.nodes[rcur].kind == NK_MEMBER()) {
+                rcur = pool.nodes[rcur].left
+            }
+            if rcur >= 0 && rcur < len(pool.nodes) && pool.nodes[rcur].kind == NK_IDENT() {
+                let r_name = pool.nodes[rcur].name
+                let rsid = sym_lookup(sctx.sym, r_name)
+                if rsid != -1 {
+                    let rse: SymbolInfo = sctx.sym.entries[rsid]
+                    if rse.is_mut == false && rse.is_morphic == false {
+                        sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot mutate elements of immutable variable '" + r_name + "' (declared with 'let')", len(r_name), "declare '" + r_name + "' with 'mut' to allow element mutation")
+                        return
+                    }
+                }
+            }
+            let tt = sem_check_expr(pool, l_nd.left, sctx)
+            if sctx.has_error { return }
+            let it = sem_check_expr(pool, l_nd.right, sctx)
+            if sctx.has_error { return }
+            let rhs_t = sem_check_expr(pool, nd.right, sctx)
+            if sctx.has_error { return }
+            let ignore_idx = len(tt) + len(it) + len(rhs_t)
+            let t_nd: AstNode = pool.nodes[l_nd.left]
+            if t_nd.kind == NK_IDENT() {
+                let tsid = sym_lookup(sctx.sym, t_nd.name)
+                if tsid != -1 {
+                    mut te: SymbolInfo = sctx.sym.entries[tsid]
+                    let td = sem_expr_taint_depth(pool, nd.right, sctx)
+                    if td > te.tainted_at_depth {
+                        te.tainted_at_depth = td
+                        sym_update(sctx.sym, tsid, te)
+                    }
+                }
+            }
+            return
+        }
+        return
+    }
+    if nd.kind == NK_RETURN_STMT() {
+        if nd.left == -1 {
+            return
+        }
+        let rt = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        let sv_ret = sem_expr_has_sealed(pool, nd.left, sctx.sym)
+        if len(sv_ret) > 0 {
+            sem_err(pool, sctx, nd, "E0042", "security_error", "Cannot return sealed secret or alias '" + sv_ret + "' without explicit unseal()", len(sv_ret), "call unseal(" + sv_ret + ") explicitly before returning a value from a sealed variable")
+            return
+        }
+        if sctx.cur_fn_ret == "void" && len(rt) > 0 && rt != "void" {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Cannot return value of type '" + rt + "' from void function", 6, "declare return type '-> " + rt + "' or remove return expression")
+            return
+        }
+        if len(sctx.cur_fn_ret) > 0 && sctx.cur_fn_ret != "void" && sem_ast_types_compat(sctx.cur_fn_ret, rt) == false {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Return type mismatch: expected '" + sctx.cur_fn_ret + "', found '" + rt + "'", 6, "return value must match function return signature")
+            return
+        }
+        return
+    }
+    if nd.kind == NK_IF_STMT() {
+        let ct = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        if len(ct) > 0 && ct != "bool" && ct != "any" {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Condition in 'if' must be 'bool', found '" + ct + "'", 2, "use a boolean condition expression")
+            return
+        }
+        sem_check_stmt(pool, nd.right, sctx)
+        if sctx.has_error { return }
+        if nd.extra != -1 {
+            sem_check_stmt(pool, nd.extra, sctx)
+        }
+        return
+    }
+    if nd.kind == NK_WHILE_STMT() {
+        let ct = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        if len(ct) > 0 && ct != "bool" && ct != "any" {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Condition in 'while' must be 'bool', found '" + ct + "'", 5, "use a boolean condition expression")
+            return
+        }
+        let sc_lp = SCOPE_LOOP()
+        sym_push_scope(sctx.sym, sc_lp, sctx.arena_depth)
+        sem_check_stmt(pool, nd.right, sctx)
+        sym_pop_scope(sctx.sym)
+        return
+    }
+    if nd.kind == NK_FOR_RANGE() {
+        let lt = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        let ht = sem_check_expr(pool, nd.right, sctx)
+        if sctx.has_error { return }
+        if nd.extra != -1 {
+            let st_t = sem_check_expr(pool, nd.extra, sctx)
+            if sctx.has_error { return }
+            let ignore_st = st_t
+        }
+        let ignore_lh = len(lt) + len(ht)
+        let sc_lp = SCOPE_LOOP()
+        sym_push_scope(sctx.sym, sc_lp, sctx.arena_depth)
+        mut vi = sym_info_empty()
+        vi.kind = SK_VAR()
+        vi.nino_type = "int"
+        vi.c11_type = "int64_t"
+        sym_insert(sctx.sym, nd.name, vi)
+        if nd.child_count >= 1 {
+            sem_check_stmt(pool, pool.children[nd.child_start], sctx)
+        }
+        sym_pop_scope(sctx.sym)
+        return
+    }
+    if nd.kind == NK_FOR_IN() {
+        let ct = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        mut el_t = "any"
+        if starts_with(ct, "[") && ends_with(ct, "]") {
+            el_t = sem_norm_nino_type(slice(ct, 1, len(ct) - 2))
+        }
+        let sc_lp = SCOPE_LOOP()
+        sym_push_scope(sctx.sym, sc_lp, sctx.arena_depth)
+        mut vi = sym_info_empty()
+        vi.kind = SK_VAR()
+        vi.nino_type = el_t
+        vi.c11_type = map_type(el_t)
+        sym_insert(sctx.sym, nd.name, vi)
+        sem_check_stmt(pool, nd.right, sctx)
+        sym_pop_scope(sctx.sym)
+        return
+    }
+    if nd.kind == NK_MATCH_STMT() {
+        let st_t = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        let ignore_st = st_t
+        for ci in 0..nd.child_count {
+            let aid = pool.children[nd.child_start + ci]
+            let arm: AstNode = pool.nodes[aid]
+            sem_check_stmt(pool, arm.right, sctx)
+            if sctx.has_error { return }
+        }
+        return
+    }
+    if nd.kind == NK_GUARD_STMT() || nd.kind == NK_DEFER_STMT() || nd.kind == NK_COMPTIME() {
+        if nd.kind == NK_GUARD_STMT() {
+            let ct = sem_check_expr(pool, nd.left, sctx)
+            if sctx.has_error { return }
+            let ignore_c = ct
+            sem_check_stmt(pool, nd.right, sctx)
+        } else {
+            sem_check_stmt(pool, nd.left, sctx)
+        }
+        return
+    }
+    if nd.kind == NK_TRANSACT_STMT() {
+        sem_check_stmt(pool, nd.left, sctx)
+        if sctx.has_error == false && nd.right != -1 {
+            sem_check_stmt(pool, nd.right, sctx)
+        }
+        return
+    }
+    if nd.kind == NK_INLINE_ASM() {
+        for ci in 0..nd.child_count {
+            sem_check_stmt(pool, pool.children[nd.child_start + ci], sctx)
+            if sctx.has_error { return }
+        }
+        return
+    }
+    if nd.kind == NK_RECEIVE_STMT() {
+        let sc_blk = SCOPE_BLOCK()
+        sym_push_scope(sctx.sym, sc_blk, sctx.arena_depth)
+        mut pinfo = sym_info_empty()
+        pinfo.kind = SK_PARAM()
+        pinfo.nino_type = "string"
+        pinfo.c11_type = "const char*"
+        sym_insert(sctx.sym, nd.name, pinfo)
+        sem_check_stmt(pool, nd.left, sctx)
+        sym_pop_scope(sctx.sym)
+        return
+    }
+    if nd.kind == NK_CONTRACT_REQ() || nd.kind == NK_CONTRACT_ENS() || nd.kind == NK_CONTRACT_INV() || nd.kind == NK_ABORT_STMT() {
+        let ct = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        if nd.kind != NK_ABORT_STMT() && nd.right != -1 {
+            let mt = sem_check_expr(pool, nd.right, sctx)
+            if sctx.has_error { return }
+            let ignore_mt = mt
+        }
+        let ignore_ct = ct
+        return
+    }
+    if nd.kind == NK_EXPR_STMT() {
+        let et = sem_check_expr(pool, nd.left, sctx)
+        if sctx.has_error { return }
+        let ignore_et = et
+        if nd.left >= 0 && nd.left < len(pool.nodes) {
+            let e_nd: AstNode = pool.nodes[nd.left]
+            if e_nd.kind == NK_CALL() && e_nd.left >= 0 && e_nd.left < len(pool.nodes) {
+                let cal: AstNode = pool.nodes[e_nd.left]
+                if cal.kind == NK_IDENT() && cal.name == "arena_rollback" && e_nd.child_count >= 1 {
+                    let arg0_id = pool.children[e_nd.child_start]
+                    let arg0: AstNode = pool.nodes[arg0_id]
+                    mut rb_d = sctx.arena_depth
+                    if arg0.kind == NK_IDENT() {
+                        rb_d = sem_mark_find_depth(sctx, arg0.name)
+                    }
+                    sem_apply_rollback(sctx, rb_d)
+                } else if cal.kind == NK_IDENT() && cal.name == "arena_reset" {
+                    sem_apply_rollback(sctx, 1)
+                }
+            }
+        }
+        return
+    }
+}
+
+fn ast_semantic_check(mut pool: AstPool, file_name: string) -> bool {
+    if pool.has_error {
+        let efid = lower_find_file_id(pool, pool.err_file)
+        emit_rustc_style_diag(pool.err_file, pool.err_line, pool.err_col, "E0001", "syntax_error", pool.err_msg, lower_diag_line_text(pool, efid, pool.err_line), 1, "fix syntax error before compilation")
+        return false
+    }
+    let tbl = sym_table_new()
+    mut mnames: [string] = []
+    mut mdepths: [int] = []
+    mut sctx = SemCtx {
+        sym: tbl,
+        file_name: file_name,
+        has_error: false,
+        cur_fn_ret: "void",
+        cur_fn_cap: "",
+        arena_depth: 0,
+        mark_names: mnames,
+        mark_depths: mdepths
+    }
+    if pool.root < 0 || pool.root >= len(pool.nodes) {
+        return true
+    }
+    let tn = len(pool.nodes)
+    for ni in 0..tn {
+        let tnd: AstNode = pool.nodes[ni]
+        if len(tnd.type_ann) > 0 && find_char(tnd.type_ann, "<", 0) != -1 {
+            sym_register_generic_struct_one(sctx.sym, tnd.type_ann)
+        }
+    }
+    let root_nd: AstNode = pool.nodes[pool.root]
+    mut seen_structs = "|"
+    mut seen_fns = "|"
+    for ci in 0..root_nd.child_count {
+        let iid = pool.children[root_nd.child_start + ci]
+        let nd: AstNode = pool.nodes[iid]
+        if nd.kind == NK_STRUCT_DECL() {
+            if find_str(seen_structs, "|" + nd.name + "|", 0) != -1 {
+                sem_err(pool, sctx, nd, "E0428", "semantic_error", "Duplicate struct definition '" + nd.name + "'", len(nd.name), "each struct name must be unique within the compilation unit")
+                return false
+            }
+            seen_structs = seen_structs + nd.name + "|"
+            let f_start = len(sctx.sym.fields)
+            mut farr = sctx.sym.fields
+            for fi in 0..nd.child_count {
+                let fid_n = pool.children[nd.child_start + fi]
+                let fnd: AstNode = pool.nodes[fid_n]
+                let finfo = FieldInfo { name: fnd.name, nino_type: fnd.type_ann, c11_type: map_type(fnd.type_ann), is_mut: (fnd.flags & NF_MUT()) != 0 }
+                farr = push(farr, finfo)
+            }
+            sctx.sym.fields = farr
+            mut sinfo = sym_info_empty()
+            sinfo.kind = SK_STRUCT()
+            sinfo.nino_type = nd.name
+            sinfo.c11_type = nd.name
+            sinfo.decl_line = nd.line
+            sinfo.child_start = f_start
+            sinfo.child_count = nd.child_count
+            sym_insert(sctx.sym, nd.name, sinfo)
+            sym_seed_fn(sctx.sym, nd.name + "_to_json", "string", "const char*", 1, 1)
+            sym_seed_fn(sctx.sym, nd.name + "_from_json", nd.name, nd.name, 1, 1)
+            sym_seed_fn(sctx.sym, nd.name + "_eq", "bool", "bool", 2, 2)
+        } else if nd.kind == NK_FN_DECL() || nd.kind == NK_EXTERN_FN() {
+            if nd.kind == NK_FN_DECL() {
+                if find_str(seen_fns, "|" + nd.name + "|", 0) != -1 {
+                    sem_err(pool, sctx, nd, "E0428", "semantic_error", "Duplicate function definition '" + nd.name + "'", len(nd.name), "remove or rename the duplicate function definition")
+                    return false
+                }
+                seen_fns = seen_fns + nd.name + "|"
+            }
+            let p_start = len(sctx.sym.params)
+            mut parr = sctx.sym.params
+            mut min_a = 0
+            for pi in 0..nd.child_count {
+                let pid_n = pool.children[nd.child_start + pi]
+                let pnd: AstNode = pool.nodes[pid_n]
+                if pnd.left == -1 { min_a = min_a + 1 }
+                let pinfo = ParamInfo { name: pnd.name, nino_type: pnd.type_ann, c11_type: map_type(pnd.type_ann), is_mut: (pnd.flags & NF_MUT()) != 0, is_ptr_writeback: false, has_default: pnd.left != -1 }
+                parr = push(parr, pinfo)
+            }
+            sctx.sym.params = parr
+            mut ret_n = nd.type_ann
+            if nd.name == "main" {
+                ret_n = "int"
+            } else if len(ret_n) == 0 {
+                ret_n = "void"
+            }
+            mut finfo = sym_info_empty()
+            finfo.kind = SK_FN()
+            if nd.kind == NK_EXTERN_FN() {
+                finfo.kind = SK_EXTERN_FN()
+            }
+            finfo.ret_nino_type = ret_n
+            finfo.ret_c11_type = map_type(ret_n)
+            finfo.min_arity = min_a
+            finfo.max_arity = nd.child_count
+            finfo.child_start = p_start
+            finfo.child_count = nd.child_count
+            finfo.decl_line = nd.line
+            sym_insert(sctx.sym, nd.name, finfo)
+        } else if nd.kind == NK_ACTOR_DECL() {
+            mut ainfo = sym_info_empty()
+            ainfo.kind = SK_ACTOR()
+            ainfo.nino_type = nd.name
+            ainfo.c11_type = nd.name
+            sym_insert(sctx.sym, nd.name, ainfo)
+        }
+    }
+    for cap_pass in 0..3 {
+        let ignore_cp = cap_pass
+        for ci_c in 0..root_nd.child_count {
+            let iid_c = pool.children[root_nd.child_start + ci_c]
+            let nd_c: AstNode = pool.nodes[iid_c]
+            if nd_c.kind == NK_FN_DECL() && nd_c.left != -1 {
+                let csid_f = sym_lookup(sctx.sym, nd_c.name)
+                if csid_f != -1 {
+                    mut f_e: SymbolInfo = sctx.sym.entries[csid_f]
+                    f_e.cap_effects = sem_collect_node_cap_effects(pool, nd_c.left, sctx.sym)
+                    sym_update(sctx.sym, csid_f, f_e)
+                }
+            }
+        }
+    }
+    for ci in 0..root_nd.child_count {
+        let iid = pool.children[root_nd.child_start + ci]
+        let nd: AstNode = pool.nodes[iid]
+        if nd.kind == NK_GLOBAL_LET() {
+            sem_check_stmt(pool, iid, sctx)
+            if sctx.has_error { return false }
+        } else if nd.kind == NK_FN_DECL() {
+            mut rt_n = sem_norm_nino_type(nd.type_ann)
+            if nd.name == "main" {
+                rt_n = "int"
+            } else if len(rt_n) == 0 {
+                rt_n = "void"
+            }
+            sctx.cur_fn_ret = rt_n
+            sctx.cur_fn_cap = nd.str_val
+            let zero_d = 0
+            sctx.arena_depth = zero_d
+            mut em_n: [string] = []
+            mut em_d: [int] = []
+            sctx.mark_names = em_n
+            sctx.mark_depths = em_d
+            let sc_fn = SCOPE_FN()
+            sym_push_scope(sctx.sym, sc_fn, 0)
+            for pi in 0..nd.child_count {
+                let pid_n = pool.children[nd.child_start + pi]
+                let pnd: AstNode = pool.nodes[pid_n]
+                mut pinfo = sym_info_empty()
+                pinfo.kind = SK_PARAM()
+                pinfo.nino_type = sem_norm_nino_type(pnd.type_ann)
+                pinfo.c11_type = map_type(pnd.type_ann)
+                pinfo.is_mut = (pnd.flags & NF_MUT()) != 0
+                pinfo.decl_line = pnd.line
+                sym_insert(sctx.sym, pnd.name, pinfo)
+            }
+            if nd.left != -1 {
+                let bnd: AstNode = pool.nodes[nd.left]
+                if bnd.kind == NK_BLOCK() {
+                    for si in 0..bnd.child_count {
+                        sem_check_stmt(pool, pool.children[bnd.child_start + si], sctx)
+                        if sctx.has_error {
+                            sym_pop_scope(sctx.sym)
+                            return false
+                        }
+                    }
+                } else {
+                    sem_check_stmt(pool, nd.left, sctx)
+                }
+            }
+            sym_pop_scope(sctx.sym)
+            sctx.cur_fn_cap = ""
+            if sctx.has_error { return false }
+        } else if nd.kind == NK_ACTOR_DECL() {
+            let zero_d2 = 0
+            sctx.arena_depth = zero_d2
+            sctx.cur_fn_ret = "any"
+            for ri in 0..nd.child_count {
+                sem_check_stmt(pool, pool.children[nd.child_start + ri], sctx)
+                if sctx.has_error { return false }
+            }
+        }
+    }
+    return sctx.has_error == false
+}
+
+fn run_semantic_type_check(source: string, base_dir: string, file_name: string) -> bool {
+    mut pool = ast_parse_unit_ex(source, base_dir, file_name, true)
+    return ast_semantic_check(pool, file_name)
+}
+

@@ -1,0 +1,11 @@
+fn main() -> int {
+    let m = arena_mark()
+    let s = "tmp_" + int_to_str(42)
+    let arr = [10, 20, 30]
+    let total = len(s) + arr[1]
+    arena_rollback(m)
+    require(total == 26, "transient scalar extraction must equal 26")
+    require(arena_used() == m, "arena_used must equal mark after rollback")
+    print("T1-F04-01:PASS")
+    return 0
+}

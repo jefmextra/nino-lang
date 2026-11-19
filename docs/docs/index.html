@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentation - The Nino Programming Language</title>
+    <meta name="description" content="Technical documentation and architecture manual for the Nino programming language, covering memory safety, formal theorem proving, unikernels, and post-quantum security.">
+    <meta name="author" content="vvictor">
+    <link rel="canonical" href="https://ninosec.me/docs.html">
+    <meta property="og:title" content="Nino Documentation - Systems Architecture Manual">
+    <meta property="og:description" content="Technical reference for linear memory, SMT proving, unikernels, and standard libraries.">
+    <meta property="og:url" content="https://ninosec.me/docs.html">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="https://ninosec.me/assets/nino_icon.png">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests;">
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="Permissions-Policy" content="camera=(), microphone=(), geolocation=(), payment=(), usb=()">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/nino_icon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;1,6..72,500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        try {
+            if (localStorage.getItem('nino_editorial_theme') === 'inkwell') {
+                document.documentElement.setAttribute('data-theme', 'inkwell');
+            }
+        } catch (e) {}
+    </script>
+    <style>
+        :root {
+            --bg-page: #EAE5DB;
+            --bg-surface: #F2EFE6;
+            --bg-card: #E2DDD0;
+            --bg-header: rgba(234, 229, 219, 0.90);
+            --bg-plate: #EAE5DB;
+            --bg-code: #1D1C19;
+            --border-subtle: #CFC8B8;
+            --border-hover: #B4AB98;
+            --accent-primary: #1E40AF;
+            --accent-primary-hover: #1D4ED8;
+            --accent-soft: rgba(30, 64, 175, 0.08);
+            --accent-border: rgba(30, 64, 175, 0.25);
+            --accent-emerald: #0F766E;
+            --text-primary: #1B1A17;
+            --text-secondary: #48443C;
+            --text-muted: #6C675D;
+            --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+            --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            --font-mono: 'Geist Mono', 'Fira Code', 'Cascadia Code', monospace;
+        }
+        html[data-theme="inkwell"] {
+            --bg-page: #1A1916;
+            --bg-surface: #22201C;
+            --bg-card: #2A2722;
+            --bg-header: rgba(26, 25, 22, 0.92);
+            --bg-plate: #E9E4DA;
+            --bg-code: #12110F;
+            --border-subtle: #38342D;
+            --border-hover: #4F4A40;
+            --accent-primary: #60A5FA;
+            --accent-primary-hover: #93C5FD;
+            --accent-soft: rgba(96, 165, 250, 0.14);
+            --accent-border: rgba(147, 197, 253, 0.30);
+            --accent-emerald: #2DD4BF;
+            --text-primary: #EAE5DB;
+            --text-secondary: #C5BFB2;
+            --text-muted: #928B7E;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-page);
+            color: var(--text-primary);
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
+        a { color: inherit; text-decoration: none; }
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: var(--bg-header);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .header-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 0 28px;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: var(--font-serif);
+            font-weight: 600;
+            font-size: 20px;
+            letter-spacing: -0.3px;
+            color: var(--text-primary);
+        }
+        .brand img {
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            border: 1px solid var(--border-subtle);
+        }
+        .brand-badge {
+            font-size: 11px;
+            font-weight: 600;
+            font-family: var(--font-mono);
+            background: var(--accent-soft);
+            color: var(--accent-primary-hover);
+            border: 1px solid var(--accent-border);
+            padding: 2px 8px;
+            border-radius: 3px;
+        }
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+        .nav-links a:hover { color: var(--text-primary); }
+        .theme-btn {
+            font-family: var(--font-mono);
+            font-size: 11.5px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            color: var(--text-secondary);
+            background: transparent;
+            border: 1px solid var(--border-subtle);
+            border-radius: 4px;
+            padding: 6px 11px;
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s;
+        }
+        .theme-btn:hover {
+            border-color: var(--text-primary);
+            color: var(--text-primary);
+        }
+        .docs-layout {
+            display: flex;
+            max-width: 1320px;
+            margin: 0 auto;
+            min-height: calc(100vh - 64px);
+        }
+        .sidebar {
+            width: 274px;
+            padding: 28px 20px;
+            border-right: 1px solid var(--border-subtle);
+            background: var(--bg-page);
+            position: sticky;
+            top: 64px;
+            height: calc(100vh - 64px);
+            overflow-y: auto;
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+        .sidebar-group { margin-bottom: 22px; }
+        .sidebar-title {
+            font-family: var(--font-mono);
+            font-size: 10.5px;
+            text-transform: uppercase;
+            font-weight: 600;
+            color: var(--accent-emerald);
+            letter-spacing: 0.9px;
+            margin-bottom: 8px;
+            padding-left: 8px;
+        }
+        .sidebar-links { list-style: none; }
+        .sidebar-links li { margin-bottom: 3px; }
+        .sidebar-links a {
+            color: var(--text-secondary);
+            display: block;
+            padding: 5px 8px;
+            border-radius: 4px;
+            border-left: 2px solid transparent;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+        .sidebar-links a:hover {
+            background: var(--accent-soft);
+            color: var(--accent-primary-hover);
+            border-left-color: var(--accent-primary);
+        }
+        .content {
+            flex: 1;
+            padding: 40px 52px;
+            max-width: 930px;
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border-subtle);
+        }
+        .doc-masthead {
+            display: grid;
+            grid-template-columns: 1fr 140px;
+            gap: 28px;
+            align-items: center;
+            padding-bottom: 24px;
+            margin-bottom: 24px;
+            border-bottom: 2px solid var(--text-primary);
+        }
+        .doc-kicker {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.9px;
+            text-transform: uppercase;
+            color: var(--accent-emerald);
+            margin-bottom: 8px;
+        }
+        .doc-emblem-plate {
+            width: 136px;
+            background: #EDE7D7;
+            padding: 8px;
+            border: 1px solid var(--border-subtle);
+            border-radius: 3px;
+        }
+        .doc-emblem-plate img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        html[data-theme="inkwell"] .doc-emblem-plate {
+            background: var(--bg-plate);
+            padding: 8px;
+            border: 1px solid var(--border-subtle);
+            border-radius: 4px;
+        }
+        html[data-theme="inkwell"] .doc-emblem-plate img {
+            mix-blend-mode: normal;
+            -webkit-mask-image: none;
+            mask-image: none;
+        }
+        .doc-section {
+            margin-bottom: 48px;
+            scroll-margin-top: 80px;
+        }
+        .doc-section h1 {
+            font-family: var(--font-serif);
+            font-size: 38px;
+            font-weight: 600;
+            letter-spacing: -0.9px;
+            line-height: 1.12;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+        }
+        .doc-section h2 {
+            font-family: var(--font-serif);
+            font-size: 25px;
+            font-weight: 600;
+            letter-spacing: -0.45px;
+            margin: 30px 0 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+        }
+        .doc-section h3 {
+            font-size: 16px;
+            font-weight: 700;
+            margin: 22px 0 10px;
+            color: var(--text-primary);
+        }
+        .doc-section p {
+            color: var(--text-secondary);
+            font-size: 14.5px;
+            margin-bottom: 14px;
+            line-height: 1.7;
+        }
+        .doc-section ul {
+            margin-left: 20px;
+            margin-bottom: 16px;
+            color: var(--text-secondary);
+            font-size: 14.5px;
+        }
+        .doc-section li { margin-bottom: 6px; }
+        p code, li code {
+            font-family: var(--font-mono);
+            font-size: 12.5px;
+            color: var(--accent-primary-hover);
+            background: var(--accent-soft);
+            border: 1px solid var(--accent-border);
+            padding: 1px 5px;
+            border-radius: 3px;
+        }
+        .code-block {
+            background: var(--bg-code);
+            border: 1px solid var(--border-subtle);
+            border-radius: 5px;
+            padding: 16px 19px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            color: #EAE5DB;
+            line-height: 1.65;
+            overflow-x: auto;
+            white-space: pre;
+            margin: 12px 0 20px;
+        }
+        .kw { color: #93C5FD; font-weight: 600; }
+        .fn { color: #5EEAD4; }
+        .str { color: #86EFAC; }
+        .num { color: #C4B5FD; }
+        .type { color: #FDA4AF; }
+        .spec-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin: 14px 0 22px;
+            border: 1px solid var(--border-subtle);
+            background: var(--bg-surface);
+        }
+        .spec-table th, .spec-table td {
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-secondary);
+        }
+        .spec-table th {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 11.5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        .spec-table code {
+            font-family: var(--font-mono);
+            font-size: 12.5px;
+            color: var(--accent-primary-hover);
+            background: var(--accent-soft);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        @media (max-width: 900px) {
+            .sidebar { display: none; }
+            .content { padding: 28px 20px; border-right: none; }
+            .doc-masthead { grid-template-columns: 1fr; }
+            .doc-emblem-plate { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-inner">
+            <a href="index.html" class="brand">
+                <img src="assets/nino_icon.png" alt="Nino">
+                <span>Nino Reference Manual</span>
+                <span class="brand-badge">v1.2.2</span>
+            </a>
+            <div class="nav-links">
+                <a href="index.html">Home</a>
+                <a href="https://github.com/jefmextra/nino-lang/releases/tag/v1.2.2" target="_blank" rel="noopener">Releases</a>
+                <a href="https://github.com/jefmextra/nino-lang/tree/main/rfcs" target="_blank" rel="noopener">RFCs</a>
+                <a href="https://github.com/jefmextra/nino-lang" target="_blank" rel="noopener">GitHub</a>
+                <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">Inkwell</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="docs-layout">
+        <aside class="sidebar">
+            <div class="sidebar-group">
+                <div class="sidebar-title">Getting Started</div>
+                <ul class="sidebar-links">
+                    <li><a href="#install">Installation</a></li>
+                    <li><a href="#hello-world">First Program</a></li>
+                    <li><a href="#cli">CLI Reference</a></li>
+                </ul>
+            </div>
+            <div class="sidebar-group">
+                <div class="sidebar-title">Language Semantics</div>
+                <ul class="sidebar-links">
+                    <li><a href="#variables">Variables &amp; Mutability</a></li>
+                    <li><a href="#control-flow">Control Flow &amp; Pattern Matching</a></li>
+                    <li><a href="#contracts">Formal Contracts (require/ensure)</a></li>
+                </ul>
+            </div>
+            <div class="sidebar-group">
+                <div class="sidebar-title">Linear Memory &amp; Protection</div>
+                <ul class="sidebar-links">
+                    <li><a href="#linear-memory">Linear Ownership &amp; Arena</a></li>
+                    <li><a href="#enclaves">Sealed Buffers &amp; Zeroization</a></li>
+                    <li><a href="#morphic">Morphic Dynamic Masking</a></li>
+                    <li><a href="#interop">Zero-Copy Foreign C Memory</a></li>
+                </ul>
+            </div>
+            <div class="sidebar-group">
+                <div class="sidebar-title">Verification &amp; Security</div>
+                <ul class="sidebar-links">
+                    <li><a href="#smt-prover">Built-in SMT Theorem Prover</a></li>
+                    <li><a href="#capabilities">Capability Matrix Sandboxing</a></li>
+                    <li><a href="#quantum">Post-Quantum &amp; ZKP Crypto</a></li>
+                    <li><a href="#mpc">Threshold MPC Secret Sharing</a></li>
+                    <li><a href="#linter">Static Safety Architecture Linter</a></li>
+                </ul>
+            </div>
+            <div class="sidebar-group">
+                <div class="sidebar-title">Toolchain &amp; Mobile FFI</div>
+                <ul class="sidebar-links">
+                    <li><a href="#mobile-ffi">Android JNI &amp; iOS Swift Engine</a></li>
+                    <li><a href="#witness-trace">Z3 Witness &amp; Flight Recorder</a></li>
+                    <li><a href="#bindgen-fmt">Native C Bindgen &amp; Formatter</a></li>
+                    <li><a href="#stdlib">Batteries-Included Stdlib</a></li>
+                </ul>
+            </div>
+            <div class="sidebar-group">
+                <div class="sidebar-title">Systems &amp; Infrastructure</div>
+                <ul class="sidebar-links">
+                    <li><a href="#self-hosting">Self-Hosting &amp; Bootstrap Pipeline</a></li>
+                    <li><a href="#unikernel">Micro-VM &amp; Unikernel Target</a></li>
+                    <li><a href="#database">Database Wire Protocols</a></li>
+                    <li><a href="#actors">Actor Supervisors &amp; Channels</a></li>
+                    <li><a href="#consensus">Distributed Raft Consensus</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <main class="content">
+            <section class="doc-section" id="install">
+                <div class="doc-masthead">
+                    <div>
+                        <div class="doc-kicker">Architecture &amp; Reference Manual / v1.2.2</div>
+                        <h1>Nino Language Reference Manual</h1>
+                        <p>Nino is an independent, statically typed systems programming language designed to explore formal contract verification, deterministic compiler bootstrap, and lean tooling.</p>
+                    </div>
+                    <div class="doc-emblem-plate">
+                        <img src="assets/nino_emblem_proof.jpg" alt="Isometric translucent cobalt crystal emblem">
+                    </div>
+                </div>
+                
+                <h2>Installation</h2>
+                <p>Nino is distributed as a single standalone executable with no external runtime dependencies.</p>
+                <div class="code-block">irm https://ninosec.me/install.ps1 | iex</div>
+                <p>On Linux and macOS systems:</p>
+                <div class="code-block">curl -sSf https://ninosec.me/install.sh | sh</div>
+            </section>
+
+            <section class="doc-section" id="hello-world">
+                <h2>First Program</h2>
+                <p>Create a file named <code>app.nino</code>. Every struct with scalar or nested fields automatically receives compile-time <code>_to_json</code>, <code>_from_json</code>, and <code>_eq</code> helpers, and expressions can be chained left-to-right with <code>|&gt;</code>:</p>
+                <div class="code-block"><span class="kw">import</span> <span class="str">"std/str.nino"</span>
+
+<span class="kw">struct</span> ServiceNode {
+    id: <span class="type">int</span>,
+    name: <span class="type">string</span>,
+    online: <span class="type">bool</span>
+}
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="type">int</span> {
+    <span class="kw">let</span> label = <span class="str">"  nino_gateway_v1  "</span> |&gt; <span class="fn">str_trim</span>() |&gt; <span class="fn">str_to_upper</span>()
+    <span class="kw">let</span> node = ServiceNode { id: <span class="num">101</span>, name: label, online: <span class="kw">true</span> }
+    <span class="fn">print</span>(node |&gt; <span class="fn">ServiceNode_to_json</span>())
+    <span class="kw">return</span> <span class="num">0</span>
+}</div>
+                <p>Run or compile your program directly with <code>ninoc</code>:</p>
+                <div class="code-block">ninoc run app.nino
+ninoc build app.nino --proof -o app.exe</div>
+            </section>
+
+            <section class="doc-section" id="cli">
+                <h2>CLI Reference</h2>
+                <table class="spec-table">
+                    <thead>
+                        <tr>
+                            <th>Command</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>ninoc build &lt;file.nino&gt; [--backend=gcc|llvm|native|native-pe|native-elf|native-arm64] [--proof] [--strict-c11]</code></td>
+                            <td>Compiles Nino source into a native PE32+/ELF64 binary via GCC, LLVM, or direct self-hosted machine-code emission (<code>--backend=native*</code>), with fail-closed Z3 PCC certificates (<code>--proof</code>, <code>QF_BV</code> / IEEE 754 <code>QF_BVFP</code> + Ed25519 signatures) and optional <code>--strict-c11</code>.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc run &lt;file.nino&gt; [-g] [--strict-c11] [--backend=gcc|llvm|native]</code></td>
+                            <td>Compiles and executes a Nino source unit immediately after AST and semantic verification.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc asm &lt;file.nino&gt; [--arch=x86_64|aarch64] [--format=pe|elf] [-o &lt;out.asm&gt;]</code></td>
+                            <td>Directly lowers AST/NIR into annotated <code>x86_64</code> or <code>AArch64</code> machine code bytes with zero external toolchain dependencies.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc keygen [--seed &lt;64-hex&gt;]</code></td>
+                            <td>Generates an RFC 8032 Ed25519 keypair for asymmetric PCC signing (<code>NINO_PCC_ED25519_SEED</code> / <code>--pubkey</code>).</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc check &lt;file.nino&gt;</code></td>
+                            <td>Runs the tagged AST builder and static semantic checker (<code>E0308</code>, <code>E0428</code>, <code>E0061</code>, transitive <code>E0042</code>, and scoped <code>E0515</code> region lifetime analysis).</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc ast &lt;file.nino&gt; [-o &lt;out.ast&gt;]</code></td>
+                            <td>Builds and dumps the parent/depth-indexed in-memory Abstract Syntax Tree nodes.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc mobile &lt;file.nino&gt; [--pkg &lt;p&gt;] [--class &lt;C&gt;]</code></td>
+                            <td>Synthesizes and compiles Android NDK (JNI C11 + Kotlin) and iOS (C11 Header + Clang ModuleMap + Swift 5) bridges.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc equiv &lt;v1.nino&gt; &lt;v2.nino&gt;</code></td>
+                            <td>Proves mathematical equivalence between two source units across all 64-bit inputs using Microsoft Z3.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc sbom &lt;file.nino&gt; [-o &lt;sbom.json&gt;]</code></td>
+                            <td>Generates a cryptographic CycloneDX v1.5 JSON Software Bill of Materials with SHA-256 component hashes.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc bench &lt;file.nino&gt;</code></td>
+                            <td>Runs hardware-counter nanosecond microbenchmarks using monotonic high-resolution clocks.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc lint [--strict] &lt;file.nino&gt;</code></td>
+                            <td>Audits source code against MISRA-C and NASA JPL Power-of-10 static safety rules (delimiter balance, bounded loops, acyclic call graph, and function complexity).</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc witness &lt;file.nino&gt; [-o &lt;out.nino&gt;]</code></td>
+                            <td>Extracts concrete counterexample models from Microsoft Z3 and synthesizes standalone executable reproduction tests.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc bindgen &lt;header.h&gt; [-o &lt;bindings.nino&gt;]</code></td>
+                            <td>Generates zero-overhead Nino FFI declarations directly from C headers without external libclang dependencies.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc trace &lt;file.nino&gt;</code></td>
+                            <td>Compiles and executes with the deterministic SHA-256 flight recorder state chain enabled.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc fmt &lt;file.nino&gt; [--check]</code></td>
+                            <td>Formats Nino source files into canonical 4-space block indentation and verifies formatting in CI.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc lsp</code></td>
+                            <td>Starts the native JSON-RPC 2.0 Language Server Protocol stdio engine with live Z3 diagnostics and semantic hover.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc prove &lt;file.nino&gt; [--bv|--int-logic]</code></td>
+                            <td>Translates contracts (64-bit BitVector <code>QF_BV</code> default or unbounded <code>--int-logic</code>) and array bounds into SMT-LIB2 and verifies them with bundled Microsoft Z3 (fail-closed when zero obligations exist).</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc ir &lt;file.nino&gt;</code></td>
+                            <td>Emits Nino Intermediate Representation (NIR SSA) with BCE, DCE, constant-folding, and loop auto-vectorization (<code>@nir_vec_loop</code>) passes.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc llvm &lt;file.nino&gt; [-o &lt;ll&gt;]</code></td>
+                            <td>Synthesizes pure LLVM SSA IR (with vector loop metadata) for the verified scalar, control-flow, and slice subset; fails closed on unsupported constructs or stdlib calls (use <code>--backend=llvm</code>).</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc lex &lt;file.nino&gt;</code></td>
+                            <td>Scans source code into formal token stream via DFA lexer and counts lexical tokens.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc doc &lt;file.nino&gt; [-o &lt;doc&gt;]</code></td>
+                            <td>Generates Markdown API documentation from AST signatures, formal contracts, and <code>///</code> docstrings.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc pkg search / add / install / verify / list / registry</code></td>
+                            <td>Discovers dependencies from the decentralized package registry and verifies every installed <code>pkg/&lt;name&gt;/module.nino</code> against <code>nino.lock</code> SHA-256 digests.</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc test</code></td>
+                            <td>Executes all 29 self-hosted unit test suites with zero warnings (paired with the 153-test cross-platform Tier 1-4 E2E suite in <code>tests/e2e/</code> and formal Z3 proofs in <code>formal/</code>).</td>
+                        </tr>
+                        <tr>
+                            <td><code>ninoc version</code></td>
+                            <td>Displays compiler version, target architecture, and deterministic bootstrap status.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section class="doc-section" id="variables">
+                <h2>Variables &amp; Mutability</h2>
+                <p>Variables in Nino are immutable by default (<code>let</code>). Reassigning an immutable binding triggers compile-time error <code>E0384</code>. Mutable bindings require the explicit <code>mut</code> keyword and are automatically checkpointed inside software transactions.</p>
+                <div class="code-block"><span class="kw">let</span> max_connections = <span class="num">1000</span>
+<span class="kw">mut</span> active_workers = <span class="num">0</span>
+active_workers = active_workers + <span class="num">1</span></div>
+            </section>
+
+            <section class="doc-section" id="control-flow">
+                <h2>Control Flow, Pattern Matching, Lambdas &amp; Pipe Operator</h2>
+                <p>Nino supports structured <code>if / else</code>, range and collection <code>for</code> loops with optional <code>step</code>, <code>match</code> pattern matching, <code>guard ... else</code> clauses, <code>defer</code> scope finalizers, inline higher-order lambdas (<code>arr_map</code>, <code>arr_filter</code>, <code>arr_reduce</code>), and the universal expression pipe operator (<code>|&gt;</code>):</p>
+                <div class="code-block"><span class="kw">let</span> total = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>, <span class="num">5</span>, <span class="num">6</span>]
+    |&gt; <span class="fn">arr_filter</span>(|x| x % <span class="num">2</span> == <span class="num">0</span>)
+    |&gt; <span class="fn">arr_map</span>(|x| x * <span class="num">10</span>)
+    |&gt; <span class="fn">arr_reduce</span>(<span class="num">0</span>, |acc, x| acc + x)
+
+<span class="kw">match</span> total {
+    <span class="num">120</span> =&gt; <span class="fn">print</span>(<span class="str">"Pipeline verified: 120"</span>),
+    _   =&gt; <span class="fn">print</span>(<span class="str">"Unexpected sum"</span>)
+}</div>
+            </section>
+
+            <section class="doc-section" id="contracts">
+                <h2>Formal Contracts (require / ensure)</h2>
+                <p>Functions support formal preconditions (<code>require</code>) and postconditions (<code>ensure</code>). These clauses are enforced at runtime and statically proven by <code>ninoc prove</code> and <code>ninoc build --proof</code>.</p>
+                <div class="code-block"><span class="kw">fn</span> <span class="fn">allocate_buffer</span>(size: <span class="type">i64</span>) -&gt; <span class="type">i64</span> {
+    <span class="kw">require</span>(size &gt; <span class="num">0</span>, <span class="str">"Buffer size must be positive"</span>)
+    <span class="kw">let</span> aligned_size = size + <span class="num">16</span>
+    <span class="kw">ensure</span>(aligned_size &gt; size, <span class="str">"Alignment overflow invariant breached"</span>)
+    <span class="kw">return</span> aligned_size
+}</div>
+            </section>
+
+            <section class="doc-section" id="linear-memory">
+                <h2>Linear Ownership &amp; Multi-Slab Arena Memory</h2>
+                <p>Nino pairs garbage-collection-free execution with a thread-local multi-slab bump-pointer arena (<code>NinoArena</code>, chaining 4 MiB <code>NinoArenaSlab</code> segments), O(1) scoped marks (<code>arena_mark()</code> and <code>arena_rollback(mark)</code>), and 48-byte <code>NinoArrHdr</code> array headers stamped with epoch/reset-generation metadata that trap deterministically on Use-After-Rollback (<code>CWE-416</code>) index, <code>push</code>, or <code>pop</code> accesses. Static region analysis (<code>E0515</code>) rejects unpinned local allocations escaping rollback scopes unless explicitly promoted via <code>region_pin(val)</code>, while outer arrays that grow across mark boundaries promote onto the heap and release deterministically via <code>arr_free(arr)</code>:</p>
+                <div class="code-block"><span class="kw">let</span> baseline = <span class="fn">arena_used</span>()
+<span class="kw">for</span> req_id <span class="kw">in</span> <span class="num">0</span>..<span class="num">1000</span> {
+    <span class="kw">let</span> mark = <span class="fn">arena_mark</span>()
+    <span class="kw">let</span> payload = <span class="str">"request_"</span> + <span class="fn">int_to_str</span>(req_id)
+    <span class="fn">arena_rollback</span>(mark)
+}
+<span class="kw">require</span>(<span class="fn">arena_used</span>() == baseline, <span class="str">"Zero memory leaked across 1000 cycles"</span>)</div>
+            </section>
+
+            <section class="doc-section" id="enclaves">
+                <h2>Sealed Software Buffers, Guard Pages &amp; Zeroization</h2>
+                <p>Values declared with <code>sealed let</code> obfuscate string literals at compile time (avoiding verbatim plaintext storage in <code>.rodata</code>) and use OS CSPRNG entropy (<code>BCryptGenRandom</code> on Windows, <code>/dev/urandom</code> on POSIX) to generate a per-byte nonzero XOR pad stream inside virtual-page isolated <code>nino_sealed_t</code> buffers locked against swap paging (<code>VirtualAlloc</code>/<code>VirtualProtect</code> <code>PAGE_NOACCESS</code> and <code>VirtualLock</code> on Windows; <code>posix_memalign</code>/<code>mprotect</code> <code>PROT_NONE</code> and <code>mlock</code> on POSIX when OS limits permit, inspectable via <code>seal_is_locked()</code>) with 32-bit head/tail integrity canaries. Explicit wiping uses volatile zeroing via <code>seal_destroy()</code>, while passing an un-unsealed sealed value or alias directly to I/O sinks (<code>print</code>, <code>write_file</code>, <code>tcp_write</code>) is rejected at compile time with diagnostic <code>E0042</code>. (This is software memory defense-in-depth, not hardware TEE/SGX encryption.)</p>
+                <div class="code-block"><span class="kw">sealed let</span> private_key = <span class="str">"0x9F4B2A..."</span>
+<span class="kw">let</span> plain = <span class="fn">unseal</span>(private_key)
+<span class="fn">print</span>(<span class="str">"Access verified"</span>)
+<span class="fn">seal_destroy</span>(private_key)</div>
+            </section>
+
+            <section class="doc-section" id="morphic">
+                <h2>Morphic Dynamic Masking &amp; Software Transactional Memory</h2>
+                <p>Variables declared with <code>morphic mut</code> pair XOR-masked storage with dynamic runtime keys (<code>nino_morphic_write</code> / <code>nino_morphic_read</code>) for lightweight in-process software obfuscation (not hardware memory encryption). Additionally, nested <code>transact { ... } compensate { ... }</code> blocks checkpoint and roll back mutated scalar variables and array slots using thread-local <code>nino_tx_frame_t</code> state frames if an <code>abort</code> or <code>guard</code> failure occurs:</p>
+                <div class="code-block"><span class="kw">morphic mut</span> vault_balance = <span class="num">5000</span>
+<span class="kw">transact</span> {
+    vault_balance = vault_balance - <span class="num">1000</span>
+    <span class="kw">guard</span> vault_balance &gt;= <span class="num">5000</span> <span class="kw">else</span> {
+        <span class="kw">abort</span> <span class="str">"Rollback triggered"</span>
+    }
+} <span class="kw">compensate</span> {
+    <span class="fn">print</span>(<span class="str">"State restored cleanly"</span>)
+}</div>
+            </section>
+
+            <section class="doc-section" id="interop">
+                <h2>Zero-Copy Foreign C Memory &amp; Dynamic System FFI</h2>
+                <p>The module <code>std/interop.nino</code> provides bounds-checked foreign memory borrowing (<code>foreign_ptr_borrow</code>, <code>foreign_ptr_write_u8</code>, <code>foreign_ptr_read_u8</code>, <code>foreign_ptr_release</code>), while <code>ffi_open_system_lib</code>, <code>dylib_open</code>, and <code>dylib_sym</code> load native OS shared libraries (<code>msvcrt.dll</code>, <code>libc.so.6</code>, <code>sqlite3</code>) at runtime:</p>
+                <div class="code-block"><span class="kw">import</span> <span class="str">"std/interop.nino"</span>
+
+<span class="kw">let</span> fptr = <span class="fn">foreign_ptr_borrow</span>(<span class="num">64</span>, <span class="str">"C_ABI_X86_64"</span>)
+<span class="fn">foreign_ptr_write_u8</span>(fptr, <span class="num">0</span>, <span class="num">78</span>)
+<span class="fn">foreign_ptr_release</span>(fptr)
+
+<span class="kw">let</span> libc = <span class="fn">ffi_open_system_lib</span>(<span class="str">"libc"</span>)
+<span class="kw">let</span> fn_strlen = <span class="fn">dylib_sym</span>(libc, <span class="str">"strlen"</span>)
+<span class="kw">let</span> n = <span class="fn">dylib_call_c_strlen</span>(fn_strlen, <span class="str">"NinoFFI"</span>)</div>
+            </section>
+
+            <section class="doc-section" id="smt-prover">
+                <h2>Built-in SMT Theorem Prover &amp; Proof-Carrying Code (PCC)</h2>
+                <p>Before emitting C11 or native code under <code>ninoc prove [--bv|--int-logic]</code> or <code>ninoc build --proof [--bv|--int-logic]</code>, the compiler synthesizes chronological SSA SMT-LIB2 obligations (defaulting to 64-bit BitVector <code>QF_BV+64bit-Overflow</code> arithmetic and signed overflow checks, IEEE 754 <code>Float64</code> under <code>QF_BVFP</code> / <code>QF_FP</code> with <code>is_nan</code>/<code>is_inf</code>/<code>is_finite</code>/<code>fp_abs</code>/<code>fp_sqrt</code>/<code>to_float</code>, or unbounded <code>Int</code> via <code>--int-logic</code>, plus path-sensitive <code>if</code>/<code>else</code> guards, loop <code>invariant</code> proofs, and array bounds checking) and invokes Microsoft Z3. Compilations fail closed with exit code 1 if zero postconditions/invariants are present or if Z3 detects a counterexample (<code>sat</code>). When proven <code>unsat</code>, the compiler embeds the byte-array SMT spec, SHA-256 digests, an RFC 2104 HMAC-SHA256 tag (<code>NINO_PCC_HMAC_KEY</code>), and an RFC 8032 Ed25519 asymmetric signature (<code>NINO_PCC_ED25519_SEED</code> via <code>ninoc keygen</code>), re-verified in constant time at runtime via <code>./app.exe --verify-proof [--pubkey &lt;64-hex&gt;] [--hmac-key &lt;k&gt;] [--reverify-z3]</code>:</p>
+                <div class="code-block">ninoc prove examples/pcc_sound_demo.nino
+ninoc keygen --seed 9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60
+ninoc build examples/pcc_sound_demo.nino --proof -o app.exe
+./app.exe --verify-proof --reverify-z3
+ninoc build app.nino --strict-c11 -o app_iso.exe</div>
+            </section>
+
+            <section class="doc-section" id="capabilities">
+                <h2>Capability Matrix Sandboxing</h2>
+                <p>Nino supports capability annotations on functions and scoped blocks to document and enforce execution permissions:</p>
+                <div class="code-block"><span class="kw">with capability</span> [<span class="str">"read_only"</span>, <span class="str">"!network"</span>, <span class="str">"!disk"</span>] {
+    <span class="kw">let</span> calculation = <span class="num">100</span> * <span class="num">42</span>
+    <span class="fn">print</span>(<span class="str">"Protected calculation: "</span>, calculation)
+}</div>
+            </section>
+
+            <section class="doc-section" id="quantum">
+                <h2>Cryptographic Primitives, Ring-LWE / ML-KEM-512 &amp; Zero-Knowledge Proofs</h2>
+                <p>Nino provides built-in NIST FIPS 180-4 <code>sha256</code>, IETF RFC 2104 <code>hmac_sha256</code> (verified against RFC 4231 test vectors) with constant-time tag comparison (<code>_nino_ct_streq</code>), and RFC 7519 HS256 JWT helpers (<code>std/jwt.nino</code>), alongside self-contained algebraic research primitives: N=64 Ring-LWE (<code>RLWE64_*</code>) and Category-1 Module-Lattice KEM (<code>MLKEM512_*</code>, k=2, N=256, q=3329 with 256-bit shared secrets via <code>pq_generate_keypair(512)</code> or <code>--release-pqc</code>), 61-bit Sophie-Germain safe-prime Schnorr signatures (<code>pq_sign</code>, <code>pq_verify</code>) backed by branchless constant-time modular arithmetic (<code>_nino_ct_add_mod</code>, <code>_nino_mod_mul</code>, <code>_nino_mod_pow</code>), and Pedersen commitments with 48-bit CDS OR-Sigma range proofs (<code>zk_prove_condition</code>, <code>zk_verify_proof</code>, intended for research and prototyping rather than certified production deployment):</p>
+                <div class="code-block"><span class="kw">import</span> <span class="str">"std/jwt.nino"</span>
+
+<span class="kw">let</span> kp = <span class="fn">pq_generate_keypair</span>(<span class="num">768</span>)
+<span class="kw">let</span> sig = <span class="fn">pq_sign</span>(<span class="str">"LEDGER_TX_01"</span>, kp[<span class="str">"private_key"</span>])
+<span class="kw">require</span>(<span class="fn">pq_verify</span>(<span class="str">"LEDGER_TX_01"</span>, sig, kp[<span class="str">"public_key"</span>]), <span class="str">"Valid signature"</span>)
+
+<span class="kw">let</span> token = <span class="fn">jwt_sign_hs256</span>(<span class="str">"{"sub":"node_1"}"</span>, <span class="str">"secret_key"</span>)
+<span class="kw">require</span>(<span class="fn">jwt_verify_hs256</span>(token, <span class="str">"secret_key"</span>), <span class="str">"Valid JWT HS256"</span>)</div>
+            </section>
+
+            <section class="doc-section" id="mpc">
+                <h2>Threshold Multi-Party Computation (MPC)</h2>
+                <p>The module <code>std/mpc.nino</code> implements dynamic degree-(k-1) Shamir Secret Sharing over the 61-bit Mersenne prime field <code>2305843009213693951</code> (<code>M61</code>) with overflow-safe modular arithmetic, CM elliptic-curve Feldman Verifiable Secret Sharing (VSS) commitments over curve order <code>M61</code> (<code>mpc_verify_share_vss</code>), duplicate/tampered share rejection, Lagrange polynomial interpolation, and OS CSPRNG coefficient sampling.</p>
+                <div class="code-block"><span class="kw">import</span> <span class="str">"std/mpc.nino"</span>
+
+<span class="kw">fn</span> <span class="fn">main</span>() {
+    <span class="kw">let</span> key = <span class="fn">mpc_split_secret</span>(<span class="num">1337</span>, <span class="num">3</span>, <span class="num">5</span>)
+    <span class="kw">mut</span> quorum = []
+    quorum = <span class="fn">push</span>(quorum, key.shares[<span class="num">0</span>])
+    quorum = <span class="fn">push</span>(quorum, key.shares[<span class="num">1</span>])
+    quorum = <span class="fn">push</span>(quorum, key.shares[<span class="num">2</span>])
+    
+    <span class="kw">let</span> reconstructed = <span class="fn">mpc_reconstruct_secret</span>(quorum, <span class="num">3</span>)
+    <span class="fn">print</span>(<span class="str">"Reconstructed secret: "</span>, reconstructed)
+}</div>
+            </section>
+
+            <section class="doc-section" id="linter">
+                <h2>Static Safety Linter (Control-Flow &amp; Complexity Checks)</h2>
+                <p>The command <code>ninoc lint [--strict] &lt;file.nino&gt;</code> performs exploratory static checks inspired by MISRA-C:2012 and JPL Power-of-10 guidelines, verifying delimiter balance (<code>MISRA-1</code>), acyclic call graphs without direct recursion in strict mode (<code>JPL-1</code>), absence of unbounded <code>while true</code> loops (<code>JPL-2</code>), and function length bounds (<code>JPL-4</code>). For ISO C11 backend strictness, pair with <code>ninoc build --strict-c11</code> (<code>-std=c11 -pedantic-errors</code>):</p>
+                <div class="code-block">ninoc lint --strict examples/pcc_sound_demo.nino</div>
+            </section>
+
+            <section class="doc-section" id="mobile-ffi">
+                <h2>Universal Mobile Engine (Android JNI &amp; iOS Swift) &amp; Shared Libraries</h2>
+                <p>Nino compiles directly into native shared libraries (<code>.dll</code>, <code>.so</code>, <code>.dylib</code>) via <code>ninoc build --shared</code> and automatically generates mobile bindings via <code>ninoc mobile</code>:</p>
+                <div class="code-block">ninoc build vault.nino --shared --proof -o vault.dll
+ninoc mobile vault.nino --pkg com.nino.vault --class VaultBridge -o build/mob</div>
+                <ul>
+                    <li><strong>Android NDK</strong>: Emits JNI C11 glue (<code>_jni.c</code>), compiles the native shared library, and generates a Kotlin wrapper class (<code>VaultBridge.kt</code>) with <code>external fun</code> bindings.</li>
+                    <li><strong>iOS / macOS</strong>: Emits a C11 bridging header (<code>.h</code>), Clang <code>module.modulemap</code>, and a Swift 5 wrapper struct (<code>VaultBridge.swift</code>).</li>
+                    <li><strong>Runtime Dynamic Linker API</strong>: Native builtins <code>dylib_open</code>, <code>dylib_sym</code>, <code>dylib_call_i64</code>, <code>dylib_call_str</code>, and <code>dylib_close</code> provide direct OS dynamic loading (<code>LoadLibraryA</code> / <code>dlopen</code>).</li>
+                </ul>
+            </section>
+
+            <section class="doc-section" id="witness-trace">
+                <h2>Z3 Counterexample Witness Synthesizer, Equivalence Prover &amp; Flight Recorder</h2>
+                <p>When a formal contract is violated (<code>sat</code>), <code>ninoc witness</code> extracts the concrete counterexample model from Microsoft Z3 and generates a standalone executable <code>.nino</code> test file that deterministically reproduces the failure at runtime. <code>ninoc equiv &lt;v1.nino&gt; &lt;v2.nino&gt;</code> proves whether two refactored functions are mathematically identical across all 64-bit inputs:</p>
+                <div class="code-block">ninoc witness examples/pcc_fail_demo.nino -o repro_witness.nino
+ninoc equiv v1_fee.nino v2_fee.nino
+ninoc trace pilots/ledger_microservice.nino</div>
+                <p>The runtime also includes a 256-slot thread-local ring buffer (<code>trace_record</code>, <code>trace_checkpoint</code>, <code>trace_chain_hash</code>, <code>trace_dump</code>) that hashes every state transition into a rolling FIPS 180-4 SHA-256 chain.</p>
+            </section>
+
+            <section class="doc-section" id="bindgen-fmt">
+                <h2>Native C-Header Bindgen, Canonical Formatter &amp; CycloneDX SBOM</h2>
+                <p><code>ninoc bindgen</code> parses C header files (<code>#define</code> constants, <code>struct</code> definitions, and function prototypes) directly into Nino <code>extern fn</code> FFI bindings without requiring external <code>libclang</code> installations. <code>ninoc fmt</code> formats Nino source code into canonical 4-space block indentation, and <code>ninoc sbom</code> generates a cryptographic CycloneDX v1.5 JSON Software Bill of Materials:</p>
+                <div class="code-block">ninoc bindgen include/telemetry_abi.h -o src/telemetry_ffi.nino
+ninoc fmt src/main.nino --check
+ninoc sbom pilots/ledger_microservice.nino -o ledger.sbom.json</div>
+            </section>
+
+            <section class="doc-section" id="stdlib">
+                <h2>High-Density Primitives, Multi-Core Threading, Industrial Pilots &amp; Standard Library (31 Modules)</h2>
+                <p>In addition to systems and cryptographic modules, Nino includes practical standard library modules and multi-core runtime primitives:</p>
+                <ul>
+                    <li><code>std/json.nino</code>: Zero-allocation JSON parser, string escaper, and object builder (<code>json_get_string</code>, <code>json_get_number</code>, <code>json_get_bool</code>, <code>json_object2</code>, <code>json_object3</code>).</li>
+                    <li><code>std/http.nino</code>: Native socket HTTP/1.1 client and REST response builder (<code>http_get</code>, <code>http_post_json</code>, <code>http_build_json_response</code>).</li>
+                    <li><code>std/fs.nino</code>: Cross-platform filesystem I/O and path utilities (<code>fs_read_text</code>, <code>fs_write_text</code>, <code>path_join</code>, <code>path_basename</code>, <code>path_dirname</code>, <code>path_ext</code>).</li>
+                    <li><code>std/str.nino</code>: String manipulation utilities (<code>str_contains</code>, <code>str_trim</code>, <code>str_replace</code>, <code>str_to_upper</code>, <code>str_to_lower</code>, <code>str_pad_left</code>).</li>
+                    <li><code>std/uuid.nino</code>: Hardware CSPRNG UUID v4 generator (<code>uuid_v4</code>) plus Base64 and Hex encoders/decoders (<code>base64_encode</code>, <code>hex_encode</code>, <code>hex_decode</code>).</li>
+                    <li><code>std/env.nino</code>: Dotenv (<code>.env</code>) configuration file parser and environment loader (<code>dotenv_get_from_file</code>).</li>
+                    <li><code>std/regex.nino</code>: Regular expression matcher supporting anchors, wildcards, quantifiers, and character classes (<code>regex_match</code>, <code>regex_search</code>).</li>
+                    <li><code>std/csv.nino</code>: RFC 4180 CSV parser and serializer (<code>csv_row_count</code>, <code>csv_get_cell</code>, <code>csv_build_row3</code>).</li>
+                    <li><code>std/jwt.nino</code>: RFC 7519 JWT (<code>HS256</code>) token signer and verifier backed by RFC 2104 <code>hmac_sha256</code>.</li>
+                    <li><strong>Compile-Time Struct Synthesis &amp; Expression Pipe</strong>: Automatic scalar and nested <code>&lt;Struct&gt;_to_json</code>, <code>&lt;Struct&gt;_from_json</code>, and <code>&lt;Struct&gt;_eq</code> generation, plus expression-level <code>|&gt;</code> chaining, <code>db_query_json</code>, <code>str_split</code>, <code>str_join</code>, and <code>arr_sort</code>.</li>
+                    <li><strong>Higher-Order Inline Lambdas &amp; Native OS Threading</strong>: Zero-overhead <code>arr_map(|x| ...)</code>, <code>arr_filter(|x| ...)</code>, and <code>arr_reduce(init, |acc, x| ...)</code>, plus native multi-core OS threads (<code>thread_spawn</code>, <code>thread_join</code>, <code>cpu_core_count</code>) and dynamic system library FFI (<code>ffi_open_system_lib</code>).</li>
+                    <li><strong>Industrial Reference Pilots (<code>pilots/</code>)</strong>: Reference implementations for FinTech HTTP/1.1 microservices (<code>pilots/ledger_microservice.nino</code>), Industrial IoT Edge gateways (<code>pilots/iot_edge_telemetry.nino</code>), and RFC 9669 64-bit eBPF/XDP packet firewalls (<code>pilots/xdp_packet_firewall.nino</code>).</li>
+                </ul>
+            </section>
+
+            <section class="doc-section" id="self-hosting">
+                <h2>Self-Hosting &amp; Bootstrap Pipeline</h2>
+                <p>Nino features a modular self-hosted native compiler (12 modules under <code>compiler/</code> with <code>compiler/ninoc.nino</code> as entrypoint) supporting standard <code>//</code> and <code>/* ... */</code> comments, parsing Nino source code, verifying invariants with Z3, and emitting freestanding ISO C11 (<code>--backend=gcc</code> / <code>--backend=llvm</code>) or direct PE32+/ELF64 machine code (<code>--backend=native*</code>, <code>ninoc asm</code>) into standalone executables (<code>ninoc.exe</code>).</p>
+                
+                <h3>Reproducible Bootstrap Pipeline</h3>
+                <p>To verify compiler reproducibility and deterministic output, Nino enforces a three-stage fixed-point bootstrap check in CI:</p>
+                
+                <table class="spec-table">
+                    <thead>
+                        <tr>
+                            <th>Stage</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>Stage 1</code></td>
+                            <td>Initial native binary compiled from <code>bootstrap/ninoc_seed.c</code> (<code>stage1.exe</code>).</td>
+                        </tr>
+                        <tr>
+                            <td><code>Stage 2</code></td>
+                            <td>The Stage 1 binary compiles <code>compiler/ninoc.nino</code> into <code>stage2.exe</code>.</td>
+                        </tr>
+                        <tr>
+                            <td><code>Stage 3</code></td>
+                            <td>Stage 2 recompiles <code>compiler/ninoc.nino</code> into <code>stage3.exe</code>. Checksums are verified bit-for-bit: <code>SHA-256(Stage 2) == SHA-256(Stage 3)</code>.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section class="doc-section" id="unikernel">
+                <h2>Micro-VM &amp; Bare-Metal Kernel Target</h2>
+                <p>Nino can target freestanding bare-metal x86 environments (<code>boot/build_kernel.nino</code> and <code>examples/kernel_os.nino</code>) with Multiboot headers and direct VGA/UART hardware output for QEMU micro-VMs:</p>
+                <div class="code-block">ninoc run boot/build_kernel.nino</div>
+            </section>
+
+            <section class="doc-section" id="database">
+                <h2>Database Wire Drivers &amp; One-Call SQL-to-JSON</h2>
+                <p>The standard library module <code>std/db.nino</code> and runtime provide native PostgreSQL v3 TCP wire, hybrid SQLite, and Redis drivers with runtime introspection via <code>db_driver_mode()</code>: <code>db_postgres_connect</code> speaks PostgreSQL v3 wire frames over TCP (<code>native:postgres-wire</code>, StartupMessage, Cleartext/MD5 auth, Query/DataRow/ReadyForQuery) and fails closed (<code>""</code> / <code>-1</code> / <code>"disconnected"</code>) when offline; <code>db_sqlite_open</code> dynamically resolves host <code>sqlite3</code> via <code>LoadLibraryA</code>/<code>dlopen</code> (<code>native:sqlite3</code>) when present or falls back transparently to a dynamically resizable in-memory SQL subset (<code>embedded:sqlite-mem</code>); <code>db_redis_connect</code> performs a 50ms non-blocking RESP-2 TCP probe (<code>native:redis-tcp</code>) with an in-process dict fallback (<code>embedded:redis-mem</code>):</p>
+                <div class="code-block"><span class="kw">let</span> db = <span class="fn">db_sqlite_open</span>(<span class="str">":memory:"</span>)
+<span class="fn">print</span>(<span class="fn">db_driver_mode</span>(db))
+<span class="fn">db_sqlite_exec</span>(db, <span class="str">"CREATE TABLE accounts (id INTEGER, owner TEXT, balance REAL)"</span>)
+<span class="fn">db_sqlite_exec</span>(db, <span class="str">"INSERT INTO accounts VALUES (101, 'Alice', 2500.0)"</span>)
+<span class="kw">let</span> json_rows = <span class="fn">db_query_json</span>(db, <span class="str">"SELECT id, owner, balance FROM accounts WHERE balance &gt; 1000.0"</span>)
+<span class="fn">print</span>(json_rows)</div>
+            </section>
+
+            <section class="doc-section" id="actors">
+                <h2>Dynamic Actor Mailboxes, Supervisors &amp; Async Channels</h2>
+                <p>The modules <code>std/actor.nino</code> and <code>std/channel.nino</code> provide mutex-synchronized dynamically scaling actor registries and resizable circular inbox queues (<code>spawn_actor</code>, <code>actor_send</code>, <code>actor_receive</code>, <code>actor_inbox_len</code>), atomic behavior patching (<code>actor_patch</code>), cooperative fault-recovery dispatch (<code>spawn_supervisor</code>, <code>supervisor_dispatch</code>), and FIFO channels (<code>channel_create</code>, <code>channel_send</code>, <code>channel_recv</code>) alongside native OS threads (<code>thread_spawn</code>):</p>
+                <div class="code-block"><span class="kw">let</span> pid = <span class="fn">spawn_actor</span>(<span class="str">"OrderEngineV1"</span>)
+<span class="fn">actor_send</span>(pid, <span class="str">"TX_101"</span>)
+<span class="fn">print</span>(<span class="fn">actor_receive</span>(pid))
+<span class="fn">actor_patch</span>(pid, <span class="str">"OrderEngineV2"</span>)</div>
+            </section>
+
+            <section class="doc-section" id="consensus">
+                <h2>Distributed Raft Consensus &amp; P2P Gossip Mesh</h2>
+                <p>The modules <code>std/consensus.nino</code> and <code>std/mesh.nino</code> implement quorum leader election, replicated log commitment (<code>raft_create_cluster</code>, <code>raft_elect_leader</code>, <code>raft_propose_entry</code>), and PQC-authenticated peer-to-peer gossip broadcasting (<code>mesh_node_init</code>, <code>mesh_broadcast</code>, <code>mesh_receive</code>):</p>
+                <div class="code-block"><span class="kw">import</span> <span class="str">"std/consensus.nino"</span>
+
+<span class="kw">let</span> nodes = [<span class="str">"node_a"</span>, <span class="str">"node_b"</span>, <span class="str">"node_c"</span>]
+<span class="kw">mut</span> cluster = <span class="fn">raft_create_cluster</span>(nodes, <span class="num">2</span>)
+<span class="kw">let</span> elected = <span class="fn">raft_elect_leader</span>(cluster, <span class="str">"node_a"</span>, <span class="num">1</span>)
+<span class="kw">let</span> committed = <span class="fn">raft_propose_entry</span>(cluster, <span class="str">"EPOCH_01_COMMIT"</span>)</div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        if (window.top !== window.self) {
+            window.top.location = window.self.location;
+        }
+        function applyTheme(t) {
+            var btn = document.getElementById('themeBtn');
+            if (t === 'inkwell') {
+                document.documentElement.setAttribute('data-theme', 'inkwell');
+                if (btn) btn.textContent = 'Warm Stone';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                if (btn) btn.textContent = 'Inkwell';
+            }
+        }
+        function toggleTheme() {
+            var cur = document.documentElement.getAttribute('data-theme');
+            var nxt = cur === 'inkwell' ? 'stone' : 'inkwell';
+            try { localStorage.setItem('nino_editorial_theme', nxt); } catch (e) {}
+            applyTheme(nxt);
+        }
+        try {
+            var saved = localStorage.getItem('nino_editorial_theme');
+            if (saved === 'inkwell') applyTheme('inkwell');
+        } catch (e) {}
+    </script>
+</body>
+</html>

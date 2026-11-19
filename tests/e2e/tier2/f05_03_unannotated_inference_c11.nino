@@ -1,0 +1,26 @@
+struct Item {
+    id: int,
+    price: float
+}
+
+fn make_item(i: int, p: float) -> Item {
+    return Item { id: i, price: p }
+}
+
+fn is_ready(v: int) -> bool {
+    return v > 0
+}
+
+fn main() -> int {
+    let it = make_item(7, 3.5)
+    mut fl = 2.5
+    fl = fl + it.price
+    let ok = is_ready(it.id)
+    let arr = [10, 20, 30]
+    let elem = arr[1]
+    mut cfg = { "env": "prod" }
+    let env_val = cfg["env"]
+    require(it.id == 7 && fl > 5.9 && ok && elem == 20 && env_val == "prod", "unannotated inference C11 check failed")
+    print("T2-F05-03:PASS")
+    return 0
+}

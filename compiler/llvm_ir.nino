@@ -1,0 +1,1387 @@
+// compiler/llvm_ir.nino: Strictly scoped fail-closed AST-to-LLVM-SSA IR synthesizer
+fn llvm_is_arr_type(t: string) -> bool {
+    let tm = trim(t)
+    return tm == "[int]" || tm == "[i64]" || tm == "Array<int>" || tm == "Array<i64>"
+}
+
+fn llvm_is_supported_type(t: string) -> bool {
+    let tm = trim(t)
+    if tm == "" || tm == "void" || tm == "bool" || tm == "i32" || tm == "int32_t" || tm == "u32" || tm == "uint32_t" || tm == "u8" || tm == "byte" || tm == "uint8_t" {
+        return true
+    }
+    if tm == "int" || tm == "i64" || tm == "int64_t" || tm == "u64" || tm == "uint64_t" {
+        return true
+    }
+    if tm == "float" || tm == "f64" || tm == "f32" || tm == "double" {
+        return true
+    }
+    if tm == "string" || tm == "str" || llvm_is_arr_type(tm) {
+        return true
+    }
+    return false
+}
+
+fn llvm_map_type(t: string) -> string {
+    let tm = trim(t)
+    if tm == "void" || tm == "" {
+        return "void"
+    }
+    if tm == "bool" {
+        return "i1"
+    }
+    if tm == "i32" || tm == "int32_t" || tm == "u32" || tm == "uint32_t" {
+        return "i32"
+    }
+    if tm == "u8" || tm == "byte" || tm == "uint8_t" {
+        return "i8"
+    }
+    if tm == "float" || tm == "f64" || tm == "f32" || tm == "double" {
+        return "double"
+    }
+    if tm == "string" || tm == "str" || llvm_is_arr_type(tm) {
+        return "ptr"
+    }
+    return "i64"
+}
+
+fn llvm_escape_cstr(s: string) -> string {
+    mut out = ""
+    let slen = len(s)
+    mut i = 0
+    while i < slen {
+        let ch = char_at(s, i)
+        if ch == "\\" && i + 1 < slen {
+            let nx = char_at(s, i + 1)
+            if nx == "n" {
+                out = out + "\\0A"
+            } else if nx == "r" {
+                out = out + "\\0D"
+            } else if nx == "t" {
+                out = out + "\\09"
+            } else if nx == "\"" {
+                out = out + "\\22"
+            } else if nx == "\\" {
+                out = out + "\\5C"
+            } else {
+                out = out + nx
+            }
+            i = i + 2
+        } else {
+            out = out + ch
+            i = i + 1
+        }
+    }
+    return out + "\\00"
+}
+
+fn llvm_cstr_byte_len(s: string) -> int {
+    mut cnt = 1
+    let slen = len(s)
+    mut i = 0
+    while i < slen {
+        let ch = char_at(s, i)
+        if ch == "\\" && i + 1 < slen {
+            cnt = cnt + 1
+            i = i + 2
+        } else {
+            cnt = cnt + 1
+            i = i + 1
+        }
+    }
+    return cnt
+}
+
+fn llvm_find_top_op(expr: string, op: string) -> int {
+    return find_top_binary_op(expr, op)
+}
+
+fn llvm_is_int_lit(s: string) -> bool {
+    let slen = len(s)
+    if slen == 0 {
+        return false
+    }
+    mut i = 0
+    if char_at(s, 0) == "-" {
+        if slen == 1 {
+            return false
+        }
+        i = 1
+    }
+    while i < slen {
+        let cc = char_code(char_at(s, i))
+        if cc < 48 || cc > 57 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn llvm_emit_i64_operand(expr: string, s_locals: string, mut ir_acc: [string], mut rseq: [int]) -> string {
+    let e = trim(expr)
+    if llvm_is_int_lit(e) {
+        return e
+    }
+    if find_str(s_locals, "|" + e + "|", 0) != -1 {
+        let nr = rseq[0] + 1
+        rseq[0] = nr
+        let reg = "%r" + nr
+        ir_acc[0] = ir_acc[0] + "  " + reg + " = load i64, ptr %" + e + "\n"
+        return reg
+    }
+    return "0"
+}
+
+fn llvm_lower_cond_i1(cond_raw: string, s_locals: string, mut ir_acc: [string], mut rseq: [int]) -> string {
+    mut cs = trim(cond_raw)
+    mut stripping = true
+    while stripping && len(cs) >= 2 && starts_with(cs, "(") && ends_with(cs, ")") {
+        mut pd = 0
+        mut match_end = true
+        for pi in 0..(len(cs) - 1) {
+            let ch = char_at(cs, pi)
+            if ch == "(" { pd = pd + 1 }
+            else if ch == ")" { pd = pd - 1 }
+            if pd == 0 && pi > 0 { match_end = false }
+        }
+        if match_end {
+            cs = trim(slice(cs, 1, len(cs) - 2))
+        } else {
+            stripping = false
+        }
+    }
+    if cs == "true" { return "1" }
+    if cs == "false" { return "0" }
+    let p_or = llvm_find_top_op(cs, "||")
+    if p_or != -1 {
+        let l_r = llvm_lower_cond_i1(slice(cs, 0, p_or), s_locals, ir_acc, rseq)
+        let r_r = llvm_lower_cond_i1(slice(cs, p_or + 2, len(cs) - p_or - 2), s_locals, ir_acc, rseq)
+        let nr = rseq[0] + 1
+        rseq[0] = nr
+        let reg = "%r" + nr
+        ir_acc[0] = ir_acc[0] + "  " + reg + " = or i1 " + l_r + ", " + r_r + "\n"
+        return reg
+    }
+    let p_and = llvm_find_top_op(cs, "&&")
+    if p_and != -1 {
+        let l_r = llvm_lower_cond_i1(slice(cs, 0, p_and), s_locals, ir_acc, rseq)
+        let r_r = llvm_lower_cond_i1(slice(cs, p_and + 2, len(cs) - p_and - 2), s_locals, ir_acc, rseq)
+        let nr = rseq[0] + 1
+        rseq[0] = nr
+        let reg = "%r" + nr
+        ir_acc[0] = ir_acc[0] + "  " + reg + " = and i1 " + l_r + ", " + r_r + "\n"
+        return reg
+    }
+    if starts_with(cs, "!") && starts_with(cs, "!=") == false {
+        let sub_r = llvm_lower_cond_i1(slice(cs, 1, len(cs) - 1), s_locals, ir_acc, rseq)
+        let nr = rseq[0] + 1
+        rseq[0] = nr
+        let reg = "%r" + nr
+        ir_acc[0] = ir_acc[0] + "  " + reg + " = xor i1 " + sub_r + ", true\n"
+        return reg
+    }
+    mut cmp_pos = -1
+    mut cmp_len = 0
+    mut cmp_pred = ""
+    let p_ge = llvm_find_top_op(cs, ">=")
+    let p_le = llvm_find_top_op(cs, "<=")
+    let p_eq = llvm_find_top_op(cs, "==")
+    let p_ne = llvm_find_top_op(cs, "!=")
+    if p_ge != -1 {
+        cmp_pos = p_ge
+        cmp_len = 2
+        cmp_pred = "sge"
+    } else if p_le != -1 {
+        cmp_pos = p_le
+        cmp_len = 2
+        cmp_pred = "sle"
+    } else if p_eq != -1 {
+        cmp_pos = p_eq
+        cmp_len = 2
+        cmp_pred = "eq"
+    } else if p_ne != -1 {
+        cmp_pos = p_ne
+        cmp_len = 2
+        cmp_pred = "ne"
+    } else {
+        let p_gt = llvm_find_top_op(cs, ">")
+        let p_lt = llvm_find_top_op(cs, "<")
+        if p_gt != -1 {
+            cmp_pos = p_gt
+            cmp_len = 1
+            cmp_pred = "sgt"
+        } else if p_lt != -1 {
+            cmp_pos = p_lt
+            cmp_len = 1
+            cmp_pred = "slt"
+        }
+    }
+    if cmp_pos != -1 {
+        let clhs = trim(slice(cs, 0, cmp_pos))
+        let crhs = trim(slice(cs, cmp_pos + cmp_len, len(cs) - cmp_pos - cmp_len))
+        let lv = llvm_emit_i64_operand(clhs, s_locals, ir_acc, rseq)
+        let rv = llvm_emit_i64_operand(crhs, s_locals, ir_acc, rseq)
+        let nr = rseq[0] + 1
+        rseq[0] = nr
+        let reg = "%r" + nr
+        ir_acc[0] = ir_acc[0] + "  " + reg + " = icmp " + cmp_pred + " i64 " + lv + ", " + rv + "\n"
+        return reg
+    }
+    let ov = llvm_emit_i64_operand(cs, s_locals, ir_acc, rseq)
+    let nr = rseq[0] + 1
+    rseq[0] = nr
+    let reg = "%r" + nr
+    ir_acc[0] = ir_acc[0] + "  " + reg + " = icmp ne i64 " + ov + ", 0\n"
+    return reg
+}
+
+fn llvm_lower_ret_expr(rv_s: string, fn_ret: string, s_locals: string, mut ir_acc: [string], mut rseq: [int]) -> string {
+    if fn_ret == "void" {
+        return "  ret void\n"
+    }
+    let e = trim(rv_s)
+    if llvm_is_int_lit(e) {
+        return "  ret " + fn_ret + " " + e + "\n"
+    }
+    mut val_r = ""
+    if find_str(s_locals, "|" + e + "|", 0) != -1 {
+        let nr = rseq[0] + 1
+        rseq[0] = nr
+        val_r = "%r" + nr
+        ir_acc[0] = ir_acc[0] + "  " + val_r + " = load i64, ptr %" + e + "\n"
+    } else if find_char(e, "(", 0) != -1 && ends_with(e, ")") {
+        let c_op = find_char(e, "(", 0)
+        let cname = trim(slice(e, 0, c_op))
+        let cargs = trim(slice(e, c_op + 1, len(e) - c_op - 2))
+        mut ll_args = ""
+        if len(cargs) > 0 {
+            mut ap = 0
+            let al = len(cargs)
+            mut ac = 0
+            while ap < al {
+                let acm = find_top_comma(cargs, ap)
+                mut aitem = ""
+                if acm != -1 {
+                    aitem = trim(slice(cargs, ap, acm - ap))
+                    ap = acm + 1
+                } else {
+                    aitem = trim(slice(cargs, ap, al - ap))
+                    ap = al
+                }
+                if ac > 0 {
+                    ll_args = ll_args + ", "
+                }
+                let av = llvm_emit_i64_operand(aitem, s_locals, ir_acc, rseq)
+                ll_args = ll_args + "i64 " + av
+                ac = ac + 1
+            }
+        }
+        let nr = rseq[0] + 1
+        rseq[0] = nr
+        val_r = "%r" + nr
+        ir_acc[0] = ir_acc[0] + "  " + val_r + " = call i64 @" + cname + "(" + ll_args + ")\n"
+    } else {
+        let op_add = llvm_find_top_op(e, "+")
+        let op_sub = llvm_find_top_op(e, "-")
+        let op_mul = llvm_find_top_op(e, "*")
+        if op_add > 0 || op_sub > 0 || op_mul > 0 {
+            mut op_i = op_add
+            mut ll_op = "add nsw"
+            if op_sub > op_i {
+                op_i = op_sub
+                ll_op = "sub nsw"
+            }
+            if op_i <= 0 && op_mul > 0 {
+                op_i = op_mul
+                ll_op = "mul nsw"
+            }
+            let lv = llvm_emit_i64_operand(slice(e, 0, op_i), s_locals, ir_acc, rseq)
+            let rv = llvm_emit_i64_operand(slice(e, op_i + 1, len(e) - op_i - 1), s_locals, ir_acc, rseq)
+            let nr = rseq[0] + 1
+            rseq[0] = nr
+            val_r = "%r" + nr
+            ir_acc[0] = ir_acc[0] + "  " + val_r + " = " + ll_op + " i64 " + lv + ", " + rv + "\n"
+        }
+    }
+    if len(val_r) == 0 {
+        return "  ret " + fn_ret + " 0\n"
+    }
+    if fn_ret == "i32" {
+        let nt = rseq[0] + 1
+        rseq[0] = nt
+        let r_t = "%r" + nt
+        ir_acc[0] = ir_acc[0] + "  " + r_t + " = trunc i64 " + val_r + " to i32\n"
+        return "  ret i32 " + r_t + "\n"
+    }
+    return "  ret " + fn_ret + " " + val_r + "\n"
+}
+
+fn llvm_invalidate_vec_top(sk: string) -> string {
+    let n = len(sk)
+    mut p = -1
+    if starts_with(sk, "FOR:") { p = 0 }
+    mut scan = 0
+    while scan < n {
+        let np = find_str(sk, "\nFOR:", scan)
+        if np == -1 {
+            scan = n
+        } else {
+            p = np + 1
+            scan = np + 5
+        }
+    }
+    if p == -1 {
+        return sk
+    }
+    mut en = find_char(sk, "\n", p)
+    if en == -1 {
+        en = n
+    }
+    let frm = slice(sk, p, en - p)
+    if ends_with(frm, ":1") {
+        return slice(sk, 0, p) + slice(frm, 0, len(frm) - 2) + ":0" + slice(sk, en, n - en)
+    }
+    return sk
+}
+
+struct LlvmState {
+    mut globals: string,
+    mut str_seq: int,
+    mut defs: string,
+    mut fn_ret_map: string,
+    mut fn_arity_map: string,
+    mut ext_decls: string,
+    mut ext_seen: string,
+    mut cur_ret: string,
+    mut entry_allocas: string,
+    mut body_ir: string,
+    mut reg_seq: int,
+    mut lbl_seq: int,
+    mut blk_open: bool,
+    mut var_map: string,
+    mut arr_vars: string,
+    mut alloca_seen: string,
+    mut slot_seq: int,
+    mut brk_lbls: [string],
+    mut cnt_lbls: [string],
+    mut has_error: bool,
+    mut err_msg: string
+}
+
+fn llvm_fail(mut ll: LlvmState, line_no: int, msg: string) {
+    if ll.has_error == false {
+        ll.has_error = true
+        ll.err_msg = msg + " (line " + int_to_str(line_no) + ")"
+    }
+}
+
+fn llvm_kv_get(tbl: string, key: string) -> string {
+    let pat = "|" + key + "="
+    let p = find_str(tbl, pat, 0)
+    if p == -1 { return "" }
+    let vs = p + len(pat)
+    let bar = find_char(tbl, "|", vs)
+    if bar == -1 { return "" }
+    return slice(tbl, vs, bar - vs)
+}
+
+fn llvm_kv_set(tbl: string, key: string, val: string) -> string {
+    let pat = "|" + key + "="
+    let p = find_str(tbl, pat, 0)
+    if p == -1 {
+        return tbl + key + "=" + val + "|"
+    }
+    let bar = find_char(tbl, "|", p + 1)
+    if bar == -1 { return tbl }
+    return slice(tbl, 0, p) + "|" + key + "=" + val + slice(tbl, bar, len(tbl) - bar)
+}
+
+fn llvm_zero_val(ty: string) -> string {
+    if ty == "ptr" { return "null" }
+    if ty == "double" { return "0.0" }
+    return "0"
+}
+
+fn llvm_int_lit_dec(raw_s: string) -> string {
+    let s = replace_str(trim(raw_s), "_", "")
+    if starts_with(s, "0x") || starts_with(s, "0X") {
+        mut hv = 0
+        for i in 2..len(s) {
+            let nib = m3_hex_nib_val(char_at(s, i))
+            if nib < 0 { return "0" }
+            hv = hv * 16 + nib
+        }
+        return int_to_str(hv)
+    }
+    if len(s) == 0 { return "0" }
+    return s
+}
+
+fn llvm_intern_str(raw_tok: string, mut ll: LlvmState) -> string {
+    mut raw_s = raw_tok
+    if len(raw_s) >= 2 && starts_with(raw_s, "\"") && ends_with(raw_s, "\"") {
+        raw_s = slice(raw_s, 1, len(raw_s) - 2)
+    }
+    let esc_s = llvm_escape_cstr(raw_s)
+    let blen = llvm_cstr_byte_len(raw_s)
+    ll.str_seq = ll.str_seq + 1
+    let gn = "@.str." + int_to_str(ll.str_seq)
+    ll.globals = ll.globals + gn + " = private unnamed_addr constant [" + int_to_str(blen) + " x i8] c\"" + esc_s + "\", align 1\n"
+    return gn
+}
+
+fn llvm_alloc_local_slot(mut ll: LlvmState, name: string, ty: string) -> string {
+    ll.slot_seq = ll.slot_seq + 1
+    let slot = "%lv." + name + "." + int_to_str(ll.slot_seq)
+    ll.entry_allocas = ll.entry_allocas + "  " + slot + " = alloca " + ty + "\n"
+    ll.entry_allocas = ll.entry_allocas + "  store " + ty + " " + llvm_zero_val(ty) + ", ptr " + slot + "\n"
+    ll.var_map = llvm_kv_set(ll.var_map, name, slot + ":" + ty)
+    return slot
+}
+
+fn llvm_var_slot(ll: LlvmState, name: string) -> string {
+    let v = llvm_kv_get(ll.var_map, name)
+    let col = find_char(v, ":", 0)
+    if col == -1 { return "" }
+    return slice(v, 0, col)
+}
+
+fn llvm_var_ty(ll: LlvmState, name: string) -> string {
+    let v = llvm_kv_get(ll.var_map, name)
+    let col = find_char(v, ":", 0)
+    if col == -1 { return "i64" }
+    return slice(v, col + 1, len(v) - col - 1)
+}
+
+fn llvm_coerce_val(mut ll: LlvmState, val: string, from_ty: string, to_ty: string) -> string {
+    if from_ty == to_ty { return val }
+    if to_ty == "i1" {
+        if from_ty == "double" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = fcmp one double " + val + ", 0.0\n"
+            return r
+        }
+        if from_ty == "ptr" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = icmp ne ptr " + val + ", null\n"
+            return r
+        }
+        ll.reg_seq = ll.reg_seq + 1
+        let r = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + r + " = icmp ne " + from_ty + " " + val + ", 0\n"
+        return r
+    }
+    if to_ty == "i64" {
+        if from_ty == "i1" || from_ty == "i8" || from_ty == "i32" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            let ext_op = (from_ty == "i1" || from_ty == "i8") ? "zext" : "sext"
+            ll.body_ir = ll.body_ir + "  " + r + " = " + ext_op + " " + from_ty + " " + val + " to i64\n"
+            return r
+        }
+        if from_ty == "double" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = fptosi double " + val + " to i64\n"
+            return r
+        }
+        if from_ty == "ptr" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = ptrtoint ptr " + val + " to i64\n"
+            return r
+        }
+    }
+    if to_ty == "i32" {
+        if from_ty == "i64" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = trunc i64 " + val + " to i32\n"
+            return r
+        }
+        if from_ty == "i1" || from_ty == "i8" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = zext " + from_ty + " " + val + " to i32\n"
+            return r
+        }
+    }
+    if to_ty == "double" {
+        let iv = llvm_coerce_val(ll, val, from_ty, "i64")
+        ll.reg_seq = ll.reg_seq + 1
+        let r = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + r + " = sitofp i64 " + iv + " to double\n"
+        return r
+    }
+    if to_ty == "ptr" && from_ty != "ptr" {
+        let iv = llvm_coerce_val(ll, val, from_ty, "i64")
+        ll.reg_seq = ll.reg_seq + 1
+        let r = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + r + " = inttoptr i64 " + iv + " to ptr\n"
+        return r
+    }
+    return llvm_zero_val(to_ty)
+}
+
+fn llvm_ast_infer_expr_ty(pool: AstPool, nid: int, ll: LlvmState) -> string {
+    if nid < 0 || nid >= len(pool.nodes) { return "i64" }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INT_LIT() { return "i64" }
+    if nd.kind == NK_FLOAT_LIT() { return "double" }
+    if nd.kind == NK_BOOL_LIT() { return "i1" }
+    if nd.kind == NK_STR_LIT() || nd.kind == NK_NIL_LIT() || nd.kind == NK_ARRAY_LIT() || nd.kind == NK_DICT_LIT() { return "ptr" }
+    if nd.kind == NK_IDENT() {
+        let v = llvm_kv_get(ll.var_map, nd.name)
+        if len(v) > 0 { return llvm_var_ty(ll, nd.name) }
+        return "i64"
+    }
+    if nd.kind == NK_UNARY_OP() {
+        if nd.op == "!" || nd.op == "not" { return "i1" }
+        return llvm_ast_infer_expr_ty(pool, nd.left, ll)
+    }
+    if nd.kind == NK_BIN_OP() {
+        if nd.op == "==" || nd.op == "!=" || nd.op == "<" || nd.op == "<=" || nd.op == ">" || nd.op == ">=" || nd.op == "&&" || nd.op == "||" || nd.op == "and" || nd.op == "or" {
+            return "i1"
+        }
+        let lt = llvm_ast_infer_expr_ty(pool, nd.left, ll)
+        let rt = llvm_ast_infer_expr_ty(pool, nd.right, ll)
+        if lt == "double" || rt == "double" { return "double" }
+        return "i64"
+    }
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind == NK_IDENT() {
+            let fr = llvm_kv_get(ll.fn_ret_map, cal.name)
+            if len(fr) > 0 { return fr }
+        }
+    }
+    return "i64"
+}
+
+fn llvm_ast_lower_expr(pool: AstPool, nid: int, mut ll: LlvmState, mut ty_out: [string]) -> string {
+    if ll.has_error || nid < 0 || nid >= len(pool.nodes) {
+        ty_out[0] = "i64"
+        return "0"
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INT_LIT() {
+        ty_out[0] = "i64"
+        return llvm_int_lit_dec(nd.str_val)
+    }
+    if nd.kind == NK_FLOAT_LIT() {
+        ty_out[0] = "double"
+        return nd.str_val
+    }
+    if nd.kind == NK_BOOL_LIT() {
+        ty_out[0] = "i1"
+        return (nd.str_val == "true") ? "1" : "0"
+    }
+    if nd.kind == NK_STR_LIT() {
+        ty_out[0] = "ptr"
+        return llvm_intern_str(nd.str_val, ll)
+    }
+    if nd.kind == NK_IDENT() {
+        let slot = llvm_var_slot(ll, nd.name)
+        if len(slot) == 0 {
+            llvm_fail(ll, nd.line, "Undeclared or unsupported identifier '" + nd.name + "' in direct LLVM SSA subset")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        let vt = llvm_var_ty(ll, nd.name)
+        ll.reg_seq = ll.reg_seq + 1
+        let r = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + r + " = load " + vt + ", ptr " + slot + "\n"
+        ty_out[0] = vt
+        return r
+    }
+    if nd.kind == NK_UNARY_OP() {
+        mut sub_t: [string] = ["i64"]
+        let sv = llvm_ast_lower_expr(pool, nd.left, ll, sub_t)
+        if ll.has_error { ty_out[0] = "i64"; return "0" }
+        if nd.op == "!" || nd.op == "not" {
+            let b = llvm_coerce_val(ll, sv, sub_t[0], "i1")
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = xor i1 " + b + ", true\n"
+            ty_out[0] = "i1"
+            return r
+        }
+        if nd.op == "-" {
+            if sub_t[0] == "ptr" {
+                llvm_fail(ll, nd.line, "Unary '-' cannot be applied to pointer/string in direct LLVM SSA subset")
+                ty_out[0] = "i64"
+                return "0"
+            }
+            if sub_t[0] == "double" {
+                ll.reg_seq = ll.reg_seq + 1
+                let r = "%r" + int_to_str(ll.reg_seq)
+                ll.body_ir = ll.body_ir + "  " + r + " = fneg double " + sv + "\n"
+                ty_out[0] = "double"
+                return r
+            }
+            let iv = llvm_coerce_val(ll, sv, sub_t[0], "i64")
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = sub nsw i64 0, " + iv + "\n"
+            ty_out[0] = "i64"
+            return r
+        }
+        if nd.op == "~" {
+            if sub_t[0] == "ptr" || sub_t[0] == "double" {
+                llvm_fail(ll, nd.line, "Bitwise '~' requires integer operand in direct LLVM SSA subset")
+                ty_out[0] = "i64"
+                return "0"
+            }
+            let iv = llvm_coerce_val(ll, sv, sub_t[0], "i64")
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = xor i64 " + iv + ", -1\n"
+            ty_out[0] = "i64"
+            return r
+        }
+        llvm_fail(ll, nd.line, "Unary operator '" + nd.op + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+        ty_out[0] = "i64"
+        return "0"
+    }
+    if nd.kind == NK_BIN_OP() {
+        if nd.op == "&&" || nd.op == "and" || nd.op == "||" || nd.op == "or" {
+            let is_and = (nd.op == "&&" || nd.op == "and")
+            ll.slot_seq = ll.slot_seq + 1
+            let sc_slot = "%sc." + int_to_str(ll.slot_seq)
+            ll.entry_allocas = ll.entry_allocas + "  " + sc_slot + " = alloca i1\n  store i1 false, ptr " + sc_slot + "\n"
+            mut lt_b: [string] = ["i64"]
+            let lv = llvm_ast_lower_expr(pool, nd.left, ll, lt_b)
+            if ll.has_error { ty_out[0] = "i1"; return "false" }
+            if lt_b[0] == "ptr" {
+                llvm_fail(ll, nd.line, "String/pointer binary operation '" + nd.op + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+                ty_out[0] = "i64"
+                return "0"
+            }
+            let lb_v = llvm_coerce_val(ll, lv, lt_b[0], "i1")
+            ll.lbl_seq = ll.lbl_seq + 1
+            let sid = int_to_str(ll.lbl_seq)
+            let rhs_lbl = "sc.rhs." + sid
+            let end_lbl = "sc.end." + sid
+            if ll.blk_open {
+                ll.body_ir = ll.body_ir + "  store i1 " + lb_v + ", ptr " + sc_slot + "\n"
+                if is_and {
+                    ll.body_ir = ll.body_ir + "  br i1 " + lb_v + ", label %" + rhs_lbl + ", label %" + end_lbl + "\n"
+                } else {
+                    ll.body_ir = ll.body_ir + "  br i1 " + lb_v + ", label %" + end_lbl + ", label %" + rhs_lbl + "\n"
+                }
+            }
+            ll.body_ir = ll.body_ir + rhs_lbl + ":\n"
+            ll.blk_open = true
+            mut rt_b: [string] = ["i64"]
+            let rv = llvm_ast_lower_expr(pool, nd.right, ll, rt_b)
+            if ll.has_error { ty_out[0] = "i1"; return "false" }
+            if rt_b[0] == "ptr" {
+                llvm_fail(ll, nd.line, "String/pointer binary operation '" + nd.op + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+                ty_out[0] = "i64"
+                return "0"
+            }
+            let rb_v = llvm_coerce_val(ll, rv, rt_b[0], "i1")
+            if ll.blk_open {
+                ll.body_ir = ll.body_ir + "  store i1 " + rb_v + ", ptr " + sc_slot + "\n"
+                ll.body_ir = ll.body_ir + "  br label %" + end_lbl + "\n"
+            }
+            ll.body_ir = ll.body_ir + end_lbl + ":\n"
+            ll.blk_open = true
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = load i1, ptr " + sc_slot + "\n"
+            ty_out[0] = "i1"
+            return r
+        }
+        mut lt_b: [string] = ["i64"]
+        mut rt_b: [string] = ["i64"]
+        let lv = llvm_ast_lower_expr(pool, nd.left, ll, lt_b)
+        let rv = llvm_ast_lower_expr(pool, nd.right, ll, rt_b)
+        if ll.has_error { ty_out[0] = "i64"; return "0" }
+        if lt_b[0] == "ptr" || rt_b[0] == "ptr" {
+            llvm_fail(ll, nd.line, "String/pointer binary operation '" + nd.op + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        let use_fp = (lt_b[0] == "double" || rt_b[0] == "double")
+        if nd.op == "==" || nd.op == "!=" || nd.op == "<" || nd.op == "<=" || nd.op == ">" || nd.op == ">=" {
+            if use_fp {
+                let lf = llvm_coerce_val(ll, lv, lt_b[0], "double")
+                let rf = llvm_coerce_val(ll, rv, rt_b[0], "double")
+                mut fc = "oeq"
+                if nd.op == "!=" { fc = "one" }
+                else if nd.op == "<" { fc = "olt" }
+                else if nd.op == "<=" { fc = "ole" }
+                else if nd.op == ">" { fc = "ogt" }
+                else if nd.op == ">=" { fc = "oge" }
+                ll.reg_seq = ll.reg_seq + 1
+                let r = "%r" + int_to_str(ll.reg_seq)
+                ll.body_ir = ll.body_ir + "  " + r + " = fcmp " + fc + " double " + lf + ", " + rf + "\n"
+                ty_out[0] = "i1"
+                return r
+            }
+            let li = llvm_coerce_val(ll, lv, lt_b[0], "i64")
+            let ri = llvm_coerce_val(ll, rv, rt_b[0], "i64")
+            mut ic = "eq"
+            if nd.op == "!=" { ic = "ne" }
+            else if nd.op == "<" { ic = "slt" }
+            else if nd.op == "<=" { ic = "sle" }
+            else if nd.op == ">" { ic = "sgt" }
+            else if nd.op == ">=" { ic = "sge" }
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = icmp " + ic + " i64 " + li + ", " + ri + "\n"
+            ty_out[0] = "i1"
+            return r
+        }
+        if use_fp {
+            if nd.op != "+" && nd.op != "-" && nd.op != "*" && nd.op != "/" {
+                llvm_fail(ll, nd.line, "Floating-point operator '" + nd.op + "' is unsupported in direct LLVM SSA subset")
+                ty_out[0] = "double"
+                return "0.0"
+            }
+            let lf = llvm_coerce_val(ll, lv, lt_b[0], "double")
+            let rf = llvm_coerce_val(ll, rv, rt_b[0], "double")
+            mut fop = "fadd"
+            if nd.op == "-" { fop = "fsub" }
+            else if nd.op == "*" { fop = "fmul" }
+            else if nd.op == "/" { fop = "fdiv" }
+            ll.reg_seq = ll.reg_seq + 1
+            let r = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r + " = " + fop + " double " + lf + ", " + rf + "\n"
+            ty_out[0] = "double"
+            return r
+        }
+        let li = llvm_coerce_val(ll, lv, lt_b[0], "i64")
+        let ri = llvm_coerce_val(ll, rv, rt_b[0], "i64")
+        if nd.op == "/" || nd.op == "%" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r_nz = "%r" + int_to_str(ll.reg_seq)
+            let g_div0 = llvm_intern_str("Division by zero", ll)
+            ll.body_ir = ll.body_ir + "  " + r_nz + " = icmp ne i64 " + ri + ", 0\n"
+            ll.body_ir = ll.body_ir + "  call void @nino_require(i1 " + r_nz + ", ptr " + g_div0 + ")\n"
+            ll.reg_seq = ll.reg_seq + 1
+            let r_min = "%r" + int_to_str(ll.reg_seq)
+            ll.reg_seq = ll.reg_seq + 1
+            let r_m1 = "%r" + int_to_str(ll.reg_seq)
+            ll.reg_seq = ll.reg_seq + 1
+            let r_ovf = "%r" + int_to_str(ll.reg_seq)
+            ll.reg_seq = ll.reg_seq + 1
+            let r_safe = "%r" + int_to_str(ll.reg_seq)
+            let g_ovf = llvm_intern_str("Signed integer division overflow (INT64_MIN / -1)", ll)
+            ll.body_ir = ll.body_ir + "  " + r_min + " = icmp eq i64 " + li + ", -9223372036854775808\n"
+            ll.body_ir = ll.body_ir + "  " + r_m1 + " = icmp eq i64 " + ri + ", -1\n"
+            ll.body_ir = ll.body_ir + "  " + r_ovf + " = and i1 " + r_min + ", " + r_m1 + "\n"
+            ll.body_ir = ll.body_ir + "  " + r_safe + " = xor i1 " + r_ovf + ", true\n"
+            ll.body_ir = ll.body_ir + "  call void @nino_require(i1 " + r_safe + ", ptr " + g_ovf + ")\n"
+        }
+        mut iop = ""
+        if nd.op == "+" { iop = "add nsw" }
+        else if nd.op == "-" { iop = "sub nsw" }
+        else if nd.op == "*" { iop = "mul nsw" }
+        else if nd.op == "/" { iop = "sdiv" }
+        else if nd.op == "%" { iop = "srem" }
+        else if nd.op == "&" { iop = "and" }
+        else if nd.op == "|" { iop = "or" }
+        else if nd.op == "^" { iop = "xor" }
+        else if nd.op == "<<" { iop = "shl" }
+        else if nd.op == ">>" { iop = "ashr" }
+        else {
+            llvm_fail(ll, nd.line, "Binary operator '" + nd.op + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        ll.reg_seq = ll.reg_seq + 1
+        let r = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + r + " = " + iop + " i64 " + li + ", " + ri + "\n"
+        ty_out[0] = "i64"
+        return r
+    }
+    if nd.kind == NK_INDEX() {
+        if nd.left < 0 || nd.left >= len(pool.nodes) || pool.nodes[nd.left].kind != NK_IDENT() || find_str(ll.arr_vars, "|" + pool.nodes[nd.left].name + "|", 0) == -1 {
+            llvm_fail(ll, nd.line, "Indexing target must be a typed integer slice '[int]' parameter in direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        mut at_b: [string] = ["ptr"]
+        mut it_b: [string] = ["i64"]
+        let av = llvm_ast_lower_expr(pool, nd.left, ll, at_b)
+        let iv = llvm_ast_lower_expr(pool, nd.right, ll, it_b)
+        if ll.has_error || it_b[0] == "ptr" {
+            llvm_fail(ll, nd.line, "Array index must be an integer expression in direct LLVM SSA subset")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        let ap = llvm_coerce_val(ll, av, at_b[0], "ptr")
+        let ii = llvm_coerce_val(ll, iv, it_b[0], "i64")
+        ll.reg_seq = ll.reg_seq + 1
+        let gp = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + gp + " = getelementptr inbounds i64, ptr " + ap + ", i64 " + ii + "\n"
+        ll.reg_seq = ll.reg_seq + 1
+        let rv = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + rv + " = load i64, ptr " + gp + "\n"
+        ty_out[0] = "i64"
+        return rv
+    }
+    if nd.kind == NK_TERNARY() {
+        mut ct_b: [string] = ["i1"]
+        let cv = llvm_ast_lower_expr(pool, nd.left, ll, ct_b)
+        let ci1 = llvm_coerce_val(ll, cv, ct_b[0], "i1")
+        mut tt_b: [string] = ["i64"]
+        mut et_b: [string] = ["i64"]
+        let tv = llvm_ast_lower_expr(pool, nd.right, ll, tt_b)
+        let ev = llvm_ast_lower_expr(pool, nd.extra, ll, et_b)
+        if ll.has_error { ty_out[0] = "i64"; return "0" }
+        if (tt_b[0] == "ptr") != (et_b[0] == "ptr") {
+            llvm_fail(ll, nd.line, "Ternary arms must have compatible types in direct LLVM SSA subset")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        let ev_c = llvm_coerce_val(ll, ev, et_b[0], tt_b[0])
+        ll.reg_seq = ll.reg_seq + 1
+        let r = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + r + " = select i1 " + ci1 + ", " + tt_b[0] + " " + tv + ", " + tt_b[0] + " " + ev_c + "\n"
+        ty_out[0] = tt_b[0]
+        return r
+    }
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind != NK_IDENT() {
+            llvm_fail(ll, nd.line, "Indirect/method call is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        let cname = cal.name
+        if cname == "print" && nd.child_count >= 1 {
+            for pi in 0..nd.child_count {
+                let paid = pool.children[nd.child_start + pi]
+                if paid >= 0 && paid < len(pool.nodes) && pool.nodes[paid].kind == NK_IDENT() && find_str(ll.arr_vars, "|" + pool.nodes[paid].name + "|", 0) != -1 {
+                    llvm_fail(ll, nd.line, "Printing slice/array directly is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+                    ty_out[0] = "void"
+                    return "0"
+                }
+                mut pt_b: [string] = ["i64"]
+                let pv = llvm_ast_lower_expr(pool, paid, ll, pt_b)
+                if ll.has_error { ty_out[0] = "void"; return "0" }
+                if pt_b[0] == "ptr" {
+                    ll.body_ir = ll.body_ir + "  call void @nino_print_str(ptr " + pv + ")\n"
+                } else {
+                    let piv = llvm_coerce_val(ll, pv, pt_b[0], "i64")
+                    ll.body_ir = ll.body_ir + "  call void @nino_print_int(i64 " + piv + ")\n"
+                }
+            }
+            ty_out[0] = "void"
+            return "0"
+        }
+        if cname == "exit" && nd.child_count == 1 {
+            mut at_e: [string] = ["i64"]
+            let av_e = llvm_ast_lower_expr(pool, pool.children[nd.child_start], ll, at_e)
+            if ll.has_error { ty_out[0] = "void"; return "0" }
+            let e64 = llvm_coerce_val(ll, av_e, at_e[0], "i64")
+            ll.reg_seq = ll.reg_seq + 1
+            let e32 = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + e32 + " = trunc i64 " + e64 + " to i32\n  call void @exit(i32 " + e32 + ")\n  unreachable\n"
+            ll.blk_open = false
+            ty_out[0] = "void"
+            return "0"
+        }
+        let ret_t = llvm_kv_get(ll.fn_ret_map, cname)
+        if len(ret_t) == 0 {
+            llvm_fail(ll, nd.line, "Call to runtime/stdlib/external function '" + cname + "()' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        let ar_s = llvm_kv_get(ll.fn_arity_map, cname)
+        if len(ar_s) > 0 && nd.child_count != parse_int(ar_s) {
+            llvm_fail(ll, nd.line, "Function '" + cname + "' expects " + ar_s + " argument(s)")
+            ty_out[0] = "i64"
+            return "0"
+        }
+        mut ll_args = ""
+        for ai in 0..nd.child_count {
+            mut at_b: [string] = ["i64"]
+            let av = llvm_ast_lower_expr(pool, pool.children[nd.child_start + ai], ll, at_b)
+            if ll.has_error { ty_out[0] = "i64"; return "0" }
+            if ai > 0 {
+                ll_args = ll_args + ", "
+            }
+            ll_args = ll_args + at_b[0] + " " + av
+        }
+        if ret_t == "void" {
+            ll.body_ir = ll.body_ir + "  call void @" + cname + "(" + ll_args + ")\n"
+            ty_out[0] = "void"
+            return "0"
+        }
+        ll.reg_seq = ll.reg_seq + 1
+        let rc = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + rc + " = call " + ret_t + " @" + cname + "(" + ll_args + ")\n"
+        ty_out[0] = ret_t
+        return rc
+    }
+    llvm_fail(ll, nd.line, "Unsupported expression construct (AST#" + int_to_str(nd.kind) + ") in direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+    ty_out[0] = "i64"
+    return "0"
+}
+
+fn llvm_ast_has_branch_or_call(pool: AstPool, nid: int) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) { return false }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_IF_STMT() || nd.kind == NK_WHILE_STMT() || nd.kind == NK_FOR_RANGE() || nd.kind == NK_FOR_IN() || nd.kind == NK_MATCH_STMT() || nd.kind == NK_BREAK_STMT() || nd.kind == NK_CONTINUE_STMT() || nd.kind == NK_RETURN_STMT() || nd.kind == NK_CALL() {
+        return true
+    }
+    if nd.left != -1 && llvm_ast_has_branch_or_call(pool, nd.left) { return true }
+    if nd.right != -1 && llvm_ast_has_branch_or_call(pool, nd.right) { return true }
+    if nd.extra != -1 && llvm_ast_has_branch_or_call(pool, nd.extra) { return true }
+    for ci in 0..nd.child_count {
+        if llvm_ast_has_branch_or_call(pool, pool.children[nd.child_start + ci]) { return true }
+    }
+    return false
+}
+
+fn llvm_ast_lower_stmt(pool: AstPool, nid: int, mut ll: LlvmState) {
+    if ll.has_error || nid < 0 || nid >= len(pool.nodes) { return }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_BLOCK() {
+        let saved_vmap = ll.var_map
+        let saved_avars = ll.arr_vars
+        for ci in 0..nd.child_count {
+            if ll.blk_open && ll.has_error == false {
+                llvm_ast_lower_stmt(pool, pool.children[nd.child_start + ci], ll)
+            }
+        }
+        ll.var_map = saved_vmap
+        ll.arr_vars = saved_avars
+        return
+    }
+    if nd.kind == NK_LET_STMT() {
+        mut decl_ty = ""
+        mut is_arr_bind = false
+        if len(trim(nd.type_ann)) > 0 {
+            if llvm_is_supported_type(nd.type_ann) == false {
+                llvm_fail(ll, nd.line, "Type '" + nd.type_ann + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+                return
+            }
+            decl_ty = llvm_map_type(nd.type_ann)
+            if llvm_is_arr_type(nd.type_ann) { is_arr_bind = true }
+        } else {
+            decl_ty = llvm_ast_infer_expr_ty(pool, nd.left, ll)
+            if nd.left >= 0 && nd.left < len(pool.nodes) && pool.nodes[nd.left].kind == NK_IDENT() && find_str(ll.arr_vars, "|" + pool.nodes[nd.left].name + "|", 0) != -1 {
+                is_arr_bind = true
+            }
+        }
+        if decl_ty == "void" || len(decl_ty) == 0 {
+            llvm_fail(ll, nd.line, "Cannot bind void expression to variable '" + nd.name + "'")
+            return
+        }
+        if is_arr_bind && find_str(ll.arr_vars, "|" + nd.name + "|", 0) == -1 {
+            ll.arr_vars = ll.arr_vars + nd.name + "|"
+        }
+        let slot = llvm_alloc_local_slot(ll, nd.name, decl_ty)
+        if ll.blk_open && nd.left != -1 {
+            mut rt_b: [string] = [decl_ty]
+            let rv = llvm_ast_lower_expr(pool, nd.left, ll, rt_b)
+            if ll.has_error { return }
+            if rt_b[0] == "void" || (rt_b[0] == "ptr") != (decl_ty == "ptr") {
+                llvm_fail(ll, nd.line, "Type mismatch initializing '" + nd.name + "' in direct LLVM SSA subset")
+                return
+            }
+            let cv = llvm_coerce_val(ll, rv, rt_b[0], decl_ty)
+            ll.body_ir = ll.body_ir + "  store " + decl_ty + " " + cv + ", ptr " + slot + "\n"
+        }
+        return
+    }
+    if nd.kind == NK_ASSIGN_STMT() {
+        if ll.blk_open == false { return }
+        if nd.op != "=" {
+            llvm_fail(ll, nd.line, "Compound assignment '" + nd.op + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+            return
+        }
+        let l_nd: AstNode = pool.nodes[nd.left]
+        if l_nd.kind == NK_IDENT() {
+            let slot = llvm_var_slot(ll, l_nd.name)
+            if len(slot) == 0 {
+                llvm_fail(ll, nd.line, "Assignment to undeclared variable '" + l_nd.name + "'")
+                return
+            }
+            let sty = llvm_var_ty(ll, l_nd.name)
+            mut rt_b: [string] = [sty]
+            let rv = llvm_ast_lower_expr(pool, nd.right, ll, rt_b)
+            if ll.has_error { return }
+            if rt_b[0] == "void" || (rt_b[0] == "ptr") != (sty == "ptr") {
+                llvm_fail(ll, nd.line, "Incompatible assignment to '" + l_nd.name + "' in direct LLVM SSA subset")
+                return
+            }
+            let cv = llvm_coerce_val(ll, rv, rt_b[0], sty)
+            ll.body_ir = ll.body_ir + "  store " + sty + " " + cv + ", ptr " + slot + "\n"
+            return
+        }
+        if l_nd.kind == NK_INDEX() {
+            if l_nd.left < 0 || l_nd.left >= len(pool.nodes) || pool.nodes[l_nd.left].kind != NK_IDENT() || find_str(ll.arr_vars, "|" + pool.nodes[l_nd.left].name + "|", 0) == -1 {
+                llvm_fail(ll, nd.line, "Indexed assignment target must be a typed integer slice '[int]' parameter in direct LLVM SSA subset")
+                return
+            }
+            mut at_b: [string] = ["ptr"]
+            mut it_b: [string] = ["i64"]
+            mut rt_b: [string] = ["i64"]
+            let av = llvm_ast_lower_expr(pool, l_nd.left, ll, at_b)
+            let iv = llvm_ast_lower_expr(pool, l_nd.right, ll, it_b)
+            let rv = llvm_ast_lower_expr(pool, nd.right, ll, rt_b)
+            if ll.has_error { return }
+            if it_b[0] == "ptr" || rt_b[0] == "ptr" || rt_b[0] == "void" {
+                llvm_fail(ll, nd.line, "Indexed assignment requires integer index and scalar value in direct LLVM SSA subset")
+                return
+            }
+            let ap = llvm_coerce_val(ll, av, at_b[0], "ptr")
+            let ii = llvm_coerce_val(ll, iv, it_b[0], "i64")
+            let r64 = llvm_coerce_val(ll, rv, rt_b[0], "i64")
+            ll.reg_seq = ll.reg_seq + 1
+            let gp = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + gp + " = getelementptr inbounds i64, ptr " + ap + ", i64 " + ii + "\n"
+            ll.body_ir = ll.body_ir + "  store i64 " + r64 + ", ptr " + gp + "\n"
+            return
+        }
+        llvm_fail(ll, nd.line, "Unsupported assignment target in direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+        return
+    }
+    if nd.kind == NK_EXPR_STMT() {
+        if ll.blk_open && nd.left != -1 {
+            mut et_b: [string] = ["i64"]
+            llvm_ast_lower_expr(pool, nd.left, ll, et_b)
+        }
+        return
+    }
+    if nd.kind == NK_RETURN_STMT() {
+        if ll.blk_open == false { return }
+        if ll.cur_ret == "void" {
+            ll.body_ir = ll.body_ir + "  ret void\n"
+            ll.blk_open = false
+            return
+        }
+        if nd.left == -1 {
+            ll.body_ir = ll.body_ir + "  ret " + ll.cur_ret + " " + llvm_zero_val(ll.cur_ret) + "\n"
+            ll.blk_open = false
+            return
+        }
+        mut rt_b: [string] = [ll.cur_ret]
+        let rv = llvm_ast_lower_expr(pool, nd.left, ll, rt_b)
+        let cv = llvm_coerce_val(ll, rv, rt_b[0], ll.cur_ret)
+        ll.body_ir = ll.body_ir + "  ret " + ll.cur_ret + " " + cv + "\n"
+        ll.blk_open = false
+        return
+    }
+    if nd.kind == NK_CONTRACT_REQ() || nd.kind == NK_CONTRACT_ENS() || nd.kind == NK_CONTRACT_INV() {
+        if ll.blk_open == false { return }
+        mut ct_b: [string] = ["i1"]
+        let cv = llvm_ast_lower_expr(pool, nd.left, ll, ct_b)
+        let c1 = llvm_coerce_val(ll, cv, ct_b[0], "i1")
+        mut msg_s = "contract"
+        if nd.right >= 0 && nd.right < len(pool.nodes) && pool.nodes[nd.right].kind == NK_STR_LIT() {
+            let rs = pool.nodes[nd.right].str_val
+            if len(rs) >= 2 { msg_s = slice(rs, 1, len(rs) - 2) }
+        }
+        let gmsg = llvm_intern_str(msg_s, ll)
+        let cal = (nd.kind == NK_CONTRACT_REQ()) ? "@nino_require" : "@nino_ensure"
+        ll.body_ir = ll.body_ir + "  call void " + cal + "(i1 " + c1 + ", ptr " + gmsg + ")\n"
+        return
+    }
+    if nd.kind == NK_IF_STMT() {
+        if ll.blk_open == false { return }
+        ll.lbl_seq = ll.lbl_seq + 1
+        let bid = int_to_str(ll.lbl_seq)
+        mut ct_b: [string] = ["i1"]
+        let cv = llvm_ast_lower_expr(pool, nd.left, ll, ct_b)
+        let c1 = llvm_coerce_val(ll, cv, ct_b[0], "i1")
+        if nd.extra != -1 {
+            ll.body_ir = ll.body_ir + "  br i1 " + c1 + ", label %if.then." + bid + ", label %if.else." + bid + "\nif.then." + bid + ":\n"
+            ll.blk_open = true
+            llvm_ast_lower_stmt(pool, nd.right, ll)
+            let then_open = ll.blk_open
+            if then_open {
+                ll.body_ir = ll.body_ir + "  br label %if.end." + bid + "\n"
+            }
+            ll.body_ir = ll.body_ir + "if.else." + bid + ":\n"
+            ll.blk_open = true
+            llvm_ast_lower_stmt(pool, nd.extra, ll)
+            let else_open = ll.blk_open
+            if else_open {
+                ll.body_ir = ll.body_ir + "  br label %if.end." + bid + "\n"
+            }
+            if then_open || else_open {
+                ll.body_ir = ll.body_ir + "if.end." + bid + ":\n"
+                ll.blk_open = true
+            } else {
+                ll.blk_open = false
+            }
+        } else {
+            ll.body_ir = ll.body_ir + "  br i1 " + c1 + ", label %if.then." + bid + ", label %if.end." + bid + "\nif.then." + bid + ":\n"
+            ll.blk_open = true
+            llvm_ast_lower_stmt(pool, nd.right, ll)
+            if ll.blk_open {
+                ll.body_ir = ll.body_ir + "  br label %if.end." + bid + "\n"
+            }
+            ll.body_ir = ll.body_ir + "if.end." + bid + ":\n"
+            ll.blk_open = true
+        }
+        return
+    }
+    if nd.kind == NK_WHILE_STMT() {
+        if ll.blk_open == false { return }
+        ll.lbl_seq = ll.lbl_seq + 1
+        let bid = int_to_str(ll.lbl_seq)
+        ll.body_ir = ll.body_ir + "  br label %while.cond." + bid + "\nwhile.cond." + bid + ":\n"
+        mut ct_b: [string] = ["i1"]
+        let cv = llvm_ast_lower_expr(pool, nd.left, ll, ct_b)
+        let c1 = llvm_coerce_val(ll, cv, ct_b[0], "i1")
+        ll.body_ir = ll.body_ir + "  br i1 " + c1 + ", label %while.body." + bid + ", label %while.end." + bid + "\nwhile.body." + bid + ":\n"
+        ll.blk_open = true
+        ll.brk_lbls = push(ll.brk_lbls, "while.end." + bid)
+        ll.cnt_lbls = push(ll.cnt_lbls, "while.cond." + bid)
+        llvm_ast_lower_stmt(pool, nd.right, ll)
+        ll.brk_lbls = pop(ll.brk_lbls)
+        ll.cnt_lbls = pop(ll.cnt_lbls)
+        if ll.blk_open {
+            ll.body_ir = ll.body_ir + "  br label %while.cond." + bid + "\n"
+        }
+        ll.body_ir = ll.body_ir + "while.end." + bid + ":\n"
+        ll.blk_open = true
+        return
+    }
+    if nd.kind == NK_FOR_RANGE() {
+        if ll.blk_open == false { return }
+        ll.lbl_seq = ll.lbl_seq + 1
+        let bid = int_to_str(ll.lbl_seq)
+        mut lt_b: [string] = ["i64"]
+        mut ht_b: [string] = ["i64"]
+        let lov = llvm_coerce_val(ll, llvm_ast_lower_expr(pool, nd.left, ll, lt_b), lt_b[0], "i64")
+        let hiv = llvm_coerce_val(ll, llvm_ast_lower_expr(pool, nd.right, ll, ht_b), ht_b[0], "i64")
+        mut step_v = "1"
+        if nd.extra != -1 {
+            mut st_b: [string] = ["i64"]
+            step_v = llvm_coerce_val(ll, llvm_ast_lower_expr(pool, nd.extra, ll, st_b), st_b[0], "i64")
+        }
+        let saved_vmap = ll.var_map
+        let saved_avars = ll.arr_vars
+        let iv = nd.name
+        let slot = llvm_alloc_local_slot(ll, iv, "i64")
+        ll.body_ir = ll.body_ir + "  store i64 " + lov + ", ptr " + slot + "\n  br label %for.cond." + bid + "\nfor.cond." + bid + ":\n"
+        ll.reg_seq = ll.reg_seq + 1
+        let r_iv = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + r_iv + " = load i64, ptr " + slot + "\n"
+        mut r_fc = ""
+        if nd.extra != -1 {
+            ll.reg_seq = ll.reg_seq + 1
+            let r_pos = "%r" + int_to_str(ll.reg_seq)
+            ll.reg_seq = ll.reg_seq + 1
+            let r_lt = "%r" + int_to_str(ll.reg_seq)
+            ll.reg_seq = ll.reg_seq + 1
+            let r_gt = "%r" + int_to_str(ll.reg_seq)
+            ll.reg_seq = ll.reg_seq + 1
+            r_fc = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r_pos + " = icmp sge i64 " + step_v + ", 0\n"
+            ll.body_ir = ll.body_ir + "  " + r_lt + " = icmp slt i64 " + r_iv + ", " + hiv + "\n"
+            ll.body_ir = ll.body_ir + "  " + r_gt + " = icmp sgt i64 " + r_iv + ", " + hiv + "\n"
+            ll.body_ir = ll.body_ir + "  " + r_fc + " = select i1 " + r_pos + ", i1 " + r_lt + ", i1 " + r_gt + "\n"
+        } else {
+            ll.reg_seq = ll.reg_seq + 1
+            r_fc = "%r" + int_to_str(ll.reg_seq)
+            ll.body_ir = ll.body_ir + "  " + r_fc + " = icmp slt i64 " + r_iv + ", " + hiv + "\n"
+        }
+        ll.body_ir = ll.body_ir + "  br i1 " + r_fc + ", label %for.body." + bid + ", label %for.end." + bid + "\nfor.body." + bid + ":\n"
+        let body_id = (nd.child_count >= 1) ? pool.children[nd.child_start] : -1
+        let vec_ok = (lov == "0" && nd.extra == -1 && llvm_ast_has_branch_or_call(pool, body_id) == false)
+        ll.blk_open = true
+        ll.brk_lbls = push(ll.brk_lbls, "for.end." + bid)
+        ll.cnt_lbls = push(ll.cnt_lbls, "for.inc." + bid)
+        llvm_ast_lower_stmt(pool, body_id, ll)
+        ll.brk_lbls = pop(ll.brk_lbls)
+        ll.cnt_lbls = pop(ll.cnt_lbls)
+        if ll.blk_open {
+            ll.body_ir = ll.body_ir + "  br label %for.inc." + bid + "\n"
+        }
+        ll.body_ir = ll.body_ir + "for.inc." + bid + ":\n"
+        ll.reg_seq = ll.reg_seq + 1
+        let rc = "%r" + int_to_str(ll.reg_seq)
+        ll.reg_seq = ll.reg_seq + 1
+        let rn = "%r" + int_to_str(ll.reg_seq)
+        ll.body_ir = ll.body_ir + "  " + rc + " = load i64, ptr " + slot + "\n"
+        ll.body_ir = ll.body_ir + "  " + rn + " = add nsw i64 " + rc + ", " + step_v + "\n"
+        ll.body_ir = ll.body_ir + "  store i64 " + rn + ", ptr " + slot + "\n"
+        if vec_ok {
+            ll.body_ir = ll.body_ir + "  br label %for.cond." + bid + ", !llvm.loop !0\n"
+        } else {
+            ll.body_ir = ll.body_ir + "  br label %for.cond." + bid + "\n"
+        }
+        ll.var_map = saved_vmap
+        ll.arr_vars = saved_avars
+        ll.body_ir = ll.body_ir + "for.end." + bid + ":\n"
+        ll.blk_open = true
+        return
+    }
+    if nd.kind == NK_BREAK_STMT() {
+        if ll.blk_open && len(ll.brk_lbls) > 0 {
+            ll.body_ir = ll.body_ir + "  br label %" + ll.brk_lbls[len(ll.brk_lbls) - 1] + "\n"
+            ll.blk_open = false
+        }
+        return
+    }
+    if nd.kind == NK_CONTINUE_STMT() {
+        if ll.blk_open && len(ll.cnt_lbls) > 0 {
+            ll.body_ir = ll.body_ir + "  br label %" + ll.cnt_lbls[len(ll.cnt_lbls) - 1] + "\n"
+            ll.blk_open = false
+        }
+        return
+    }
+    llvm_fail(ll, nd.line, "Unsupported statement construct (AST#" + int_to_str(nd.kind) + ") in direct LLVM SSA subset; use 'ninoc build --backend=llvm'")
+}
+
+fn emit_direct_llvm_ir(source_text: string, file_name: string) -> string {
+    let base_dir = get_directory_of(file_name)
+    let pool = ast_parse_unit_ex(source_text, base_dir, file_name, true)
+    mut triple = "x86_64-unknown-linux-gnu"
+    if is_host_windows() {
+        triple = "x86_64-pc-windows-gnu"
+    }
+    mut hdr = "; Nino Direct Native LLVM SSA IR (fail-closed subset; no external clang preprocessor)\n"
+    hdr = hdr + "source_filename = \"" + replace_str(file_name, "\\", "/") + "\"\n"
+    hdr = hdr + "target triple = \"" + triple + "\"\n\n"
+    hdr = hdr + "declare void @exit(i32)\n"
+    hdr = hdr + "declare i32 @printf(ptr, ...)\n"
+    hdr = hdr + "@.fmt_i = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\", align 1\n"
+    hdr = hdr + "@.fmt_s = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\", align 1\n"
+    hdr = hdr + "@.fmt_c = private unnamed_addr constant [30 x i8] c\"[Nino Contract Violation] %s\\0A\\00\", align 1\n"
+    hdr = hdr + "define internal void @nino_print_int(i64 %v) {\n  %1 = call i32 (ptr, ...) @printf(ptr @.fmt_i, i64 %v)\n  ret void\n}\n"
+    hdr = hdr + "define internal void @nino_print_str(ptr %s) {\n  %1 = call i32 (ptr, ...) @printf(ptr @.fmt_s, ptr %s)\n  ret void\n}\n"
+    hdr = hdr + "define internal void @nino_require(i1 %cond, ptr %msg) {\n  br i1 %cond, label %ok, label %fail\nok:\n  ret void\nfail:\n  %1 = call i32 (ptr, ...) @printf(ptr @.fmt_c, ptr %msg)\n  call void @exit(i32 1)\n  unreachable\n}\n"
+    hdr = hdr + "define internal void @nino_ensure(i1 %cond, ptr %msg) {\n  call void @nino_require(i1 %cond, ptr %msg)\n  ret void\n}\n\n"
+
+    mut ll = LlvmState {
+        globals: "", str_seq: 0, defs: "", fn_ret_map: "|", fn_arity_map: "|", ext_decls: "", ext_seen: "|nino_require|nino_ensure|nino_print_int|nino_print_str|printf|exit|",
+        cur_ret: "i64", entry_allocas: "", body_ir: "", reg_seq: 0, lbl_seq: 0, blk_open: true,
+        var_map: "|", arr_vars: "|", alloca_seen: "|", slot_seq: 0, brk_lbls: [], cnt_lbls: [],
+        has_error: false, err_msg: ""
+    }
+    if pool.has_error || pool.root < 0 || pool.root >= len(pool.nodes) {
+        return "NINO_LLVM_ERR:Parse error: " + pool.err_msg
+    }
+    let root_nd: AstNode = pool.nodes[pool.root]
+    for ci0 in 0..root_nd.child_count {
+        let iid0 = pool.children[root_nd.child_start + ci0]
+        if iid0 >= 0 && iid0 < len(pool.nodes) {
+            let nd0: AstNode = pool.nodes[iid0]
+            if nd0.kind == NK_FN_DECL() {
+                if len(trim(nd0.type_ann)) > 0 && llvm_is_supported_type(nd0.type_ann) == false {
+                    return "NINO_LLVM_ERR:Return type '" + nd0.type_ann + "' on fn '" + nd0.name + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'"
+                }
+                mut rty = "void"
+                if len(trim(nd0.type_ann)) > 0 {
+                    rty = llvm_map_type(nd0.type_ann)
+                }
+                if nd0.name == "main" { rty = "i32" }
+                for pi0 in 0..nd0.child_count {
+                    let pnd0: AstNode = pool.nodes[pool.children[nd0.child_start + pi0]]
+                    if llvm_is_supported_type(pnd0.type_ann) == false {
+                        return "NINO_LLVM_ERR:Parameter '" + pnd0.name + ": " + pnd0.type_ann + "' on fn '" + nd0.name + "' is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'"
+                    }
+                }
+                ll.fn_ret_map = llvm_kv_set(ll.fn_ret_map, nd0.name, rty)
+                ll.fn_arity_map = llvm_kv_set(ll.fn_arity_map, nd0.name, int_to_str(nd0.child_count))
+            } else if nd0.kind != NK_IMPORT() {
+                return "NINO_LLVM_ERR:Top-level declaration (AST#" + int_to_str(nd0.kind) + ") is outside direct LLVM SSA subset; use 'ninoc build --backend=llvm'"
+            }
+        }
+    }
+    for ci in 0..root_nd.child_count {
+        let iid = pool.children[root_nd.child_start + ci]
+        if iid >= 0 && iid < len(pool.nodes) && pool.nodes[iid].kind == NK_FN_DECL() {
+            let fnd: AstNode = pool.nodes[iid]
+            let rty = llvm_kv_get(ll.fn_ret_map, fnd.name)
+            ll.cur_ret = (len(rty) > 0) ? rty : "void"
+            ll.entry_allocas = ""
+            ll.body_ir = ""
+            ll.reg_seq = 0
+            ll.lbl_seq = 0
+            ll.blk_open = true
+            ll.var_map = "|"
+            ll.arr_vars = "|"
+            ll.alloca_seen = "|"
+            ll.slot_seq = 0
+            ll.brk_lbls = []
+            ll.cnt_lbls = []
+            mut psig = ""
+            for pi in 0..fnd.child_count {
+                let pnd: AstNode = pool.nodes[pool.children[fnd.child_start + pi]]
+                let pt = llvm_map_type(pnd.type_ann)
+                if llvm_is_arr_type(pnd.type_ann) {
+                    ll.arr_vars = ll.arr_vars + pnd.name + "|"
+                }
+                if pi > 0 { psig = psig + ", " }
+                psig = psig + pt + " %" + pnd.name + ".arg"
+                let pslot = llvm_alloc_local_slot(ll, pnd.name, pt)
+                ll.entry_allocas = ll.entry_allocas + "  store " + pt + " %" + pnd.name + ".arg, ptr " + pslot + "\n"
+            }
+            let fn_hdr = "define " + ll.cur_ret + " @" + fnd.name + "(" + psig + ") {\nentry:\n"
+            llvm_ast_lower_stmt(pool, fnd.left, ll)
+            if ll.has_error {
+                return "NINO_LLVM_ERR:" + ll.err_msg
+            }
+            if ll.blk_open {
+                if ll.cur_ret == "void" {
+                    ll.body_ir = ll.body_ir + "  ret void\n"
+                } else {
+                    ll.body_ir = ll.body_ir + "  ret " + ll.cur_ret + " " + llvm_zero_val(ll.cur_ret) + "\n"
+                }
+            }
+            ll.defs = ll.defs + fn_hdr + ll.entry_allocas + ll.body_ir + "}\n\n"
+        }
+    }
+    return hdr + ll.ext_decls + ll.globals + "\n" + ll.defs + "!0 = distinct !{!0, !1, !2}\n!1 = !{!\"llvm.loop.vectorize.enable\", i1 true}\n!2 = !{!\"llvm.loop.vectorize.width\", i32 4}\n"
+}
+
+fn compile_nino_llvm(source_path: string, output_ll: string) -> int {
+    if is_safe_cli_path(source_path) == false || is_safe_cli_path(output_ll) == false {
+        print("\033[91m[Nino Security Error CWE-78]\033[0m Rejected unsafe shell metacharacters in path.")
+        return 1
+    }
+    if file_exists(source_path) == false {
+        print("\033[91m[Error]\033[0m Source file not found: " + source_path)
+        return 1
+    }
+    let source_text = read_file(source_path)
+    if len(source_text) == 0 {
+        print("\033[91m[Error]\033[0m Source file is empty: " + source_path)
+        return 1
+    }
+    print("\033[96m================================================================================\033[0m")
+    print("\033[93m[Nino Sovereign LLVM SSA IR Generator (ninoc)]\033[0m")
+    print("  Source Unit     : " + source_path)
+    print("  Output LLVM IR  : " + output_ll)
+    if verify_syntax_balance(source_text) == false {
+        print("\033[91m  Status         : [✗ FAILED SYNTAX CHECK]\033[0m")
+        print("\033[96m================================================================================\033[0m\n")
+        return 1
+    }
+    let base_dir = get_directory_of(source_path)
+    if run_semantic_type_check(source_text, base_dir, source_path) == false {
+        print("\033[91m  Status         : [✗ FAILED SEMANTIC CHECK]\033[0m")
+        print("\033[96m================================================================================\033[0m\n")
+        return 1
+    }
+    let ll_code = emit_direct_llvm_ir(source_text, source_path)
+    if starts_with(ll_code, "NINO_LLVM_ERR:") {
+        let emsg = slice(ll_code, 14, len(ll_code) - 14)
+        print("\033[91m[Nino LLVM Subset Error]\033[0m " + emsg)
+        print("  Guidance        : Use 'ninoc build " + source_path + " --backend=llvm' for full Nino features via Clang/C11.")
+        print("\033[91m  Status         : [✗ DIRECT LLVM SSA LOWERING REJECTED (FAIL-CLOSED)]\033[0m")
+        print("\033[96m================================================================================\033[0m\n")
+        return 1
+    }
+    write_file(output_ll, ll_code)
+    print("  Compiler Engine : Direct Native SSA Lowering (Strict Verified Subset, Fail-Closed)")
+    print("  Output Footprint: " + len(ll_code) + " bytes")
+    print("  Status         : \033[92m[✓ LLVM SSA IR SYNTHESIZED SUCCESSFULLY]\033[0m")
+    print("\033[96m================================================================================\033[0m\n")
+    return 0
+}
+

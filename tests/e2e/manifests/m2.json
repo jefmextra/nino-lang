@@ -1,0 +1,226 @@
+{
+  "milestone": "E2E-M2",
+  "description": "Tier 1-4 E2E tests for Features F6-F7 (BV64 default prover, precedence, div/shift, keyed PCC & tamper)",
+  "tests": [
+    {
+      "id": "T1-F06-01",
+      "tier": 1,
+      "feature": "F6",
+      "mode": "command-check",
+      "source": "tier1/f06_01_bv64_sound.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "prove",
+            "{staged}"
+          ],
+          "expect_exit": 0,
+          "expect_stdout": [
+            "QF_BV",
+            "UNSAT"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F06-02",
+      "tier": 1,
+      "feature": "F6",
+      "mode": "command-check",
+      "source": "tier1/f06_02_bv64_hex_bitwise.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "prove",
+            "{staged}"
+          ],
+          "expect_exit": 0,
+          "expect_stdout": [
+            "QF_BV",
+            "UNSAT"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-01",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "command-check",
+      "source": "tier2/f06_01_bv64_default_overflow.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "build",
+            "{staged}",
+            "--proof"
+          ],
+          "expect_nonzero": true,
+          "expect_any_stderr_or_stdout": [
+            "Counterexample",
+            "sat",
+            "PCC CERTIFICATION FAILED"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-02",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "command-check",
+      "source": "tier2/f06_02_bv64_div_shift_hazard.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "prove",
+            "{staged}"
+          ],
+          "expect_nonzero": true,
+          "expect_any_stderr_or_stdout": [
+            "Counterexample",
+            "sat",
+            "REFUTED"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F06-03",
+      "tier": 2,
+      "feature": "F6",
+      "mode": "command-check",
+      "source": "tier2/f06_01_bv64_default_overflow.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "prove",
+            "{staged}"
+          ],
+          "expect_nonzero": true,
+          "forbid_stdout": [
+            "NATIVE COMPILATION SUCCEEDED"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T3-F06-01",
+      "tier": 3,
+      "feature": "F6",
+      "mode": "command-check",
+      "source": "tier3/f06_01_witness_counterexample.nino",
+      "commands": [
+        {
+          "cmd": "ninoc",
+          "args": [
+            "witness",
+            "{staged}",
+            "-o",
+            "{tmp_dir}/wit_out.nino"
+          ],
+          "expect_exit": 0,
+          "expect_stdout": [
+            "Witness"
+          ]
+        }
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T4-F06-01",
+      "tier": 4,
+      "feature": "F6",
+      "mode": "verify-proof",
+      "source": "tier4/f06_01_bv64_loop_invariant.nino",
+      "flags": [
+        "--strict-c11",
+        "--proof",
+        "--keep-c"
+      ],
+      "tamper_test": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "UNSAT Verified"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T1-F07-01",
+      "tier": 1,
+      "feature": "F7",
+      "mode": "verify-proof",
+      "source": "tier1/f07_01_pcc_keyed_tamper.nino",
+      "flags": [
+        "--proof",
+        "--keep-c"
+      ],
+      "tamper_test": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "UNSAT Verified",
+        "Integrity-Sealed SMT Specification"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T2-F07-01",
+      "tier": 2,
+      "feature": "F7",
+      "mode": "compile-fail",
+      "source": "tier2/f07_01_pcc_no_obligations.nino",
+      "flags": [
+        "--proof"
+      ],
+      "expect_nonzero": true,
+      "forbid_binary": true,
+      "expect_any_stderr_or_stdout": [
+        "PCC CERTIFICATION FAILED",
+        "obligation",
+        "ensure"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T3-F07-01",
+      "tier": 3,
+      "feature": "F7",
+      "mode": "build-run",
+      "source": "tier3/f07_01_keyed_hmac_cli.nino",
+      "flags": [],
+      "expect_exit": 0,
+      "expect_stdout": [
+        "T3-F07-01:PASS"
+      ],
+      "timeout_sec": 30
+    },
+    {
+      "id": "T4-F07-01",
+      "tier": 4,
+      "feature": "F7",
+      "mode": "verify-proof",
+      "source": "tier4/f07_01_pcc_cross_fn_bv64.nino",
+      "flags": [
+        "--strict-c11",
+        "--proof",
+        "--keep-c"
+      ],
+      "tamper_test": true,
+      "expect_exit": 0,
+      "expect_stdout": [
+        "UNSAT Verified"
+      ],
+      "timeout_sec": 30
+    }
+  ]
+}

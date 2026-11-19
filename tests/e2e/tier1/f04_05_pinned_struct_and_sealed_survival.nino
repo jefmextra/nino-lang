@@ -1,0 +1,16 @@
+struct Holder {
+    mut f: string
+}
+
+fn main() -> int {
+    mut s = Holder { f: "init" }
+    sealed let vault_key = "SEALED_SURVIVAL_KEY_9001"
+    let m = arena_mark()
+    let tmp = "saved_" + int_to_str(9)
+    s.f = region_pin(tmp)
+    arena_rollback(m)
+    require(s.f == "saved_9", "pinned struct field must survive rollback")
+    require(unseal(vault_key) == "SEALED_SURVIVAL_KEY_9001", "sealed let must survive rollback")
+    print("T1-F04-05:PASS")
+    return 0
+}

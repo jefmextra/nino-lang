@@ -1,0 +1,16 @@
+fn takes_int_box(opt: Option<Box<int>>) -> int {
+    if opt.is_some {
+        return opt.val.val
+    }
+    return 0
+}
+
+fn main() -> int {
+    let wrong: Option<Box<string>> = (Option_Box_string){
+        .is_some = true,
+        .val = (Box_string){ .val = "not_an_int" }
+    }
+    let v = takes_int_box(wrong)
+    print(v)
+    return 0
+}

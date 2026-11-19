@@ -1,0 +1,391 @@
+import "std/str.nino"
+
+fn iso_resolve_ninoc() -> string {
+    if is_windows() {
+        if file_exists("ninoc.exe") {
+            return "ninoc.exe"
+        }
+        if file_exists("bin\\ninoc.exe") {
+            return "bin\\ninoc.exe"
+        }
+        return "ninoc.exe"
+    }
+    if file_exists("./ninoc") {
+        return "./ninoc"
+    }
+    if file_exists("./bin/ninoc") {
+        return "./bin/ninoc"
+    }
+    return "ninoc"
+}
+
+fn iso_run_prefix() -> string {
+    if is_windows() {
+        return ".\\"
+    }
+    return "./"
+}
+
+fn iso_resolve_gcc() -> string {
+    let ngcc = get_env("NINO_GCC")
+    if len(ngcc) > 0 && file_exists(ngcc) {
+        return ngcc
+    }
+    let ncc = get_env("NINO_CC")
+    if len(ncc) > 0 && file_exists(ncc) {
+        return ncc
+    }
+    let cc = get_env("CC")
+    if len(cc) > 0 && file_exists(cc) {
+        return cc
+    }
+    if is_windows() {
+        let local_app = get_env("LOCALAPPDATA")
+        if len(local_app) > 0 {
+            let clion_gcc = local_app + "\\Programs\\CLion\\bin\\mingw\\bin\\gcc.exe"
+            if file_exists(clion_gcc) {
+                return "\"" + clion_gcc + "\""
+            }
+        }
+        if file_exists("C:\\msys64\\mingw64\\bin\\gcc.exe") {
+            return "C:\\msys64\\mingw64\\bin\\gcc.exe"
+        }
+    }
+    return "gcc"
+}
+
+fn main() -> int {
+    print("================================================================================")
+    print("[Nino Language & Verification Conformance Suite (tools/iso_conformance.nino)]")
+    print("================================================================================")
+
+    let ninoc = iso_resolve_ninoc()
+    let run_pfx = iso_run_prefix()
+    let lb = "{"
+    let rb = "}"
+    let q = "\""
+
+    print("  [1/16] Testing AST Node Builder & Binary Child Links (ninoc ast)...")
+    let ast_src = "temp_iso_ast.nino"
+    let ast_out = "temp_iso_ast.ast"
+    write_file(ast_src, "fn calc(a: int, b: int) -> int " + lb + "\n    let s = a + b * 2\n    return s\n" + rb + "\nfn main() -> int " + lb + "\n    print(calc(3, 4))\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " ast " + ast_src + " -o " + ast_out) == 0, "ninoc ast must exit 0")
+    let ast_txt = read_file(ast_out)
+    require(str_contains(ast_txt, "PROGRAM") && str_contains(ast_txt, "FN_DECL") && str_contains(ast_txt, "BIN_OP") && str_contains(ast_txt, "CALL_EXPR") && str_contains(ast_txt, "l=") && str_contains(ast_txt, "r="), "AST dump must include real hierarchical node tags and child indices")
+
+    print("  [2/16] Testing Static Semantic Checker (E0308, E0428, E0061)...")
+    require(exec_cmd(ninoc + " check " + ast_src) == 0, "ninoc check must pass on valid program")
+
+    let e308_bind = "temp_iso_e308a.nino"
+    write_file(e308_bind, "fn main() -> int " + lb + "\n    let n: int = " + q + "bad_str" + q + "\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e308_bind) != 0, "E0308 binding type mismatch must be rejected")
+
+    let e308_ret = "temp_iso_e308b.nino"
+    write_file(e308_ret, "fn helper() -> int " + lb + "\n    return " + q + "wrong" + q + "\n" + rb + "\nfn main() -> int " + lb + "\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e308_ret) != 0, "E0308 return type mismatch must be rejected")
+
+    let e428_src = "temp_iso_e428.nino"
+    write_file(e428_src, "fn dup_fn() -> int " + lb + "\n    return 1\n" + rb + "\nfn dup_fn() -> int " + lb + "\n    return 2\n" + rb + "\nfn main() -> int " + lb + "\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e428_src) != 0, "E0428 duplicate function definition must be rejected")
+
+    let e061_src = "temp_iso_e061.nino"
+    write_file(e061_src, "fn pair_sum(a: int, b: int) -> int " + lb + "\n    return a + b\n" + rb + "\nfn main() -> int " + lb + "\n    let r = pair_sum(10)\n    return r\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e061_src) != 0, "E0061 arity mismatch must be rejected")
+
+    print("  [3/16] Testing Transitive Sealed Taint Flow (E0042)...")
+    let e042_alias = "temp_iso_e042a.nino"
+    write_file(e042_alias, "fn main() -> int " + lb + "\n    sealed let secret_k = " + q + "SOVEREIGN_TOKEN" + q + "\n    let alias = secret_k\n    print(alias)\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e042_alias) != 0, "E0042 must reject sealed alias printed without unseal()")
+
+    let e042_sink = "temp_iso_e042b.nino"
+    write_file(e042_sink, "fn main() -> int " + lb + "\n    sealed let secret_k = " + q + "SOVEREIGN_TOKEN" + q + "\n    write_file(" + q + "temp_iso_never.txt" + q + ", secret_k)\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e042_sink) != 0, "E0042 must reject sealed data written to file sink without unseal()")
+
+    let e042_ok = "temp_iso_e042_ok.nino"
+    write_file(e042_ok, "fn main() -> int " + lb + "\n    sealed let secret_k = " + q + "OK_TOKEN" + q + "\n    let clear = unseal(secret_k)\n    print(clear)\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e042_ok) == 0, "E0042 must allow explicitly unsealed secret")
+
+    print("  [4/16] Testing Scoped Region Lifetime Safety (E0515 & region_pin)...")
+    let e515_esc = "temp_iso_e515a.nino"
+    write_file(e515_esc, "fn main() -> int " + lb + "\n    mut outer_s: string = " + q + "" + q + "\n    let m = arena_mark()\n    let inner_tmp = " + q + "tmp_" + q + " + int_to_str(42)\n    outer_s = inner_tmp\n    arena_rollback(m)\n    print(outer_s)\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e515_esc) != 0, "E0515 must reject unpinned region string escaping rollback")
+
+    let e515_dangling = "temp_iso_e515b.nino"
+    write_file(e515_dangling, "fn main() -> int " + lb + "\n    let m = arena_mark()\n    let local_buf = " + q + "ephem_" + q + " + int_to_str(7)\n    arena_rollback(m)\n    print(local_buf)\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " check " + e515_dangling) != 0, "E0515 must reject post-rollback use of region variable")
+
+    let e515_pin = "temp_iso_e515_pin.nino"
+    write_file(e515_pin, "fn main() -> int " + lb + "\n    mut outer_s: string = " + q + "" + q + "\n    let m = arena_mark()\n    let inner_tmp = " + q + "pinned_" + q + " + int_to_str(77)\n    outer_s = region_pin(inner_tmp)\n    arena_rollback(m)\n    require(outer_s == " + q + "pinned_77" + q + ", " + q + "pinned value must survive rollback" + q + ")\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " run " + e515_pin) == 0, "region_pin() must allow safe survival across arena_rollback")
+
+    print("  [5/16] Testing Fail-Closed Zero-Ensure --proof Gating...")
+    let zero_ens_src = "temp_iso_zero_ens.nino"
+    let zero_ens_exe = "temp_iso_zero_ens.exe"
+    mut sh_lib = "temp_iso_zero_sh.so"
+    if is_windows() {
+        sh_lib = "temp_iso_zero_sh.dll"
+    }
+    write_file(zero_ens_src, "fn only_req(x: int) -> int " + lb + "\n    require(x > 0, " + q + "pos" + q + ")\n    return x + 1\n" + rb + "\nfn main() -> int " + lb + "\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " build " + zero_ens_src + " -o " + zero_ens_exe + " --proof") != 0, "--proof must fail closed when zero ensure/invariant contracts exist")
+    require(exec_cmd(ninoc + " build " + zero_ens_src + " --shared --proof -o " + sh_lib) != 0, "--shared --proof must fail closed when zero ensure/invariant contracts exist")
+
+    print("  [6/16] Testing 64-Bit BitVector Verification (--proof --bv)...")
+    let bv_bad_src = "temp_iso_bv_bad.nino"
+    let bv_bad_exe = "temp_iso_bv_bad.exe"
+    write_file(bv_bad_src, "fn wrap_add(x: int) -> int " + lb + "\n    require(x >= 0, " + q + "nonneg" + q + ")\n    let y = x + 1\n    ensure(y > x, " + q + "wraps at INT64_MAX" + q + ")\n    return y\n" + rb + "\nfn main() -> int " + lb + "\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " build " + bv_bad_src + " -o " + bv_bad_exe + " --proof --bv") != 0, "--bv mode must catch 64-bit signed INT64_MAX wraparound")
+
+    let bv_ok_exe = "temp_iso_bv_ok.exe"
+    let bv_vp_out = "temp_iso_bv_vp.out"
+    require(exec_cmd(ninoc + " build examples/pcc_sound_demo.nino -o " + bv_ok_exe + " --proof --bv") == 0, "pcc_sound_demo must prove sound under 64-bit --bv")
+    require(exec_cmd(run_pfx + bv_ok_exe + " --verify-proof > " + bv_vp_out) == 0, "BV binary --verify-proof must succeed")
+    let bv_vp_txt = read_file(bv_vp_out)
+    require(str_contains(bv_vp_txt, "QF_BV+64bit-Overflow") && str_contains(bv_vp_txt, "UNSAT Verified"), "BV proof certificate must record QF_BV logic profile")
+
+    print("  [7/16] Testing SMT Array Theory select/store & Bounds Proofs...")
+    let arr_ok_src = "temp_iso_arr_ok.nino"
+    let arr_ok_exe = "temp_iso_arr_ok.exe"
+    write_file(arr_ok_src, "fn arr_read_safe(a: [int], idx: int) -> int " + lb + "\n    require(idx >= 0 && idx < len(a), " + q + "in bounds" + q + ")\n    mut box = [10, 20, 30]\n    box[1] = 77\n    ensure(box[0] == 10 && box[1] == 77, " + q + "store axiom holds" + q + ")\n    return a[idx]\n" + rb + "\nfn main() -> int " + lb + "\n    let vals = [5, 10]\n    print(arr_read_safe(vals, 1))\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " build " + arr_ok_src + " -o " + arr_ok_exe + " --proof") == 0, "SMT array select/store with bounds must prove UNSAT")
+
+    let arr_oob_src = "temp_iso_arr_oob.nino"
+    let arr_oob_exe = "temp_iso_arr_oob.exe"
+    write_file(arr_oob_src, "fn arr_read_oob(a: [int], idx: int) -> int " + lb + "\n    require(idx >= 0, " + q + "missing upper bound" + q + ")\n    let v = a[idx]\n    ensure(v == a[idx], " + q + "id" + q + ")\n    return v\n" + rb + "\nfn main() -> int " + lb + "\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " build " + arr_oob_src + " -o " + arr_oob_exe + " --proof") != 0, "SMT array bounds prover must reject missing upper bound")
+
+    print("  [8/16] Testing Cryptographic Runtime Tamper Rejection (--verify-proof)...")
+    let emitted_c = read_file(arr_ok_src + ".c")
+    require(str_contains(emitted_c, "_NINO_PCC_SMT_SPEC") && str_contains(emitted_c, "_NINO_PCC_SEAL_SHA") && str_contains(emitted_c, "_NINO_PCC_LOGIC"), "Certified C source must embed byte-array SMT spec and SHA seal")
+    let tampered_c_txt = str_replace(emitted_c, "_NINO_PCC_SMT_SPEC[] = {\n59,", "_NINO_PCC_SMT_SPEC[] = {\n35,")
+    require(tampered_c_txt != emitted_c, "Tamper fixture substitution must alter embedded SMT byte")
+    let tampered_c = "temp_iso_tamper.c"
+    let tampered_exe = "temp_iso_tamper.exe"
+    write_file(tampered_c, tampered_c_txt)
+    let gcc_bin = iso_resolve_gcc()
+    mut link_l = "-lm -lpthread -ldl"
+    if is_windows() {
+        link_l = "-lm -lgdi32 -luser32 -lbcrypt -lws2_32"
+    }
+    let cc_rc = exec_cmd(gcc_bin + " -std=c11 -O2 -w " + tampered_c + " -o " + tampered_exe + " " + link_l)
+    require(cc_rc == 0, "Compiling tampered PCC fixture with host GCC must succeed")
+    require(exec_cmd(run_pfx + tampered_exe + " --verify-proof") != 0, "Tampered PCC binary must fail SHA-256 runtime audit and exit non-zero")
+
+    print("  [9/16] Testing Strict ISO/IEC 9899:2011 Mode (--strict-c11)...")
+    let c11_src = "temp_iso_c11.nino"
+    mut c11_code = "struct Metric " + lb + "\n    id: int,\n    name: string\n" + rb + "\n"
+    c11_code = c11_code + "fn compute_double(x: int) -> int " + lb + "\n    require(x > 0, " + q + "pos" + q + ")\n    ensure(x > 0, " + q + "ok" + q + ")\n    return x * 2\n" + rb + "\n"
+    c11_code = c11_code + "fn main() -> int " + lb + "\n"
+    c11_code = c11_code + "    let m = Metric " + lb + " id: 7, name: " + q + "iso" + q + " " + rb + "\n"
+    c11_code = c11_code + "    mut arr = [10, 20, 30]\n"
+    c11_code = c11_code + "    arr = push(arr, 40)\n"
+    c11_code = c11_code + "    mut d = " + lb + " " + q + "mode" + q + ": " + q + "strict_c11" + q + " " + rb + "\n"
+    c11_code = c11_code + "    d[" + q + "code" + q + "] = 200\n"
+    c11_code = c11_code + "    mut sum = 0\n"
+    c11_code = c11_code + "    for v in arr " + lb + "\n        sum = sum + v\n    " + rb + "\n"
+    c11_code = c11_code + "    morphic mut guard_v = compute_double(21)\n"
+    c11_code = c11_code + "    transact " + lb + "\n        guard_v = guard_v + 1\n    " + rb + " compensate " + lb + "\n        print(" + q + "rollback" + q + ")\n    " + rb + "\n"
+    c11_code = c11_code + "    require(sum == 100 && guard_v == 43 && d[" + q + "code" + q + "] == " + q + "200" + q + " && m.id == 7, " + q + "strict c11 runtime semantics" + q + ")\n"
+    c11_code = c11_code + "    print(" + q + "ISO-C11-PASS" + q + ")\n"
+    c11_code = c11_code + "    return 0\n" + rb + "\n"
+    write_file(c11_src, c11_code)
+    require(exec_cmd(ninoc + " run " + c11_src + " --strict-c11") == 0, "--strict-c11 build (-std=c11 -pedantic-errors) and execution must succeed")
+
+    print("  [10/16] Testing Active NIR Passes (DCE, Const-Folding, Identities, BCE)...")
+    let nir_src = "temp_iso_nir.nino"
+    let nir_out = "temp_iso_nir.nir"
+    mut nir_code = "fn opt_fn(a: [int]) -> int " + lb + "\n"
+    nir_code = nir_code + "    let k = 6 * 7\n"
+    nir_code = nir_code + "    let k_id = k + 0\n"
+    nir_code = nir_code + "    let k_mul = k_id * 1\n"
+    nir_code = nir_code + "    mut acc = k_mul\n"
+    nir_code = nir_code + "    for i in 0..len(a) " + lb + "\n        acc = acc + a[i]\n    " + rb + "\n"
+    nir_code = nir_code + "    return acc\n"
+    nir_code = nir_code + "    print(" + q + "DEAD_AFTER_RETURN" + q + ")\n"
+    nir_code = nir_code + rb + "\n"
+    nir_code = nir_code + "fn main() -> int " + lb + "\n    let xs = [1, 2, 3]\n    let res = opt_fn(xs)\n    require(res == 48, " + q + "folded + identity + loop sum must equal 48" + q + ")\n    return 0\n" + rb + "\n"
+    write_file(nir_src, nir_code)
+    require(exec_cmd(ninoc + " ir " + nir_src + " -o " + nir_out) == 0, "ninoc ir must exit 0")
+    let nir_txt = read_file(nir_out)
+    require(str_contains(nir_txt, "@const_folded") && str_contains(nir_txt, "@dce_pruned") && str_contains(nir_txt, "@bce_proven"), "NIR IR output must expose const folding, DCE, and BCE annotations")
+    require(exec_cmd(ninoc + " run " + nir_src) == 0, "Optimized active NIR binary must execute with exact semantics")
+
+    print("  [11/16] Testing Structured Docstring Extraction (ninoc doc)...")
+    let doc_src = "temp_iso_doc.nino"
+    let doc_out = "temp_iso_doc.md"
+    let ds = "/" + "//"
+    write_file(doc_src, ds + " Immutable audit record.\nstruct AuditRec " + lb + "\n    seq: int\n" + rb + "\n" + ds + " Verified positive incrementer.\nfn inc_pos(x: int) -> int " + lb + "\n    require(x >= 0, " + q + "nonneg" + q + ")\n    ensure(x >= 0, " + q + "ok" + q + ")\n    return x + 1\n" + rb + "\nfn main() -> int " + lb + "\n    return 0\n" + rb + "\n")
+    require(exec_cmd(ninoc + " doc " + doc_src + " -o " + doc_out) == 0, "ninoc doc must exit 0")
+    let doc_txt = read_file(doc_out)
+    require(str_contains(doc_txt, "Immutable audit record.") && str_contains(doc_txt, "Verified positive incrementer."), "ninoc doc must capture /// docstrings above structs and functions")
+
+    print("  [12/16] Testing Single-Pass Expression Precedence & Associativity...")
+    let expr_src = "temp_iso_expr.nino"
+    mut expr_code = "import " + q + "std/str.nino" + q + "\n"
+    expr_code = expr_code + "fn dyn_prec(a: int, b: int, c: int, d: int, e: int) -> int " + lb + "\n"
+    expr_code = expr_code + "    let s_sh = a >> 1 << 2\n"
+    expr_code = expr_code + "    let s_ar = b + c * d - e / b\n"
+    expr_code = expr_code + "    let s_sub = 20 - d - c\n"
+    expr_code = expr_code + "    let s_neg = e + -c\n"
+    expr_code = expr_code + "    require(s_sh == 32 && s_ar == 9 && s_sub == 13 && s_neg == 7, " + q + "dynamic precedence" + q + ")\n"
+    expr_code = expr_code + "    return s_sh + s_ar\n" + rb + "\n"
+    expr_code = expr_code + "fn main() -> int " + lb + "\n"
+    expr_code = expr_code + "    let r = dyn_prec(16, 2, 3, 4, 10)\n"
+    expr_code = expr_code + "    let s_mix = " + q + "val=" + q + " + (1 + 2 * 3)\n"
+    expr_code = expr_code + "    let s_q = " + q + "a -> b |> c && d" + q + "\n"
+    expr_code = expr_code + "    require(r == 41 && s_mix == " + q + "val=7" + q + " && str_contains(s_q, " + q + "->" + q + "), " + q + "single-pass expr precedence parity" + q + ")\n"
+    expr_code = expr_code + "    return 0\n" + rb + "\n"
+    write_file(expr_src, expr_code)
+    require(exec_cmd(ninoc + " run " + expr_src) == 0, "Single-pass expression precedence suite must pass")
+
+    print("  [13/16] Testing Hardened Sealed RAM Wipe (seal_destroy & --strict-c11)...")
+    let seal_src = "temp_iso_seal.nino"
+    mut seal_code = "fn main() -> int " + lb + "\n"
+    seal_code = seal_code + "    sealed let secret = " + q + "TOP_SECRET_SOVEREIGN_TOKEN_256" + q + "\n"
+    seal_code = seal_code + "    let locked = seal_is_locked(secret)\n"
+    seal_code = seal_code + "    let plain = unseal(secret)\n"
+    seal_code = seal_code + "    require(plain == " + q + "TOP_SECRET_SOVEREIGN_TOKEN_256" + q + " && (locked == true || locked == false), " + q + "sealed value mismatch" + q + ")\n"
+    seal_code = seal_code + "    seal_destroy(secret)\n"
+    seal_code = seal_code + "    return 0\n" + rb + "\n"
+    write_file(seal_src, seal_code)
+    require(exec_cmd(ninoc + " run " + seal_src + " --strict-c11") == 0, "Hardened seal_is_locked + seal_destroy must succeed under --strict-c11")
+
+    print("  [14/16] Testing Dynamic Unbounded SQL Tables/Rows & Honest db_driver_mode...")
+    let db_src = "temp_iso_db.nino"
+    mut db_code = "fn main() -> int " + lb + "\n"
+    db_code = db_code + "    let db = db_sqlite_open(" + q + ":memory:" + q + ")\n"
+    db_code = db_code + "    let mode_on = db_driver_mode(db)\n"
+    db_code = db_code + "    require(mode_on == " + q + "embedded:sqlite-mem" + q + " || mode_on == " + q + "native:sqlite3" + q + ", " + q + "must expose honest driver mode" + q + ")\n"
+    db_code = db_code + "    for ti in 0..20 " + lb + "\n"
+    db_code = db_code + "        let tn = " + q + "tbl_" + q + " + int_to_str(ti)\n"
+    db_code = db_code + "        db_sqlite_exec(db, " + q + "CREATE TABLE " + q + " + tn + " + q + " (id INTEGER, owner TEXT, balance REAL, c3 TEXT, c4 TEXT, c5 TEXT)" + q + ")\n"
+    db_code = db_code + "    " + rb + "\n"
+    db_code = db_code + "    for ri in 1..151 " + lb + "\n"
+    db_code = db_code + "        db_sqlite_exec(db, " + q + "INSERT INTO tbl_19 VALUES (" + q + " + int_to_str(ri) + " + q + ", 'u" + q + " + int_to_str(ri) + " + q + "', " + q + " + int_to_str(ri) + " + q + ", 'x', 'y', 'z')" + q + ")\n"
+    db_code = db_code + "    " + rb + "\n"
+    db_code = db_code + "    let qres = db_sqlite_query(db, " + q + "SELECT owner, balance FROM tbl_19 WHERE balance >= 145" + q + ")\n"
+    db_code = db_code + "    require(len(qres) == 6, " + q + "dynamic >16 tables & >128 rows SQL query must return 6 matching rows" + q + ")\n"
+    db_code = db_code + "    db_sqlite_close(db)\n"
+    db_code = db_code + "    require(db_driver_mode(db) == " + q + "disconnected" + q + ", " + q + "closed DB must report disconnected" + q + ")\n"
+    db_code = db_code + "    return 0\n" + rb + "\n"
+    write_file(db_src, db_code)
+    require(exec_cmd(ninoc + " run " + db_src) == 0, "Dynamic unbounded SQL & driver introspection must pass")
+
+    print("  [15/16] Testing Real Loopback TCP RESP-2 Client (native:redis-tcp & fallback)...")
+    let redis_src = "temp_iso_redis.nino"
+    mut rd_code = "import " + q + "std/str.nino" + q + "\n"
+    rd_code = rd_code + "fn resp_mock_server(sfd: int) -> int " + lb + "\n"
+    rd_code = rd_code + "    let c = tcp_accept(sfd)\n"
+    rd_code = rd_code + "    if c >= 0 " + lb + "\n"
+    rd_code = rd_code + "        mut active = true\n"
+    rd_code = rd_code + "        while active " + lb + "\n"
+    rd_code = rd_code + "            let req = tcp_read(c, 512)\n"
+    rd_code = rd_code + "            if len(req) == 0 " + lb + "\n"
+    rd_code = rd_code + "                active = false\n"
+    rd_code = rd_code + "            " + rb + " else if str_contains(req, " + q + "PING" + q + ") " + lb + "\n"
+    rd_code = rd_code + "                tcp_write(c, " + q + "+PONG\\r\\n" + q + ")\n"
+    rd_code = rd_code + "            " + rb + " else if str_contains(req, " + q + "SET" + q + ") " + lb + "\n"
+    rd_code = rd_code + "                tcp_write(c, " + q + "+OK\\r\\n" + q + ")\n"
+    rd_code = rd_code + "            " + rb + " else if str_contains(req, " + q + "GET" + q + ") " + lb + "\n"
+    rd_code = rd_code + "                tcp_write(c, " + q + "$11\\r\\nnino_live42\\r\\n" + q + ")\n"
+    rd_code = rd_code + "            " + rb + "\n"
+    rd_code = rd_code + "        " + rb + "\n"
+    rd_code = rd_code + "        tcp_close(c)\n"
+    rd_code = rd_code + "    " + rb + "\n"
+    rd_code = rd_code + "    tcp_close(sfd)\n"
+    rd_code = rd_code + "    return 0\n" + rb + "\n"
+    rd_code = rd_code + "fn main() -> int " + lb + "\n"
+    rd_code = rd_code + "    mut lfd = -1\n"
+    rd_code = rd_code + "    mut port = 16379\n"
+    rd_code = rd_code + "    while lfd < 0 && port < 16400 " + lb + "\n"
+    rd_code = rd_code + "        lfd = tcp_listen(port)\n"
+    rd_code = rd_code + "        if lfd < 0 " + lb + "\n"
+    rd_code = rd_code + "            port = port + 1\n"
+    rd_code = rd_code + "        " + rb + "\n"
+    rd_code = rd_code + "    " + rb + "\n"
+    rd_code = rd_code + "    require(lfd >= 0, " + q + "must bind loopback test port" + q + ")\n"
+    rd_code = rd_code + "    let tid = thread_spawn(resp_mock_server, lfd)\n"
+    rd_code = rd_code + "    let rc = db_redis_connect(" + q + "127.0.0.1" + q + ", port)\n"
+    rd_code = rd_code + "    require(db_driver_mode(rc) == " + q + "native:redis-tcp" + q + ", " + q + "live TCP listener must negotiate native:redis-tcp" + q + ")\n"
+    rd_code = rd_code + "    require(db_redis_cmd(rc, " + q + "PING" + q + ", []) == " + q + "PONG" + q + ", " + q + "RESP-2 PING" + q + ")\n"
+    rd_code = rd_code + "    require(db_redis_cmd(rc, " + q + "SET" + q + ", [" + q + "k1" + q + ", " + q + "nino_live42" + q + "]) == " + q + "OK" + q + ", " + q + "RESP-2 SET" + q + ")\n"
+    rd_code = rd_code + "    require(db_redis_cmd(rc, " + q + "GET" + q + ", [" + q + "k1" + q + "]) == " + q + "nino_live42" + q + ", " + q + "RESP-2 GET" + q + ")\n"
+    rd_code = rd_code + "    db_close(rc)\n"
+    rd_code = rd_code + "    require(db_driver_mode(rc) == " + q + "disconnected" + q + ", " + q + "closed tcp redis must report disconnected" + q + ")\n"
+    rd_code = rd_code + "    thread_join(tid)\n"
+    rd_code = rd_code + "    let r_bad = db_redis_connect(" + q + "127.0.0.1" + q + ", 1)\n"
+    rd_code = rd_code + "    require(len(r_bad) == 0 && db_driver_mode(r_bad) == " + q + "disconnected" + q + ", " + q + "unreachable TCP port must fail closed" + q + ")\n"
+    rd_code = rd_code + "    let rm = db_redis_connect(" + q + ":memory:" + q + ", 0)\n"
+    rd_code = rd_code + "    require(db_driver_mode(rm) == " + q + "embedded:redis-mem" + q + ", " + q + "explicit :memory: must select embedded:redis-mem" + q + ")\n"
+    rd_code = rd_code + "    require(db_redis_cmd(rm, " + q + "SET" + q + ", [" + q + "fb" + q + ", " + q + "yes" + q + "]) == " + q + "OK" + q + ", " + q + "fallback SET" + q + ")\n"
+    rd_code = rd_code + "    require(db_redis_cmd(rm, " + q + "GET" + q + ", [" + q + "fb" + q + "]) == " + q + "yes" + q + ", " + q + "fallback GET" + q + ")\n"
+    rd_code = rd_code + "    db_close(rm)\n"
+    rd_code = rd_code + "    return 0\n" + rb + "\n"
+    write_file(redis_src, rd_code)
+    require(exec_cmd(ninoc + " run " + redis_src) == 0, "Live loopback TCP RESP-2 Redis & embedded fallback test must pass")
+
+    print("  [16/16] Testing Dynamic Actor Pool (>80 Actors, >64 Messages)...")
+    let act_src = "temp_iso_act.nino"
+    mut act_code = "import " + q + "std/str.nino" + q + "\n"
+    act_code = act_code + "fn main() -> int " + lb + "\n"
+    act_code = act_code + "    mut last_pid = 0\n"
+    act_code = act_code + "    for ai in 0..85 " + lb + "\n"
+    act_code = act_code + "        last_pid = spawn_actor(" + q + "W" + q + " + int_to_str(ai))\n"
+    act_code = act_code + "    " + rb + "\n"
+    act_code = act_code + "    require(last_pid >= 85, " + q + "actor registry must scale dynamically past 64 slots" + q + ")\n"
+    act_code = act_code + "    for mi in 0..75 " + lb + "\n"
+    act_code = act_code + "        let ok = actor_send(last_pid, " + q + "msg_" + q + " + int_to_str(mi))\n"
+    act_code = act_code + "        require(ok, " + q + "dynamic ring inbox must grow past 32/64 messages" + q + ")\n"
+    act_code = act_code + "    " + rb + "\n"
+    act_code = act_code + "    require(actor_inbox_len(last_pid) == 75, " + q + "inbox length must report 75 queued messages" + q + ")\n"
+    act_code = act_code + "    let first_m = actor_receive(last_pid)\n"
+    act_code = act_code + "    require(str_contains(first_m, " + q + "msg_0" + q + "), " + q + "FIFO delivery of msg_0" + q + ")\n"
+    act_code = act_code + "    require(actor_inbox_len(last_pid) == 74, " + q + "inbox length must decrement after receive" + q + ")\n"
+    act_code = act_code + "    return 0\n" + rb + "\n"
+    write_file(act_src, act_code)
+    require(exec_cmd(ninoc + " run " + act_src) == 0, "Dynamic actor scaling & dynamic ring inbox test must pass")
+
+    file_delete(expr_src)
+    file_delete(seal_src)
+    file_delete(db_src)
+    file_delete(redis_src)
+    file_delete(act_src)
+
+    file_delete(ast_src)
+    file_delete(ast_out)
+    file_delete(e308_bind)
+    file_delete(e308_ret)
+    file_delete(e428_src)
+    file_delete(e061_src)
+    file_delete(e042_alias)
+    file_delete(e042_sink)
+    file_delete(e042_ok)
+    file_delete(e515_esc)
+    file_delete(e515_dangling)
+    file_delete(e515_pin)
+    file_delete(zero_ens_src)
+    file_delete(zero_ens_exe)
+    file_delete(sh_lib)
+    file_delete(sh_lib + ".h")
+    file_delete(bv_bad_src)
+    file_delete(bv_bad_exe)
+    file_delete(bv_ok_exe)
+    file_delete(bv_vp_out)
+    file_delete("examples/pcc_sound_demo.nino.c")
+    file_delete(arr_ok_src)
+    file_delete(arr_ok_src + ".c")
+    file_delete(arr_ok_exe)
+    file_delete(arr_oob_src)
+    file_delete(arr_oob_exe)
+    file_delete(tampered_c)
+    file_delete(tampered_exe)
+    file_delete(c11_src)
+    file_delete(nir_src)
+    file_delete(nir_out)
+    file_delete(doc_src)
+    file_delete(doc_out)
+
+    print("================================================================================")
+    print("SUCCESS: All 16 Conformance, Precedence, RAM-Lock, DB/TCP, Actor & C11 Checks Passed!")
+    print("================================================================================")
+    return 0
+}

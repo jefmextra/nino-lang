@@ -1,0 +1,1098 @@
+// compiler/types_ast.nino: Token/AST/Symbol/Lowerer data types, constants & symbol table
+fn nir_is_small_int(raw: string) -> bool {
+    let s = trim(raw)
+    let n = len(s)
+    if n == 0 || n > 10 {
+        return false
+    }
+    mut i = 0
+    if char_at(s, 0) == "-" {
+        if n == 1 || n > 11 {
+            return false
+        }
+        i = 1
+    }
+    while i < n {
+        let c = char_code(char_at(s, i))
+        if c < 48 || c > 57 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn nir_fold_const_int(expr: string, depth: int) -> string {
+    if depth > 8 {
+        return ""
+    }
+    mut ex = trim(expr)
+    mut elen = len(ex)
+    if elen == 0 {
+        return ""
+    }
+    if starts_with(ex, "(") && ends_with(ex, ")") {
+        mut pd = 0
+        mut strip_p = true
+        for i in 0..(elen - 1) {
+            let ch = char_at(ex, i)
+            if ch == "(" {
+                pd = pd + 1
+            } else if ch == ")" {
+                pd = pd - 1
+                if pd == 0 {
+                    strip_p = false
+                }
+            }
+        }
+        if strip_p {
+            return nir_fold_const_int(slice(ex, 1, elen - 2), depth + 1)
+        }
+    }
+    if nir_is_small_int(ex) {
+        return ex
+    }
+    let plus_p = find_top_binary_op(ex, "+")
+    let minus_p = find_top_binary_op(ex, "-")
+    if plus_p > 0 || minus_p > 0 {
+        mut op_p = plus_p
+        mut op_c = "+"
+        if minus_p > op_p {
+            op_p = minus_p
+            op_c = "-"
+        }
+        let lf = nir_fold_const_int(slice(ex, 0, op_p), depth + 1)
+        let rf = nir_fold_const_int(slice(ex, op_p + 1, elen - op_p - 1), depth + 1)
+        if len(lf) > 0 && len(rf) > 0 && len(lf) <= 10 && len(rf) <= 10 {
+            let lv = parse_int(lf)
+            let rv = parse_int(rf)
+            if op_c == "+" {
+                return int_to_str(lv + rv)
+            }
+            return int_to_str(lv - rv)
+        }
+        return ""
+    }
+    let mul_p = find_top_binary_op(ex, "*")
+    let div_p = find_top_binary_op(ex, "/")
+    let mod_p = find_top_binary_op(ex, "%")
+    if mul_p > 0 || div_p > 0 || mod_p > 0 {
+        mut op_p = mul_p
+        mut op_c = "*"
+        if div_p > op_p {
+            op_p = div_p
+            op_c = "/"
+        }
+        if mod_p > op_p {
+            op_p = mod_p
+            op_c = "%"
+        }
+        let lf = nir_fold_const_int(slice(ex, 0, op_p), depth + 1)
+        let rf = nir_fold_const_int(slice(ex, op_p + 1, elen - op_p - 1), depth + 1)
+        if len(lf) > 0 && len(rf) > 0 && len(lf) <= 9 && len(rf) <= 9 {
+            let lv = parse_int(lf)
+            let rv = parse_int(rf)
+            if op_c == "*" {
+                return int_to_str(lv * rv)
+            }
+            if rv != 0 {
+                if op_c == "/" {
+                    return int_to_str(lv / rv)
+                }
+                return int_to_str(lv % rv)
+            }
+        }
+    }
+    return ""
+}
+
+fn nir_loop_mutates_arr(norm: string, for_pos: int, arr_id: string) -> bool {
+    let nlen = len(norm)
+    mut p = for_pos
+    let first_nl = find_char(norm, "\n", p)
+    if first_nl == -1 {
+        return true
+    }
+    p = first_nl + 1
+    mut bdepth = 1
+    while p < nlen && bdepth > 0 {
+        mut le = find_char(norm, "\n", p)
+        if le == -1 {
+            le = nlen
+        }
+        let ln = trim(slice(norm, p, le - p))
+        bdepth = bdepth + count_braces_outside_str(ln)
+        if bdepth > 0 {
+            if starts_with(ln, arr_id + " =") || starts_with(ln, arr_id + "=") || find_str(ln, "arr_free(" + arr_id, 0) != -1 {
+                return true
+            }
+        }
+        p = le + 1
+    }
+    return false
+}
+
+struct ExpandedUnit {
+    mut lines: [string],
+    mut files: [string],
+    mut line_fids: [int],
+    mut line_nums: [int],
+    mut visited: string
+}
+
+struct NinoTok {
+    mut kind: int,
+    mut text: string,
+    file_id: int,
+    line: int,
+    col: int
+}
+
+struct TokStream {
+    toks: [NinoTok],
+    mut has_error: bool,
+    mut err_msg: string,
+    mut err_file: string,
+    mut err_line: int,
+    mut err_col: int
+}
+
+struct TokCursor {
+    toks: [NinoTok],
+    mut pos: int,
+    n: int,
+    mut allow_struct_lit: bool,
+    mut pending_gt: int
+}
+
+struct AstNode {
+    mut kind: int,
+    mut op: string,
+    mut name: string,
+    mut str_val: string,
+    mut type_ann: string,
+    mut inferred_type: string,
+    mut c11_type: string,
+    line: int,
+    col: int,
+    file_id: int,
+    mut left: int,
+    mut right: int,
+    mut extra: int,
+    mut child_start: int,
+    mut child_count: int,
+    mut flags: int,
+    mut sym_id: int
+}
+
+struct AstPool {
+    mut nodes: [AstNode],
+    mut children: [int],
+    mut files: [string],
+    mut lines: [string],
+    mut line_fids: [int],
+    mut line_nums: [int],
+    mut root: int,
+    mut has_error: bool,
+    mut err_msg: string,
+    mut err_line: int,
+    mut err_col: int,
+    mut err_file: string
+}
+
+struct ParamInfo {
+    mut name: string,
+    mut nino_type: string,
+    mut c11_type: string,
+    mut is_mut: bool,
+    is_ptr_writeback: bool,
+    has_default: bool
+}
+
+struct FieldInfo {
+    mut name: string,
+    mut nino_type: string,
+    mut c11_type: string,
+    mut is_mut: bool
+}
+
+struct SymbolInfo {
+    mut name: string,
+    mut kind: int,
+    mut scope_id: int,
+    mut scope_depth: int,
+    mut active: bool,
+    mut decl_line: int,
+    mut nino_type: string,
+    mut c11_type: string,
+    mut elem_nino_type: string,
+    mut elem_c11_type: string,
+    mut is_mut: bool,
+    mut is_mut_param: bool,
+    mut is_sealed: bool,
+    mut is_morphic: bool,
+    mut sealed_tainted: bool,
+    mut region_depth: int,
+    mut tainted_at_depth: int,
+    mut is_pinned: bool,
+    mut is_rolled_back: bool,
+    mut min_arity: int,
+    mut max_arity: int,
+    mut ret_nino_type: string,
+    mut ret_c11_type: string,
+    mut is_extern: bool,
+    mut extern_lib: string,
+    mut cap_effects: string,
+    mut child_start: int,
+    mut child_count: int,
+    mut bucket_idx: int,
+    mut next_in_bucket: int,
+    mut next_in_scope: int
+}
+
+struct Scope {
+    mut scope_id: int,
+    parent_scope_id: int,
+    mut depth: int,
+    mut kind: int,
+    mut head_sym: int,
+    arena_depth_entry: int
+}
+
+struct SymTable {
+    mut entries: [SymbolInfo],
+    mut scopes: [Scope],
+    mut buckets: [int],
+    mut params: [ParamInfo],
+    mut fields: [FieldInfo],
+    mut bucket_count: int,
+    mut active_count: int,
+    mut next_scope_id: int,
+    mut current_scope_idx: int,
+    mut scope_depth: int
+}
+
+struct DeferItem {
+    stmt_node_id: int,
+    mut scope_depth: int,
+    c_code: string
+}
+
+struct BcePair {
+    arr_name: string,
+    idx_name: string,
+    mut scope_depth: int
+}
+
+struct LowerCtx {
+    mut sym: SymTable,
+    norm_fname: string,
+    strict_c11: bool,
+    mut struct_code: string,
+    mut extern_code: string,
+    mut body_code: string,
+    mut pre_stmts: string,
+    mut cur_fn_name: string,
+    mut cur_fn_ret_nino: string,
+    mut cur_fn_ret_c11: string,
+    mut cur_fn_sym_idx: int,
+    mut is_main_fn: bool,
+    mut in_actor: bool,
+    mut has_main: bool,
+    mut has_error: bool,
+    mut temp_seq: int,
+    mut defers: [DeferItem],
+    mut bce_pairs: [BcePair],
+    mut last_stmt_was_return: bool,
+    mut is_no_std: bool,
+    mut actor_inits: string
+}
+
+fn TK_EOF() -> int { return 0 }
+fn TK_NL() -> int { return 1 }
+fn TK_IDENT() -> int { return 2 }
+fn TK_INT() -> int { return 3 }
+fn TK_FLOAT() -> int { return 4 }
+fn TK_STR() -> int { return 5 }
+fn TK_KW() -> int { return 6 }
+fn TK_LPAREN() -> int { return 10 }
+fn TK_RPAREN() -> int { return 11 }
+fn TK_LBRACE() -> int { return 12 }
+fn TK_RBRACE() -> int { return 13 }
+fn TK_LBRACK() -> int { return 14 }
+fn TK_RBRACK() -> int { return 15 }
+fn TK_COMMA() -> int { return 16 }
+fn TK_COLON() -> int { return 17 }
+fn TK_SEMI() -> int { return 18 }
+fn TK_DOT() -> int { return 19 }
+fn TK_ARROW() -> int { return 20 }
+fn TK_FAT_ARROW() -> int { return 21 }
+fn TK_DOTDOT() -> int { return 22 }
+fn TK_QMARK() -> int { return 23 }
+fn TK_PIPE() -> int { return 24 }
+fn TK_EQ() -> int { return 30 }
+fn TK_PLUS() -> int { return 31 }
+fn TK_MINUS() -> int { return 32 }
+fn TK_STAR() -> int { return 33 }
+fn TK_SLASH() -> int { return 34 }
+fn TK_PERCENT() -> int { return 35 }
+fn TK_EQEQ() -> int { return 36 }
+fn TK_NEQ() -> int { return 37 }
+fn TK_LT() -> int { return 38 }
+fn TK_LE() -> int { return 39 }
+fn TK_GT() -> int { return 40 }
+fn TK_GE() -> int { return 41 }
+fn TK_ANDAND() -> int { return 42 }
+fn TK_OROR() -> int { return 43 }
+fn TK_BANG() -> int { return 44 }
+fn TK_AMP() -> int { return 45 }
+fn TK_CARET() -> int { return 46 }
+fn TK_SHL() -> int { return 47 }
+fn TK_SHR() -> int { return 48 }
+fn TK_PIPE_GT() -> int { return 49 }
+fn TK_NO_STD() -> int { return 60 }
+
+fn NK_PROGRAM() -> int { return 1 }
+fn NK_NO_STD() -> int { return 2 }
+fn NK_IMPORT() -> int { return 3 }
+fn NK_STRUCT_DECL() -> int { return 4 }
+fn NK_FIELD_DECL() -> int { return 5 }
+fn NK_FN_DECL() -> int { return 6 }
+fn NK_PARAM() -> int { return 7 }
+fn NK_EXTERN_FN() -> int { return 8 }
+fn NK_ACTOR_DECL() -> int { return 9 }
+fn NK_GLOBAL_LET() -> int { return 10 }
+fn NK_BLOCK() -> int { return 20 }
+fn NK_LET_STMT() -> int { return 21 }
+fn NK_ASSIGN_STMT() -> int { return 22 }
+fn NK_EXPR_STMT() -> int { return 23 }
+fn NK_RETURN_STMT() -> int { return 24 }
+fn NK_IF_STMT() -> int { return 25 }
+fn NK_WHILE_STMT() -> int { return 26 }
+fn NK_FOR_RANGE() -> int { return 27 }
+fn NK_FOR_IN() -> int { return 28 }
+fn NK_MATCH_STMT() -> int { return 29 }
+fn NK_MATCH_ARM() -> int { return 30 }
+fn NK_DEFER_STMT() -> int { return 31 }
+fn NK_GUARD_STMT() -> int { return 32 }
+fn NK_CONTRACT_REQ() -> int { return 33 }
+fn NK_CONTRACT_ENS() -> int { return 34 }
+fn NK_CONTRACT_INV() -> int { return 35 }
+fn NK_ABORT_STMT() -> int { return 36 }
+fn NK_TRANSACT_STMT() -> int { return 37 }
+fn NK_INLINE_ASM() -> int { return 38 }
+fn NK_COMPTIME() -> int { return 39 }
+fn NK_RECEIVE_STMT() -> int { return 40 }
+fn NK_BREAK_STMT() -> int { return 41 }
+fn NK_CONTINUE_STMT() -> int { return 42 }
+fn NK_RDTSC_STMT() -> int { return 43 }
+fn NK_CPUID_STMT() -> int { return 44 }
+fn NK_INT_LIT() -> int { return 50 }
+fn NK_FLOAT_LIT() -> int { return 51 }
+fn NK_STR_LIT() -> int { return 52 }
+fn NK_BOOL_LIT() -> int { return 53 }
+fn NK_NIL_LIT() -> int { return 54 }
+fn NK_IDENT() -> int { return 55 }
+fn NK_BIN_OP() -> int { return 56 }
+fn NK_UNARY_OP() -> int { return 57 }
+fn NK_CALL() -> int { return 58 }
+fn NK_INDEX() -> int { return 59 }
+fn NK_MEMBER() -> int { return 60 }
+fn NK_ARRAY_LIT() -> int { return 61 }
+fn NK_DICT_LIT() -> int { return 62 }
+fn NK_STRUCT_LIT() -> int { return 63 }
+fn NK_FIELD_INIT() -> int { return 64 }
+fn NK_LAMBDA() -> int { return 65 }
+fn NK_TERNARY() -> int { return 66 }
+fn NK_STR_INTERP() -> int { return 67 }
+fn NK_PIPE() -> int { return 68 }
+fn NK_DICT_ENTRY() -> int { return 69 }
+
+fn NF_NONE() -> int { return 0 }
+fn NF_MUT() -> int { return 1 }
+fn NF_SEALED() -> int { return 2 }
+fn NF_MORPHIC() -> int { return 4 }
+fn NF_HAS_INTERP() -> int { return 8 }
+fn NF_C_CAST() -> int { return 16 }
+fn NF_BCE_SAFE() -> int { return 32 }
+fn NF_DEAD() -> int { return 64 }
+fn NF_LAMBDA_2ARG() -> int { return 128 }
+fn NF_VEC_SAFE() -> int { return 256 }
+
+fn SK_VAR() -> int { return 1 }
+fn SK_PARAM() -> int { return 2 }
+fn SK_FN() -> int { return 3 }
+fn SK_EXTERN_FN() -> int { return 4 }
+fn SK_STRUCT() -> int { return 5 }
+fn SK_ACTOR() -> int { return 6 }
+
+fn SCOPE_GLOBAL() -> int { return 0 }
+fn SCOPE_FN() -> int { return 1 }
+fn SCOPE_BLOCK() -> int { return 2 }
+fn SCOPE_LOOP() -> int { return 3 }
+fn SCOPE_ACTOR() -> int { return 4 }
+fn SCOPE_TX() -> int { return 5 }
+
+fn f1_is_digit(ch: string) -> bool {
+    if len(ch) == 0 {
+        return false
+    }
+    let cc = char_code(ch)
+    return cc >= 48 && cc <= 57
+}
+
+fn f1_is_hex_digit(ch: string) -> bool {
+    if len(ch) == 0 {
+        return false
+    }
+    let cc = char_code(ch)
+    if cc >= 48 && cc <= 57 {
+        return true
+    }
+    if cc >= 65 && cc <= 70 {
+        return true
+    }
+    if cc >= 97 && cc <= 102 {
+        return true
+    }
+    return ch == "_"
+}
+
+fn f1_is_ident_start(ch: string) -> bool {
+    if len(ch) == 0 {
+        return false
+    }
+    let cc = char_code(ch)
+    if cc >= 65 && cc <= 90 {
+        return true
+    }
+    if cc >= 97 && cc <= 122 {
+        return true
+    }
+    return cc == 95
+}
+
+fn f1_is_reserved_kw(w: string) -> bool {
+    if w == "fn" || w == "let" || w == "mut" || w == "sealed" || w == "morphic" || w == "struct" || w == "actor" || w == "receive" || w == "extern" || w == "import" {
+        return true
+    }
+    if w == "return" || w == "if" || w == "else" || w == "while" || w == "for" || w == "in" || w == "break" || w == "continue" || w == "match" {
+        return true
+    }
+    if w == "defer" || w == "guard" || w == "transact" || w == "transaction" || w == "compensate" || w == "rollback" || w == "inline_asm" || w == "comptime" || w == "abort" {
+        return true
+    }
+    if w == "require" || w == "ensure" || w == "invariant" || w == "true" || w == "false" || w == "nil" || w == "and" || w == "or" || w == "not" {
+        return true
+    }
+    return false
+}
+
+fn f1_is_scalar_c11(ct: string) -> bool {
+    return ct == "int64_t" || ct == "int32_t" || ct == "uint32_t" || ct == "uint64_t" || ct == "uint8_t" || ct == "double" || ct == "float" || ct == "bool" || ct == "const char*" || ct == "void" || ct == "int"
+}
+
+fn f1_c11_elem_type(arr_c11: string) -> string {
+    if arr_c11 == "const char**" {
+        return "const char*"
+    }
+    if arr_c11 == "void**" || arr_c11 == "void*" || len(arr_c11) == 0 {
+        return "int64_t"
+    }
+    if ends_with(arr_c11, "*") {
+        return slice(arr_c11, 0, len(arr_c11) - 1)
+    }
+    return "int64_t"
+}
+
+fn f1_nino_elem_type(nt: string) -> string {
+    let t = trim(nt)
+    if starts_with(t, "[") && ends_with(t, "]") && len(t) >= 2 {
+        return trim(slice(t, 1, len(t) - 2))
+    }
+    if starts_with(t, "Array<") && ends_with(t, ">") && len(t) >= 7 {
+        return trim(slice(t, 6, len(t) - 7))
+    }
+    return ""
+}
+
+fn f1_is_arr_nino_type(nt: string) -> bool {
+    let t = trim(nt)
+    return (starts_with(t, "[") && ends_with(t, "]")) || (starts_with(t, "Array<") && ends_with(t, ">"))
+}
+
+fn sym_hash(name: string) -> int {
+    mut h = 2166136261
+    let n = len(name)
+    for i in 0..n {
+        let cc = char_code(char_at(name, i))
+        h = ((h ^ cc) * 16777619) & 2147483647
+    }
+    return h
+}
+
+fn sym_info_empty() -> SymbolInfo {
+    return SymbolInfo {
+        name: "", kind: 0, scope_id: 0, scope_depth: 0, active: false, decl_line: 0,
+        nino_type: "", c11_type: "", elem_nino_type: "", elem_c11_type: "",
+        is_mut: false, is_mut_param: false, is_sealed: false, is_morphic: false, sealed_tainted: false,
+        region_depth: 0, tainted_at_depth: 0, is_pinned: false, is_rolled_back: false,
+        min_arity: 0, max_arity: 0, ret_nino_type: "", ret_c11_type: "",
+        is_extern: false, extern_lib: "", cap_effects: "", child_start: 0, child_count: 0,
+        bucket_idx: -1, next_in_bucket: -1, next_in_scope: -1
+    }
+}
+
+fn sym_rehash_if_needed(mut tbl: SymTable) {
+    if tbl.active_count * 4 < tbl.bucket_count * 3 {
+        return
+    }
+    let new_bc = tbl.bucket_count * 2
+    mut nb: [int] = []
+    for i in 0..new_bc {
+        let neg1_b: int = -1
+        nb = push(nb, neg1_b)
+    }
+    let ec = len(tbl.entries)
+    for ei in 0..ec {
+        mut e: SymbolInfo = tbl.entries[ei]
+        if e.active {
+            let b = sym_hash(e.name) % new_bc
+            e.bucket_idx = b
+            let prev_head = nb[b]
+            e.next_in_bucket = prev_head
+            nb[b] = ei
+            tbl.entries[ei] = e
+        }
+    }
+    tbl.buckets = nb
+    tbl.bucket_count = new_bc
+}
+
+fn sym_push_scope(mut tbl: SymTable, kind: int, arena_depth: int) -> int {
+    let sid = tbl.next_scope_id + 1
+    tbl.next_scope_id = sid
+    let nd = tbl.scope_depth + 1
+    tbl.scope_depth = nd
+    let parent_sc: Scope = tbl.scopes[tbl.current_scope_idx]
+    let pid = parent_sc.scope_id
+    let sc = Scope { scope_id: sid, parent_scope_id: pid, depth: nd, kind: kind, head_sym: -1, arena_depth_entry: arena_depth }
+    mut sc_arr = tbl.scopes
+    sc_arr = push(sc_arr, sc)
+    tbl.scopes = sc_arr
+    let next_idx = len(tbl.scopes) - 1
+    tbl.current_scope_idx = next_idx
+    return sid
+}
+
+fn sym_pop_scope(mut tbl: SymTable) {
+    if tbl.current_scope_idx <= 0 {
+        return
+    }
+    let cur_sc: Scope = tbl.scopes[tbl.current_scope_idx]
+    mut idx = cur_sc.head_sym
+    while idx != -1 {
+        mut e: SymbolInfo = tbl.entries[idx]
+        let nxt = e.next_in_scope
+        if e.bucket_idx >= 0 && e.bucket_idx < tbl.bucket_count {
+            let nxt_b = e.next_in_bucket
+            tbl.buckets[e.bucket_idx] = nxt_b
+        }
+        e.active = false
+        let neg1 = -1
+        e.next_in_bucket = neg1
+        tbl.entries[idx] = e
+        let next_ac = tbl.active_count - 1
+        tbl.active_count = next_ac
+        idx = nxt
+    }
+    mut sc_arr = tbl.scopes
+    sc_arr = pop(sc_arr)
+    tbl.scopes = sc_arr
+    let nidx = len(tbl.scopes) - 1
+    tbl.current_scope_idx = nidx
+    let top_sc: Scope = tbl.scopes[nidx]
+    let top_d = top_sc.depth
+    tbl.scope_depth = top_d
+}
+
+fn sym_insert(mut tbl: SymTable, name: string, info: SymbolInfo) -> int {
+    sym_rehash_if_needed(tbl)
+    let b = sym_hash(name) % tbl.bucket_count
+    mut sc: Scope = tbl.scopes[tbl.current_scope_idx]
+    mut e: SymbolInfo = info
+    e.name = name
+    let sc_id = sc.scope_id
+    let sc_d = sc.depth
+    let prev_b = tbl.buckets[b]
+    let prev_head = sc.head_sym
+    e.scope_id = sc_id
+    e.scope_depth = sc_d
+    e.active = true
+    e.bucket_idx = b
+    e.next_in_bucket = prev_b
+    e.next_in_scope = prev_head
+    let sym_idx = len(tbl.entries)
+    mut ent_arr = tbl.entries
+    ent_arr = push(ent_arr, e)
+    tbl.entries = ent_arr
+    tbl.buckets[b] = sym_idx
+    sc.head_sym = sym_idx
+    tbl.scopes[tbl.current_scope_idx] = sc
+    let next_ac = tbl.active_count + 1
+    tbl.active_count = next_ac
+    return sym_idx
+}
+
+fn sym_lookup(tbl: SymTable, name: string) -> int {
+    if tbl.bucket_count <= 0 {
+        return -1
+    }
+    let b = sym_hash(name) % tbl.bucket_count
+    mut idx = tbl.buckets[b]
+    while idx != -1 {
+        let e: SymbolInfo = tbl.entries[idx]
+        if e.active && e.name == name {
+            return idx
+        }
+        idx = e.next_in_bucket
+    }
+    return -1
+}
+
+fn sym_lookup_current(tbl: SymTable, name: string) -> int {
+    if tbl.bucket_count <= 0 {
+        return -1
+    }
+    let cur_sc: Scope = tbl.scopes[tbl.current_scope_idx]
+    let cur_sid = cur_sc.scope_id
+    let cur_d = cur_sc.depth
+    let b = sym_hash(name) % tbl.bucket_count
+    mut idx = tbl.buckets[b]
+    while idx != -1 {
+        let e: SymbolInfo = tbl.entries[idx]
+        if e.scope_depth < cur_d {
+            return -1
+        }
+        if e.active && e.scope_id == cur_sid && e.name == name {
+            return idx
+        }
+        idx = e.next_in_bucket
+    }
+    return -1
+}
+
+fn sym_update(mut tbl: SymTable, sym_idx: int, updated: SymbolInfo) {
+    if sym_idx < 0 || sym_idx >= len(tbl.entries) {
+        return
+    }
+    let old: SymbolInfo = tbl.entries[sym_idx]
+    mut e: SymbolInfo = updated
+    e.scope_id = old.scope_id
+    e.scope_depth = old.scope_depth
+    e.active = old.active
+    e.bucket_idx = old.bucket_idx
+    e.next_in_bucket = old.next_in_bucket
+    e.next_in_scope = old.next_in_scope
+    tbl.entries[sym_idx] = e
+}
+
+fn sym_seed_fn(mut tbl: SymTable, name: string, ret_nino: string, ret_c11: string, min_a: int, max_a: int) {
+    mut info = sym_info_empty()
+    info.kind = SK_FN()
+    info.ret_nino_type = ret_nino
+    info.ret_c11_type = ret_c11
+    info.min_arity = min_a
+    info.max_arity = max_a
+    sym_insert(tbl, name, info)
+}
+
+fn sym_seed_mut0_fn(mut tbl: SymTable, name: string, ret_nino: string, ret_c11: string, min_a: int, max_a: int) {
+    let p0 = ParamInfo { name: "arg0", nino_type: "any", c11_type: "void", is_mut: true, is_ptr_writeback: true, has_default: false }
+    let p_start = len(tbl.params)
+    mut parr = tbl.params
+    parr = push(parr, p0)
+    tbl.params = parr
+    mut info = sym_info_empty()
+    info.kind = SK_FN()
+    info.ret_nino_type = ret_nino
+    info.ret_c11_type = ret_c11
+    info.min_arity = min_a
+    info.max_arity = max_a
+    info.is_mut_param = true
+    info.child_start = p_start
+    info.child_count = 1
+    sym_insert(tbl, name, info)
+}
+
+fn sym_seed_builtins(mut tbl: SymTable) {
+    sym_seed_fn(tbl, "slice", "string", "const char*", 3, 3)
+    sym_seed_fn(tbl, "char_at", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "read_file", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "file_read", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "tcp_read", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "stdin_read_line", "string", "const char*", 0, 0)
+    sym_seed_fn(tbl, "stdin_read_exact", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "char_from_code", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "lsp_doc_get", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "get_env", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "nino_get_env", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "mem_dump", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "argv", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "trim", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "int_to_str", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "sha256", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "sha512", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "ed25519_keygen", "string", "const char*", 0, 0)
+    sym_seed_fn(tbl, "ed25519_keygen_seed", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "ed25519_pubkey_from_sk", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "ed25519_sign", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "ed25519_verify", "bool", "bool", 3, 3)
+    sym_seed_fn(tbl, "nino_write_hex_file", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "is_nan", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "is_inf", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "is_finite", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "fp_abs", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "fp_sqrt", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "to_float", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "hmac_sha256", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "trace_chain_hash", "string", "const char*", 0, 0)
+    sym_seed_fn(tbl, "trace_entry_label", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "trace_entry_hash", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "dylib_call_str", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "dylib_call_jni_str", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "db_redis_cmd", "string", "const char*", 3, 3)
+    sym_seed_fn(tbl, "db_driver_mode", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "actor_receive", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "pq_sign", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "pq_decapsulate", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "db_sqlite_open", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "db_postgres_connect", "string", "const char*", 4, 4)
+    sym_seed_fn(tbl, "db_redis_connect", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "db_sanitize_sql", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "cpu_get_register", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "parity_read_string", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "region_pin", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "unseal", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "sanitize", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "str_join", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "db_query_json", "string", "const char*", 2, 2)
+    sym_seed_fn(tbl, "str_split", "[str]", "const char**", 2, 2)
+    sym_seed_fn(tbl, "db_sqlite_query", "[str]", "const char**", 2, 2)
+    sym_seed_fn(tbl, "db_query", "[str]", "const char**", 3, 3)
+    sym_seed_fn(tbl, "db_postgres_query", "[str]", "const char**", 2, 2)
+    sym_seed_fn(tbl, "window_poll_click", "[int]", "int64_t*", 1, 1)
+    sym_seed_fn(tbl, "arr_sort", "[int]", "int64_t*", 1, 1)
+    sym_seed_fn(tbl, "pq_verify", "bool", "bool", 3, 3)
+    sym_seed_fn(tbl, "zk_verify_proof", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "zk_verify_membership", "bool", "bool", 2, 2)
+    sym_seed_fn(tbl, "file_exists", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "file_delete", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "is_windows", "bool", "bool", 0, 0)
+    sym_seed_fn(tbl, "seal_is_locked", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "stdin_eof", "bool", "bool", 0, 0)
+    sym_seed_fn(tbl, "lsp_doc_exists", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "window_is_open", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "actor_send", "bool", "bool", 2, 2)
+    sym_seed_fn(tbl, "actor_patch", "bool", "bool", 2, 2)
+    sym_seed_fn(tbl, "db_close", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "verify_canaries", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "arr_contains", "bool", "bool", 2, 2)
+    sym_seed_fn(tbl, "pq_generate_keypair", "dict", "void*", 1, 1)
+    sym_seed_fn(tbl, "pq_encapsulate", "dict", "void*", 1, 1)
+    sym_seed_fn(tbl, "zk_commit", "dict", "void*", 1, 1)
+    sym_seed_fn(tbl, "zk_prove_condition", "dict", "void*", 3, 3)
+    sym_seed_fn(tbl, "zk_prove_membership", "dict", "void*", 2, 2)
+    sym_seed_fn(tbl, "enclave_attest", "dict", "void*", 0, 0)
+    sym_seed_fn(tbl, "supervisor_dispatch", "dict", "void*", 2, 2)
+    sym_seed_fn(tbl, "alloc_memory", "any", "void*", 1, 1)
+    sym_seed_fn(tbl, "alloc_parity_buffer", "any", "void*", 1, 1)
+    sym_seed_fn(tbl, "alloc_guarded_memory", "any", "void*", 2, 2)
+    sym_seed_fn(tbl, "create_window", "any", "void*", 3, 3)
+    sym_seed_fn(tbl, "math_ln", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "len", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "argc", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "char_code", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "char_code_at", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "exec_cmd", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "write_file", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "file_write", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "arena_mark", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "arena_used", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "tcp_listen", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "tcp_accept", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "tcp_connect", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "tcp_write", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "csprng_u64", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "cpu_get_cycles", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "nino_get_pid", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "heap_live_arrays", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "actor_inbox_len", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "spawn_actor", "i32", "int32_t", 1, 1)
+    sym_seed_fn(tbl, "spawn_supervisor", "i32", "int32_t", 2, 2)
+    sym_seed_fn(tbl, "arr_sum", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "arr_min", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "arr_max", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "time_now_ns", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "read_i32", "i32", "int32_t", 2, 2)
+    sym_seed_fn(tbl, "read_byte", "byte", "uint8_t", 2, 2)
+    sym_seed_fn(tbl, "thread_spawn", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "thread_join", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "thread_os_id", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "current_thread_id", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "cpu_core_count", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "dylib_open", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "dylib_sym", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "dylib_call_i64", "int", "int64_t", 3, 3)
+    sym_seed_fn(tbl, "dylib_call_jni_i64", "int", "int64_t", 3, 3)
+    sym_seed_fn(tbl, "dylib_call_c_strlen", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "ffi_open_system_lib", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "ebpf_exec_packet", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "ebpf_prog_create", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "ebpf_emit", "int", "int64_t", 6, 6)
+    sym_seed_fn(tbl, "ebpf_bytecode_hex", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "ebpf_load_kernel", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "arena_reset", "void", "void", 0, 0)
+    sym_seed_fn(tbl, "arena_rollback", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "arena_ptr_valid", "bool", "bool", 1, 1)
+    sym_seed_fn(tbl, "tcp_close", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "dylib_close", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "lsp_doc_set", "void", "void", 2, 2)
+    sym_seed_fn(tbl, "lsp_doc_remove", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "print_raw", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "stderr_write", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "stdout_write_raw", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "stdio_binary_mode", "void", "void", 0, 0)
+    sym_seed_fn(tbl, "trace_reset", "void", "void", 0, 0)
+    sym_seed_fn(tbl, "trace_record", "void", "void", 2, 2)
+    sym_seed_fn(tbl, "trace_checkpoint", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "trace_dump", "void", "void", 0, 0)
+    sym_seed_fn(tbl, "panic", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "arr_free", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "seal_destroy", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "unseal_i64", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "write_vga", "void", "void", 4, 4)
+    sym_seed_fn(tbl, "hlt", "void", "void", 0, 0)
+    sym_seed_fn(tbl, "abs", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "fabs", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "sqrt", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "sin", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "cos", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "tan", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "asin", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "acos", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "atan", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "floor", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "ceil", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "round", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "log", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "log2", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "log10", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "exp", "float", "double", 1, 1)
+    sym_seed_fn(tbl, "atan2", "float", "double", 2, 2)
+    sym_seed_fn(tbl, "pow", "float", "double", 2, 2)
+    sym_seed_fn(tbl, "fmod", "float", "double", 2, 2)
+    sym_seed_fn(tbl, "fmin", "float", "double", 2, 2)
+    sym_seed_fn(tbl, "fmax", "float", "double", 2, 2)
+    sym_seed_fn(tbl, "nino_free_memory", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "free_memory", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "write_byte", "void", "void", 3, 3)
+    sym_seed_fn(tbl, "read_byte", "byte", "uint8_t", 2, 2)
+    sym_seed_fn(tbl, "write_i32", "void", "void", 3, 3)
+    sym_seed_fn(tbl, "foreign_free", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "inject_cosmic_ray_flip", "void", "void", 3, 3)
+    sym_seed_fn(tbl, "parity_write_string", "void", "void", 2, 2)
+    sym_seed_fn(tbl, "guarded_write_byte", "void", "void", 3, 3)
+    sym_seed_fn(tbl, "time_travel_checkpoint", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "time_travel_rewind", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "window_draw_rect", "void", "void", 6, 6)
+    sym_seed_fn(tbl, "window_draw_round_rect", "void", "void", 8, 8)
+    sym_seed_fn(tbl, "window_draw_text", "void", "void", 6, 6)
+    sym_seed_fn(tbl, "window_update", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "window_clear", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "window_sleep", "void", "void", 2, 2)
+    sym_seed_fn(tbl, "window_wait_close", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "db_sqlite_close", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "db_postgres_close", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "outb", "void", "void", 2, 2)
+    sym_seed_fn(tbl, "inb", "byte", "uint8_t", 1, 1)
+    sym_seed_fn(tbl, "argv", "string", "const char*", 1, 1)
+    sym_seed_fn(tbl, "db_sqlite_exec", "i32", "int32_t", 2, 2)
+    sym_seed_fn(tbl, "db_exec", "int", "int64_t", 3, 3)
+    sym_seed_fn(tbl, "db_postgres_exec", "i32", "int32_t", 2, 2)
+    sym_seed_fn(tbl, "trace_count", "int", "int64_t", 0, 0)
+    sym_seed_fn(tbl, "trace_entry_val", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "parity_heal_count", "int", "int64_t", 1, 1)
+    sym_seed_fn(tbl, "guarded_read_byte", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "foreign_alloc", "int", "int64_t", 2, 2)
+    sym_seed_fn(tbl, "exit", "void", "void", 1, 1)
+    sym_seed_fn(tbl, "GetTickCount", "i32", "int32_t", 0, 0)
+    sym_seed_fn(tbl, "Beep", "i32", "int32_t", 2, 2)
+    sym_seed_mut0_fn(tbl, "channel_send", "bool", "bool", 2, 2)
+    sym_seed_mut0_fn(tbl, "channel_recv", "string", "const char*", 1, 1)
+    sym_seed_mut0_fn(tbl, "channel_close", "bool", "bool", 1, 1)
+    sym_seed_mut0_fn(tbl, "raft_elect_leader", "bool", "bool", 1, 2)
+    sym_seed_mut0_fn(tbl, "raft_propose_entry", "bool", "bool", 2, 3)
+    sym_seed_mut0_fn(tbl, "mesh_connect_peer", "bool", "bool", 2, 3)
+    sym_seed_mut0_fn(tbl, "mesh_broadcast", "int", "int64_t", 2, 3)
+    sym_seed_mut0_fn(tbl, "mesh_receive", "string", "const char*", 1, 2)
+    sym_seed_mut0_fn(tbl, "wasm_exec_bytecode", "int", "int64_t", 2, 3)
+    sym_seed_mut0_fn(tbl, "wasm_invoke", "int", "int64_t", 3, 4)
+    sym_seed_mut0_fn(tbl, "wasm_terminate", "bool", "bool", 1, 1)
+    sym_seed_mut0_fn(tbl, "db_disconnect", "bool", "bool", 1, 1)
+    sym_seed_mut0_fn(tbl, "honey_shred_memory", "bool", "bool", 1, 1)
+    sym_seed_mut0_fn(tbl, "honey_trigger_alarm", "bool", "bool", 1, 2)
+}
+
+fn sym_table_new() -> SymTable {
+    mut b: [int] = []
+    for i in 0..1024 {
+        let neg1_b: int = -1
+        b = push(b, neg1_b)
+    }
+    mut sc_arr: [Scope] = []
+    let g_sc = Scope { scope_id: 0, parent_scope_id: -1, depth: 0, kind: SCOPE_GLOBAL(), head_sym: -1, arena_depth_entry: 0 }
+    sc_arr = push(sc_arr, g_sc)
+    mut ent_arr: [SymbolInfo] = []
+    mut p_arr: [ParamInfo] = []
+    mut f_arr: [FieldInfo] = []
+    mut tbl = SymTable {
+        entries: ent_arr,
+        scopes: sc_arr,
+        buckets: b,
+        params: p_arr,
+        fields: f_arr,
+        bucket_count: 1024,
+        active_count: 0,
+        next_scope_id: 0,
+        current_scope_idx: 0,
+        scope_depth: 0
+    }
+    sym_seed_builtins(tbl)
+    return tbl
+}
+
+fn ast_pool_new() -> AstPool {
+    mut nds: [AstNode] = []
+    mut chs: [int] = []
+    mut fls: [string] = []
+    mut lns: [string] = []
+    mut lfids: [int] = []
+    mut lnums: [int] = []
+    return AstPool {
+        nodes: nds,
+        children: chs,
+        files: fls,
+        lines: lns,
+        line_fids: lfids,
+        line_nums: lnums,
+        root: -1,
+        has_error: false,
+        err_msg: "",
+        err_line: 0,
+        err_col: 0,
+        err_file: ""
+    }
+}
+
+fn ast_add_node(mut pool: AstPool, kind: int, op: string, name: string, str_val: string, type_ann: string, line: int, col: int, file_id: int, left: int, right: int, extra: int, flags: int) -> int {
+    let nid = len(pool.nodes)
+    let nd = AstNode {
+        kind: kind, op: op, name: name, str_val: str_val, type_ann: type_ann,
+        inferred_type: "", c11_type: "", line: line, col: col, file_id: file_id,
+        left: left, right: right, extra: extra, child_start: 0, child_count: 0,
+        flags: flags, sym_id: -1
+    }
+    mut narr = pool.nodes
+    narr = push(narr, nd)
+    pool.nodes = narr
+    return nid
+}
+
+fn ast_attach_children(mut pool: AstPool, parent_id: int, kids: [int]) {
+    let kc = len(kids)
+    if parent_id < 0 || parent_id >= len(pool.nodes) || kc == 0 {
+        return
+    }
+    let start_idx = len(pool.children)
+    mut carr = pool.children
+    for i in 0..kc {
+        let kid = kids[i]
+        carr = push(carr, kid)
+    }
+    pool.children = carr
+    mut pnode: AstNode = pool.nodes[parent_id]
+    pnode.child_start = start_idx
+    pnode.child_count = kc
+    pool.nodes[parent_id] = pnode
+}
+
+fn ast_set_error(mut pool: AstPool, msg: string, file_id: int, line: int, col: int) {
+    if pool.has_error {
+        return
+    }
+    let has_e = true
+    pool.has_error = has_e
+    pool.err_msg = msg
+    pool.err_line = line
+    pool.err_col = col
+    mut fname = "source.nino"
+    if file_id >= 0 && file_id < len(pool.files) {
+        fname = pool.files[file_id]
+    }
+    pool.err_file = fname
+}
+
+fn cur_new(toks: [NinoTok]) -> TokCursor {
+    let n = len(toks)
+    return TokCursor { toks: toks, pos: 0, n: n, allow_struct_lit: true, pending_gt: 0 }
+}
+
+fn cur_peek(cur: TokCursor) -> NinoTok {
+    if cur.pos >= cur.n {
+        return NinoTok { kind: TK_EOF(), text: "", file_id: 0, line: 1, col: 1 }
+    }
+    return cur.toks[cur.pos]
+}
+
+fn cur_peek_at(cur: TokCursor, offset: int) -> NinoTok {
+    let idx = cur.pos + offset
+    if idx < 0 || idx >= cur.n {
+        return NinoTok { kind: TK_EOF(), text: "", file_id: 0, line: 1, col: 1 }
+    }
+    return cur.toks[idx]
+}
+
+fn cur_eof(cur: TokCursor) -> bool {
+    return cur_peek(cur).kind == TK_EOF()
+}
+
+fn cur_advance(mut cur: TokCursor) -> NinoTok {
+    let t = cur_peek(cur)
+    if cur.pos < cur.n {
+        let nxt = cur.pos + 1
+        cur.pos = nxt
+    }
+    return t
+}
+
+fn cur_skip_nl(mut cur: TokCursor) {
+    while cur_peek(cur).kind == TK_NL() {
+        let nxt = cur.pos + 1
+        cur.pos = nxt
+    }
+}
+
+fn cur_skip_nl_semi(mut cur: TokCursor) {
+    mut looping = true
+    while looping {
+        let k = cur_peek(cur).kind
+        if k == TK_NL() || k == TK_SEMI() {
+            let nxt = cur.pos + 1
+            cur.pos = nxt
+        } else {
+            looping = false
+        }
+    }
+}
+

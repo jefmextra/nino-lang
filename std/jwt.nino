@@ -1,0 +1,391 @@
+fn jwt_hex_nib(ch: string) -> int {
+    let c = char_code_at(ch, 0)
+    if c >= 48 && c <= 57 {
+        return c - 48
+    }
+    if c >= 97 && c <= 102 {
+        return c - 87
+    }
+    if c >= 65 && c <= 70 {
+        return c - 55
+    }
+    return 0
+}
+
+fn base64url_encode_bytes(bytes: [int]) -> string {
+    let tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    let rlen = len(bytes)
+    mut out = ""
+    mut i = 0
+    while i < rlen {
+        let b0 = bytes[i] & 255
+        mut b1 = 0
+        mut b2 = 0
+        let rem = rlen - i
+        if rem > 1 {
+            b1 = bytes[i + 1] & 255
+        }
+        if rem > 2 {
+            b2 = bytes[i + 2] & 255
+        }
+        let triple = (b0 << 16) + (b1 << 8) + b2
+        let c0 = (triple >> 18) & 63
+        let c1 = (triple >> 12) & 63
+        let c2 = (triple >> 6) & 63
+        let c3 = triple & 63
+        out = out + char_at(tbl, c0) + char_at(tbl, c1)
+        if rem > 1 {
+            out = out + char_at(tbl, c2)
+        }
+        if rem > 2 {
+            out = out + char_at(tbl, c3)
+        }
+        i = i + 3
+    }
+    return out
+}
+
+fn base64url_encode_hex(hex_str: string) -> string {
+    let hlen = len(hex_str)
+    mut raw_bytes: [int] = []
+    mut i = 0
+    while i + 1 < hlen {
+        let hi = jwt_hex_nib(char_at(hex_str, i))
+        let lo = jwt_hex_nib(char_at(hex_str, i + 1))
+        raw_bytes = push(raw_bytes, (hi << 4) + lo)
+        i = i + 2
+    }
+    return base64url_encode_bytes(raw_bytes)
+}
+
+fn jwt_ct_eq(a: string, b: string) -> bool {
+    let la = len(a)
+    let lb = len(b)
+    if la != lb {
+        return false
+    }
+    mut diff = 0
+    for i in 0..la {
+        diff = diff | (char_code_at(a, i) ^ char_code_at(b, i))
+    }
+    return diff == 0
+}
+
+fn base64url_encode(raw: string) -> string {
+    let rlen = len(raw)
+    mut bytes: [int] = []
+    for i in 0..rlen {
+        bytes = push(bytes, char_code_at(raw, i) & 255)
+    }
+    return base64url_encode_bytes(bytes)
+}
+
+fn jwt_sign_hs256(payload_json: string, secret: string) -> string {
+    let hdr_json = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
+    let hdr_b64 = base64url_encode(hdr_json)
+    let pay_b64 = base64url_encode(payload_json)
+    let signing_input = hdr_b64 + "." + pay_b64
+    let sig_hex = hmac_sha256(secret, signing_input)
+    let sig_b64 = base64url_encode_hex(sig_hex)
+    return signing_input + "." + sig_b64
+}
+
+fn jwt_b64url_val(ch: string) -> int {
+    let c = char_code_at(ch, 0)
+    if c >= 65 && c <= 90 {
+        return c - 65
+    }
+    if c >= 97 && c <= 122 {
+        return c - 71
+    }
+    if c >= 48 && c <= 57 {
+        return c + 4
+    }
+    if c == 45 {
+        return 62
+    }
+    if c == 95 {
+        return 63
+    }
+    return -1
+}
+
+fn base64url_decode(b64: string) -> string {
+    let n = len(b64)
+    if n == 0 || (n % 4) == 1 {
+        return ""
+    }
+    mut out = ""
+    mut i = 0
+    while i < n {
+        let rem = n - i
+        let v0 = jwt_b64url_val(char_at(b64, i))
+        let v1 = jwt_b64url_val(char_at(b64, i + 1))
+        if v0 < 0 || v1 < 0 {
+            return ""
+        }
+        let b0 = ((v0 << 2) + (v1 >> 4)) & 255
+        if b0 == 0 {
+            return ""
+        }
+        out = out + char_from_code(b0)
+        if rem >= 3 {
+            let v2 = jwt_b64url_val(char_at(b64, i + 2))
+            if v2 < 0 {
+                return ""
+            }
+            let b1 = (((v1 & 15) << 4) + (v2 >> 2)) & 255
+            if b1 == 0 {
+                return ""
+            }
+            out = out + char_from_code(b1)
+            if rem >= 4 {
+                let v3 = jwt_b64url_val(char_at(b64, i + 3))
+                if v3 < 0 {
+                    return ""
+                }
+                let b2 = (((v2 & 3) << 6) + v3) & 255
+                if b2 == 0 {
+                    return ""
+                }
+                out = out + char_from_code(b2)
+            }
+        }
+        i = i + 4
+    }
+    return out
+}
+
+fn jwt_is_ws(ch: string) -> bool {
+    return ch == " " || ch == "\t" || ch == "\r" || ch == "\n"
+}
+
+fn jwt_trim(s: string) -> string {
+    let n = len(s)
+    mut a = 0
+    while a < n && jwt_is_ws(char_at(s, a)) {
+        a = a + 1
+    }
+    mut b = n
+    while b > a && jwt_is_ws(char_at(s, b - 1)) {
+        b = b - 1
+    }
+    return slice(s, a, b - a)
+}
+
+fn jwt_json_raw_field(json: string, target_key: string) -> string {
+    let n = len(json)
+    mut i = 0
+    while i < n && jwt_is_ws(char_at(json, i)) {
+        i = i + 1
+    }
+    if i >= n || char_at(json, i) != "{" {
+        return ""
+    }
+    mut depth = 0
+    mut expect_key = false
+    while i < n {
+        let ch = char_at(json, i)
+        if ch == "\"" {
+            let ks = i + 1
+            i = i + 1
+            mut kbuf = ""
+            while i < n {
+                let sc = char_at(json, i)
+                if sc == "\\" && i + 1 < n {
+                    kbuf = kbuf + char_at(json, i + 1)
+                    i = i + 2
+                } else if sc == "\"" {
+                    i = i + 1
+                    break
+                } else {
+                    kbuf = kbuf + sc
+                    i = i + 1
+                }
+            }
+            if depth == 1 && expect_key {
+                while i < n && jwt_is_ws(char_at(json, i)) {
+                    i = i + 1
+                }
+                if i < n && char_at(json, i) == ":" {
+                    i = i + 1
+                    while i < n && jwt_is_ws(char_at(json, i)) {
+                        i = i + 1
+                    }
+                    if kbuf == target_key {
+                        if i < n && char_at(json, i) == "\"" {
+                            i = i + 1
+                            mut vbuf = ""
+                            while i < n {
+                                let vc = char_at(json, i)
+                                if vc == "\\" && i + 1 < n {
+                                    vbuf = vbuf + char_at(json, i + 1)
+                                    i = i + 2
+                                } else if vc == "\"" {
+                                    return "S:" + vbuf
+                                } else {
+                                    vbuf = vbuf + vc
+                                    i = i + 1
+                                }
+                            }
+                            return ""
+                        }
+                        let vs = i
+                        mut vd = 0
+                        mut in_s = false
+                        while i < n {
+                            let vc = char_at(json, i)
+                            if in_s {
+                                if vc == "\\" && i + 1 < n {
+                                    i = i + 2
+                                } else if vc == "\"" {
+                                    in_s = false
+                                    i = i + 1
+                                } else {
+                                    i = i + 1
+                                }
+                            } else {
+                                if vc == "\"" {
+                                    in_s = true
+                                    i = i + 1
+                                } else if vc == "{" || vc == "[" {
+                                    vd = vd + 1
+                                    i = i + 1
+                                } else if vc == "}" || vc == "]" {
+                                    if vd == 0 {
+                                        break
+                                    }
+                                    vd = vd - 1
+                                    i = i + 1
+                                } else if vc == "," && vd == 0 {
+                                    break
+                                } else {
+                                    i = i + 1
+                                }
+                            }
+                        }
+                        return "V:" + jwt_trim(slice(json, vs, i - vs))
+                    }
+                    expect_key = false
+                }
+            }
+        } else if ch == "{" || ch == "[" {
+            depth = depth + 1
+            expect_key = (depth == 1 && ch == "{")
+            i = i + 1
+        } else if ch == "}" || ch == "]" {
+            depth = depth - 1
+            if depth <= 0 {
+                return ""
+            }
+            expect_key = false
+            i = i + 1
+        } else if ch == "," && depth == 1 {
+            expect_key = true
+            i = i + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return ""
+}
+
+fn jwt_parse_strict_int(s: string, mut ok_out: [int]) -> int {
+    let n = len(s)
+    if n == 0 {
+        ok_out[0] = 0
+        return 0
+    }
+    mut i = 0
+    mut neg = false
+    if char_at(s, 0) == "-" {
+        neg = true
+        i = 1
+        if i >= n {
+            ok_out[0] = 0
+            return 0
+        }
+    }
+    mut acc = 0
+    while i < n {
+        let c = char_code_at(s, i)
+        if c < 48 || c > 57 {
+            ok_out[0] = 0
+            return 0
+        }
+        acc = acc * 10 + (c - 48)
+        i = i + 1
+    }
+    ok_out[0] = 1
+    if neg {
+        return -acc
+    }
+    return acc
+}
+
+fn jwt_verify_hs256(token: string, secret: string) -> bool {
+    let parts = str_split(token, ".")
+    if len(parts) != 3 {
+        return false
+    }
+    if len(parts[0]) == 0 || len(parts[1]) == 0 || len(parts[2]) == 0 {
+        return false
+    }
+    let hdr_raw = base64url_decode(parts[0])
+    if len(hdr_raw) == 0 {
+        return false
+    }
+    let alg = jwt_json_raw_field(hdr_raw, "alg")
+    if alg != "S:HS256" {
+        return false
+    }
+    let signing_input = parts[0] + "." + parts[1]
+    let expected_sig = base64url_encode_hex(hmac_sha256(secret, signing_input))
+    return jwt_ct_eq(parts[2], expected_sig)
+}
+
+fn jwt_verify_hs256_claims(token: string, secret: string, now_unix: int) -> bool {
+    if jwt_verify_hs256(token, secret) == false {
+        return false
+    }
+    let parts = str_split(token, ".")
+    let pay_raw = base64url_decode(parts[1])
+    if len(pay_raw) == 0 {
+        return false
+    }
+    let pay_t = jwt_trim(pay_raw)
+    if len(pay_t) < 2 || char_at(pay_t, 0) != "{" {
+        return false
+    }
+    let exp_f = jwt_json_raw_field(pay_t, "exp")
+    if len(exp_f) > 0 {
+        if len(exp_f) < 3 || slice(exp_f, 0, 2) != "V:" {
+            return false
+        }
+        mut ok = [0]
+        let exp_val = jwt_parse_strict_int(slice(exp_f, 2, len(exp_f) - 2), ok)
+        if ok[0] == 0 || now_unix >= exp_val {
+            return false
+        }
+    }
+    let nbf_f = jwt_json_raw_field(pay_t, "nbf")
+    if len(nbf_f) > 0 {
+        if len(nbf_f) < 3 || slice(nbf_f, 0, 2) != "V:" {
+            return false
+        }
+        mut ok2 = [0]
+        let nbf_val = jwt_parse_strict_int(slice(nbf_f, 2, len(nbf_f) - 2), ok2)
+        if ok2[0] == 0 || now_unix < nbf_val {
+            return false
+        }
+    }
+    return true
+}
+
+fn jwt_extract_payload_part(token: string) -> string {
+    let parts = str_split(token, ".")
+    if len(parts) != 3 {
+        return ""
+    }
+    return parts[1]
+}

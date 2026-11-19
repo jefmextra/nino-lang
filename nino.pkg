@@ -1,0 +1,8 @@
+{
+  "name": "nino-project",
+  "version": "1.0.0",
+  "sovereign": true,
+  "dependencies": {
+    "std": "1.0.0"
+  }
+}

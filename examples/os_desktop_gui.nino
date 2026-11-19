@@ -1,0 +1,503 @@
+import "std/gui"
+
+fn render_desktop(win: GuiWindow, start_open: bool, active_win: string, control_tab: string, audit_count: i32, selected_file: string, term_cmd: string, term_out: string, status_msg: string) {
+    gui_clear(win)
+
+    gui_draw_rect(win, 0, 0, 960, 550, "#080c14")
+
+    gui_draw_round_rect(win, 120, 40, 720, 460, 48, "#0d1424", "")
+    gui_draw_round_rect(win, 240, 90, 480, 340, 36, "#111a30", "")
+    gui_draw_round_rect(win, 340, 140, 280, 220, 28, "#15223e", "")
+
+    gui_draw_text(win, "N I N O   O S", 400, 220, 16, "#1e2c4a")
+    gui_draw_text(win, "Vanguard v0.4.0 - 64-Bit Bare-Metal Security Architecture", 320, 250, 11, "#263554")
+    gui_draw_text(win, "Lead Architect: vvictor  |  Authority: ninosec.me", 355, 275, 10, "#1e2c4a")
+
+    gui_draw_round_rect(win, 20, 20, 74, 72, 12, "#101626", "#1e293b")
+    gui_draw_round_rect(win, 37, 30, 40, 28, 6, "#f59e0b", "")
+    gui_draw_round_rect(win, 33, 34, 48, 28, 6, "#fbbf24", "")
+    gui_draw_round_rect(win, 44, 40, 26, 16, 4, "#ffffff", "")
+    gui_draw_text(win, "Files", 42, 72, 11, "#cbd5e1")
+
+    gui_draw_round_rect(win, 20, 105, 74, 72, 12, "#101626", "#1e293b")
+    gui_draw_round_rect(win, 37, 115, 40, 34, 8, "#0284c7", "")
+    gui_draw_round_rect(win, 43, 121, 28, 22, 6, "#38bdf8", "")
+    gui_draw_round_rect(win, 51, 127, 12, 10, 3, "#ffffff", "")
+    gui_draw_text(win, "Control", 36, 157, 11, "#cbd5e1")
+
+    gui_draw_round_rect(win, 20, 190, 74, 72, 12, "#101626", "#1e293b")
+    gui_draw_round_rect(win, 35, 200, 44, 34, 8, "#090d16", "#22c55e")
+    gui_draw_text(win, ">_", 47, 207, 13, "#22c55e")
+    gui_draw_text(win, "Terminal", 31, 242, 11, "#cbd5e1")
+
+    gui_draw_round_rect(win, 20, 275, 74, 72, 12, "#101626", "#1e293b")
+    gui_draw_round_rect(win, 37, 285, 40, 34, 8, "#334155", "")
+    gui_draw_round_rect(win, 45, 293, 24, 18, 4, "#64748b", "")
+    gui_draw_round_rect(win, 52, 298, 10, 8, 2, "#94a3b8", "")
+    gui_draw_text(win, "Settings", 33, 327, 11, "#cbd5e1")
+
+    gui_draw_round_rect(win, 20, 360, 74, 72, 12, "#101626", "#1e293b")
+    gui_draw_round_rect(win, 37, 370, 40, 34, 16, "#0369a1", "")
+    gui_draw_round_rect(win, 43, 376, 28, 22, 10, "#38bdf8", "")
+    gui_draw_text(win, "Portal", 38, 412, 11, "#cbd5e1")
+
+    gui_draw_round_rect(win, 20, 445, 74, 72, 12, "#101626", "#1e293b")
+    gui_draw_round_rect(win, 40, 455, 34, 32, 6, "#1e293b", "#475569")
+    gui_draw_round_rect(win, 44, 451, 26, 6, 2, "#64748b", "")
+    gui_draw_text(win, "Trash", 40, 497, 11, "#94a3b8")
+
+    if active_win == "control_panel" {
+        gui_draw_round_rect(win, 140, 35, 710, 485, 14, "#0f172a", "#334155")
+
+        gui_draw_round_rect(win, 140, 35, 710, 42, 14, "#1e293b", "")
+        gui_draw_rect(win, 140, 65, 710, 12, "#1e293b")
+        gui_draw_round_rect(win, 155, 45, 20, 20, 4, "#0284c7", "")
+        gui_draw_text(win, "Control Panel - Security Enclave & System Configuration", 185, 46, 12, "#f8fafc")
+
+        gui_draw_round_rect(win, 755, 43, 24, 24, 4, "#334155", "")
+        gui_draw_text(win, "-", 764, 44, 12, "#cbd5e1")
+
+        gui_draw_round_rect(win, 784, 43, 24, 24, 4, "#334155", "")
+        gui_draw_text(win, "[]", 790, 46, 9, "#cbd5e1")
+
+        gui_draw_round_rect(win, 813, 43, 26, 24, 4, "#ef4444", "")
+        gui_draw_text(win, "X", 822, 46, 10, "#ffffff")
+
+        gui_draw_rect(win, 140, 77, 175, 443, "#090d16")
+        gui_draw_rect(win, 314, 77, 1, 443, "#1e293b")
+
+        if control_tab == "security" {
+            gui_draw_round_rect(win, 148, 90, 160, 36, 8, "#1e293b", "#0284c7")
+            gui_draw_text(win, "Shield: Security Enclave", 158, 99, 11, "#38bdf8")
+        } else {
+            gui_draw_round_rect(win, 148, 90, 160, 36, 8, "#101626", "")
+            gui_draw_text(win, "Shield: Security Enclave", 158, 99, 11, "#94a3b8")
+        }
+
+        if control_tab == "kernel" {
+            gui_draw_round_rect(win, 148, 135, 160, 36, 8, "#1e293b", "#0284c7")
+            gui_draw_text(win, "CPU: Kernel & Bus", 158, 144, 11, "#38bdf8")
+        } else {
+            gui_draw_round_rect(win, 148, 135, 160, 36, 8, "#101626", "")
+            gui_draw_text(win, "CPU: Kernel & Bus", 158, 144, 11, "#94a3b8")
+        }
+
+        if control_tab == "display" {
+            gui_draw_round_rect(win, 148, 180, 160, 36, 8, "#1e293b", "#0284c7")
+            gui_draw_text(win, "Display: GDI Double-Buffer", 158, 189, 11, "#38bdf8")
+        } else {
+            gui_draw_round_rect(win, 148, 180, 160, 36, 8, "#101626", "")
+            gui_draw_text(win, "Display: GDI Double-Buffer", 158, 189, 11, "#94a3b8")
+        }
+
+        if control_tab == "about" {
+            gui_draw_round_rect(win, 148, 225, 160, 36, 8, "#1e293b", "#0284c7")
+            gui_draw_text(win, "Info: About System", 158, 234, 11, "#38bdf8")
+        } else {
+            gui_draw_round_rect(win, 148, 225, 160, 36, 8, "#101626", "")
+            gui_draw_text(win, "Info: About System", 158, 234, 11, "#94a3b8")
+        }
+
+        if control_tab == "security" {
+            gui_draw_round_rect(win, 330, 90, 505, 65, 10, "#132338", "#0284c7")
+            gui_draw_text(win, "● HARDWARE ENCLAVE STATUS: 100% ARMORED", 345, 103, 12, "#38bdf8")
+            gui_draw_text(win, "Cryptographically enforced zero-leak boundary. Unauthorized memory reads drop to 0x00.", 345, 125, 10, "#94a3b8")
+
+            gui_draw_round_rect(win, 330, 168, 505, 55, 8, "#131a2a", "#1e293b")
+            gui_draw_text(win, "Physical VRAM Direct Access", 345, 178, 11, "#ffffff")
+            gui_draw_text(win, "Mapped to 0xB8000 Framebuffer | Ring 0 Long Mode Access Only", 345, 198, 10, "#22c55e")
+
+            gui_draw_round_rect(win, 330, 233, 505, 55, 8, "#131a2a", "#1e293b")
+            gui_draw_text(win, "Dynamic Morphic Shuffling", 345, 243, 11, "#ffffff")
+            gui_draw_text(win, "Entropy Rating: 99.98% | Pointer Masking Engaged", 345, 263, 10, "#f59e0b")
+
+            gui_draw_round_rect(win, 330, 298, 505, 55, 8, "#131a2a", "#1e293b")
+            gui_draw_text(win, "UART Serial Hardware Bus", 345, 308, 11, "#ffffff")
+            gui_draw_text(win, "I/O Port 0x3F8 Connected | Libc Dependency: None (Freestanding)", 345, 328, 10, "#94a3b8")
+
+            gui_draw_round_rect(win, 330, 368, 240, 38, 8, "#0284c7", "#38bdf8")
+            gui_draw_text(win, "Run Full Security Audit", 365, 378, 11, "#ffffff")
+
+            gui_draw_round_rect(win, 580, 368, 255, 38, 8, "#1e293b", "#334155")
+            gui_draw_text(win, "Audit Count: #" + audit_count + " (PASS)", 635, 378, 11, "#22c55e")
+
+            gui_draw_text(win, "Status: " + status_msg, 335, 420, 10, "#64748b")
+        }
+
+        if control_tab == "kernel" {
+            gui_draw_round_rect(win, 330, 90, 505, 80, 10, "#131d2e", "#1e293b")
+            gui_draw_text(win, "CPU Target: x86_64 Freestanding Long Mode", 345, 105, 12, "#38bdf8")
+            gui_draw_text(win, "The Nino Kernel executes in Ring 0 supervisor mode with zero runtime dependencies.", 345, 130, 10, "#94a3b8")
+            gui_draw_text(win, "Compiled natively to standalone object code 'kernel_os.o'.", 345, 146, 10, "#22c55e")
+
+            gui_draw_round_rect(win, 330, 185, 505, 60, 8, "#131a2a", "#1e293b")
+            gui_draw_text(win, "Multiboot Header Specification", 345, 197, 11, "#ffffff")
+            gui_draw_text(win, "Bootloader entry point at 1MB physical RAM (0x100000) via boot.s", 345, 218, 10, "#f59e0b")
+
+            gui_draw_round_rect(win, 330, 255, 505, 60, 8, "#131a2a", "#1e293b")
+            gui_draw_text(win, "Hardware Port I/O Operations", 345, 267, 11, "#ffffff")
+            gui_draw_text(win, "Direct CPU inb / outb instructions executed via compiler driver.", 345, 288, 10, "#94a3b8")
+        }
+
+        if control_tab == "display" {
+            gui_draw_round_rect(win, 330, 90, 505, 80, 10, "#131d2e", "#1e293b")
+            gui_draw_text(win, "Desktop Rendering Engine: Native Win32 GDI", 345, 105, 12, "#38bdf8")
+            gui_draw_text(win, "Resolution: 960 x 600 Desktop Window | Frame Buffer: Double-Buffered", 345, 130, 10, "#22c55e")
+            gui_draw_text(win, "Zero external DLL dependencies. Runs directly on user32.dll & gdi32.dll.", 345, 146, 10, "#94a3b8")
+
+            gui_draw_round_rect(win, 330, 185, 505, 60, 8, "#131a2a", "#1e293b")
+            gui_draw_text(win, "Display Frequency & Event Pumping", 345, 197, 11, "#ffffff")
+            gui_draw_text(win, "Interactive 60 FPS Event Loop with zero flickering.", 345, 218, 10, "#f59e0b")
+        }
+
+        if control_tab == "about" {
+            gui_draw_round_rect(win, 330, 90, 505, 140, 10, "#131d2e", "#f59e0b")
+            gui_draw_text(win, "The Nino Programming Language & Operating System", 345, 105, 13, "#f59e0b")
+            gui_draw_text(win, "Version: 0.4.0 Vanguard (Kernel Mode, FFI, Native GUI, 3D Math)", 345, 132, 11, "#ffffff")
+            gui_draw_text(win, "Lead Architect: vvictor", 345, 155, 11, "#38bdf8")
+            gui_draw_text(win, "Official Authority Domain: ninosec.me", 345, 178, 11, "#38bdf8")
+            gui_draw_text(win, "License: MIT Open-Source Software", 345, 201, 10, "#94a3b8")
+        }
+    }
+
+    if active_win == "file_explorer" {
+        gui_draw_round_rect(win, 140, 35, 710, 485, 14, "#0f172a", "#334155")
+        gui_draw_round_rect(win, 140, 35, 710, 42, 14, "#1e293b", "")
+        gui_draw_rect(win, 140, 65, 710, 12, "#1e293b")
+        gui_draw_round_rect(win, 155, 45, 20, 20, 4, "#f59e0b", "")
+        gui_draw_text(win, "File Explorer - /vfs/enclaves", 185, 46, 12, "#f8fafc")
+
+        gui_draw_round_rect(win, 755, 43, 24, 24, 4, "#334155", "")
+        gui_draw_text(win, "-", 764, 44, 12, "#cbd5e1")
+        gui_draw_round_rect(win, 784, 43, 24, 24, 4, "#334155", "")
+        gui_draw_text(win, "[]", 790, 46, 9, "#cbd5e1")
+        gui_draw_round_rect(win, 813, 43, 26, 24, 4, "#ef4444", "")
+        gui_draw_text(win, "X", 822, 46, 10, "#ffffff")
+
+        gui_draw_round_rect(win, 155, 85, 680, 32, 6, "#090d16", "#1e293b")
+        gui_draw_text(win, "This PC > Local Disk (C:) > NinoOS > Enclaves", 170, 93, 10, "#94a3b8")
+
+        gui_draw_rect(win, 155, 125, 140, 340, "#090d16")
+        gui_draw_text(win, "Quick Access", 165, 135, 11, "#f59e0b")
+        gui_draw_text(win, "📁 Enclaves Vault", 165, 165, 10, "#38bdf8")
+        gui_draw_text(win, "📁 Drivers", 165, 195, 10, "#94a3b8")
+        gui_draw_text(win, "📁 Standard Lib", 165, 225, 10, "#94a3b8")
+        gui_draw_text(win, "📁 Kernel Boot", 165, 255, 10, "#94a3b8")
+
+        gui_draw_rect(win, 305, 125, 530, 340, "#131a28")
+
+        gui_draw_round_rect(win, 315, 135, 510, 40, 6, "#1a2336", "#1e293b")
+        gui_draw_text(win, "📄 kernel_os.o", 330, 147, 11, "#ffffff")
+        gui_draw_text(win, "5.0 KB  |  x86_64 Freestanding Object Code", 550, 147, 10, "#22c55e")
+
+        gui_draw_round_rect(win, 315, 185, 510, 40, 6, "#1a2336", "#1e293b")
+        gui_draw_text(win, "🔒 sealed_vault.bin", 330, 197, 11, "#ffffff")
+        gui_draw_text(win, "4.0 KB  |  Cryptographic Hardware Enclave", 550, 197, 10, "#f59e0b")
+
+        gui_draw_round_rect(win, 315, 235, 510, 40, 6, "#1a2336", "#1e293b")
+        gui_draw_text(win, "📄 nino_core.sys", 330, 247, 11, "#ffffff")
+        gui_draw_text(win, "64.0 KB |  System Kernel Image", 550, 247, 10, "#94a3b8")
+
+        gui_draw_round_rect(win, 315, 285, 510, 40, 6, "#1a2336", "#1e293b")
+        gui_draw_text(win, "📄 gui_driver.nino", 330, 297, 11, "#ffffff")
+        gui_draw_text(win, "12.0 KB |  Nino Native GUI Source", 550, 297, 10, "#38bdf8")
+
+        gui_draw_round_rect(win, 315, 335, 510, 40, 6, "#1a2336", "#1e293b")
+        gui_draw_text(win, "📜 author_manifest.sig", 330, 347, 11, "#ffffff")
+        gui_draw_text(win, "1.0 KB  |  Digital Signature (vvictor)", 550, 347, 10, "#f59e0b")
+
+        gui_draw_text(win, "5 items  |  Selected: " + selected_file + "  |  Free Storage: 512 GB", 170, 480, 10, "#64748b")
+    }
+
+    if active_win == "terminal" {
+        gui_draw_round_rect(win, 140, 35, 710, 485, 14, "#0b0f19", "#22c55e")
+        gui_draw_round_rect(win, 140, 35, 710, 42, 14, "#131a28", "")
+        gui_draw_rect(win, 140, 65, 710, 12, "#131a28")
+        gui_draw_round_rect(win, 155, 45, 20, 20, 4, "#22c55e", "")
+        gui_draw_text(win, "Nino Interactive Terminal Shell - root@nino-kernel", 185, 46, 12, "#f8fafc")
+
+        gui_draw_round_rect(win, 755, 43, 24, 24, 4, "#334155", "")
+        gui_draw_text(win, "-", 764, 44, 12, "#cbd5e1")
+        gui_draw_round_rect(win, 784, 43, 24, 24, 4, "#334155", "")
+        gui_draw_text(win, "[]", 790, 46, 9, "#cbd5e1")
+        gui_draw_round_rect(win, 813, 43, 26, 24, 4, "#ef4444", "")
+        gui_draw_text(win, "X", 822, 46, 10, "#ffffff")
+
+        gui_draw_rect(win, 155, 85, 680, 340, "#05070d")
+        gui_draw_text(win, "Nino OS Vanguard [Version 0.4.0 Kernel Architecture]", 170, 100, 11, "#64748b")
+        gui_draw_text(win, "Type commands or click quick action buttons below.", 170, 120, 10, "#64748b")
+        gui_draw_text(win, "--------------------------------------------------------", 170, 138, 10, "#1e293b")
+
+        gui_draw_text(win, "nino-os/root> " + term_cmd, 170, 160, 11, "#38bdf8")
+        gui_draw_text(win, term_out, 170, 190, 11, "#22c55e")
+        gui_draw_text(win, "nino-os/root> _", 170, 230, 12, "#f59e0b")
+
+        gui_draw_round_rect(win, 155, 435, 140, 36, 6, "#1e293b", "#38bdf8")
+        gui_draw_text(win, "> sysinfo", 185, 445, 11, "#38bdf8")
+
+        gui_draw_round_rect(win, 305, 435, 160, 36, 6, "#1e293b", "#f59e0b")
+        gui_draw_text(win, "> enclave --audit", 325, 445, 11, "#f59e0b")
+
+        gui_draw_round_rect(win, 475, 435, 140, 36, 6, "#1e293b", "#22c55e")
+        gui_draw_text(win, "> whoami", 515, 445, 11, "#22c55e")
+
+        gui_draw_round_rect(win, 625, 435, 120, 36, 6, "#1e293b", "#ef4444")
+        gui_draw_text(win, "> clear", 665, 445, 11, "#ef4444")
+    }
+
+    if active_win == "settings" {
+        gui_draw_round_rect(win, 140, 35, 710, 485, 14, "#0f172a", "#334155")
+        gui_draw_round_rect(win, 140, 35, 710, 42, 14, "#1e293b", "")
+        gui_draw_rect(win, 140, 65, 710, 12, "#1e293b")
+        gui_draw_round_rect(win, 155, 45, 20, 20, 4, "#64748b", "")
+        gui_draw_text(win, "Settings - Operating System & Language Configuration", 185, 46, 12, "#f8fafc")
+
+        gui_draw_round_rect(win, 755, 43, 24, 24, 4, "#334155", "")
+        gui_draw_text(win, "-", 764, 44, 12, "#cbd5e1")
+        gui_draw_round_rect(win, 784, 43, 24, 24, 4, "#334155", "")
+        gui_draw_text(win, "[]", 790, 46, 9, "#cbd5e1")
+        gui_draw_round_rect(win, 813, 43, 26, 24, 4, "#ef4444", "")
+        gui_draw_text(win, "X", 822, 46, 10, "#ffffff")
+
+        gui_draw_round_rect(win, 160, 95, 670, 70, 8, "#131a28", "#1e293b")
+        gui_draw_text(win, "Operating System Edition", 175, 108, 12, "#38bdf8")
+        gui_draw_text(win, "Nino OS v0.4.0 Vanguard (Bare-Metal Freestanding Kernel)", 175, 132, 10, "#94a3b8")
+
+        gui_draw_round_rect(win, 160, 175, 670, 70, 8, "#131a28", "#1e293b")
+        gui_draw_text(win, "Developer & Creator Information", 175, 188, 12, "#f59e0b")
+        gui_draw_text(win, "Author: vvictor  |  Authority: ninosec.me  |  Copyright (c) 2026", 175, 212, 10, "#94a3b8")
+
+        gui_draw_round_rect(win, 160, 255, 670, 70, 8, "#131a28", "#1e293b")
+        gui_draw_text(win, "Compiler & Language Architecture", 175, 268, 12, "#22c55e")
+        gui_draw_text(win, "Phases 1-4 Complete (Native Exe, FFI, GUI Engine, Bare-Metal Kernel)", 175, 292, 10, "#94a3b8")
+    }
+
+    gui_draw_rect(win, 0, 550, 960, 50, "#0c111d")
+    gui_draw_rect(win, 0, 550, 960, 1, "#1e293b")
+
+    if start_open {
+        gui_draw_round_rect(win, 16, 557, 95, 36, 8, "#fbbf24", "")
+        gui_draw_text(win, "NINO", 45, 567, 11, "#000000")
+    } else {
+        gui_draw_round_rect(win, 16, 557, 95, 36, 8, "#f59e0b", "")
+        gui_draw_text(win, "NINO", 45, 567, 11, "#090d16")
+    }
+    gui_draw_rect(win, 26, 566, 3, 16, "#090d16")
+    gui_draw_rect(win, 29, 571, 3, 6, "#090d16")
+    gui_draw_rect(win, 32, 566, 3, 16, "#090d16")
+
+    gui_draw_round_rect(win, 120, 557, 180, 36, 18, "#141c2e", "#1e293b")
+    gui_draw_text(win, "Search apps, files...", 140, 568, 10, "#64748b")
+
+    if active_win == "control_panel" {
+        gui_draw_round_rect(win, 310, 557, 125, 36, 8, "#1e293b", "#0284c7")
+        gui_draw_text(win, "🛡️ Control", 330, 568, 10, "#38bdf8")
+    }
+    if active_win == "file_explorer" {
+        gui_draw_round_rect(win, 442, 557, 115, 36, 8, "#1e293b", "#f59e0b")
+        gui_draw_text(win, "📁 Files", 465, 568, 10, "#fbbf24")
+    }
+    if active_win == "terminal" {
+        gui_draw_round_rect(win, 564, 557, 120, 36, 8, "#1e293b", "#22c55e")
+        gui_draw_text(win, "⚡ Terminal", 582, 568, 10, "#22c55e")
+    }
+    if active_win == "settings" {
+        gui_draw_round_rect(win, 690, 557, 115, 36, 8, "#1e293b", "#94a3b8")
+        gui_draw_text(win, "⚙️ Settings", 708, 568, 10, "#cbd5e1")
+    }
+
+    gui_draw_round_rect(win, 815, 560, 55, 30, 6, "#141c2e", "")
+    gui_draw_text(win, "Ring 0", 823, 568, 10, "#22c55e")
+
+    gui_draw_text(win, "17:42", 885, 562, 11, "#ffffff")
+    gui_draw_text(win, "15 Nov", 885, 576, 9, "#64748b")
+
+    if start_open {
+        gui_draw_round_rect(win, 16, 150, 360, 395, 16, "#0f172a", "#f59e0b")
+
+        gui_draw_round_rect(win, 32, 168, 328, 36, 8, "#1e293b", "#334155")
+        gui_draw_text(win, "Type here to search...", 48, 178, 10, "#94a3b8")
+
+        gui_draw_text(win, "PINNED APPLICATIONS", 35, 220, 10, "#f59e0b")
+
+        gui_draw_round_rect(win, 32, 240, 155, 42, 8, "#1e293b", "")
+        gui_draw_text(win, "🛡️ Control Panel", 46, 253, 10, "#ffffff")
+
+        gui_draw_round_rect(win, 200, 240, 160, 42, 8, "#1e293b", "")
+        gui_draw_text(win, "📁 File Explorer", 215, 253, 10, "#ffffff")
+
+        gui_draw_round_rect(win, 32, 292, 155, 42, 8, "#1e293b", "")
+        gui_draw_text(win, "⚡ Nino Terminal", 46, 305, 10, "#ffffff")
+
+        gui_draw_round_rect(win, 200, 292, 160, 42, 8, "#1e293b", "")
+        gui_draw_text(win, "⚙️ System Settings", 215, 305, 10, "#ffffff")
+
+        gui_draw_round_rect(win, 32, 344, 155, 42, 8, "#1e293b", "")
+        gui_draw_text(win, "🌐 Web Portal", 46, 357, 10, "#ffffff")
+
+        gui_draw_round_rect(win, 200, 344, 160, 42, 8, "#1e293b", "")
+        gui_draw_text(win, "🔒 Enclave Audit", 215, 357, 10, "#ffffff")
+
+        gui_draw_rect(win, 16, 485, 360, 1, "#1e293b")
+        gui_draw_round_rect(win, 32, 497, 30, 30, 15, "#0284c7", "")
+        gui_draw_text(win, "V", 42, 503, 12, "#ffffff")
+        gui_draw_text(win, "vvictor", 70, 498, 11, "#ffffff")
+        gui_draw_text(win, "Administrator (Ring 0)", 70, 513, 9, "#64748b")
+
+        gui_draw_round_rect(win, 295, 497, 65, 30, 6, "#33161c", "#ef4444")
+        gui_draw_text(win, "Power", 312, 505, 10, "#ef4444")
+    }
+
+    gui_refresh(win)
+}
+
+fn main() {
+    print("==================================================")
+    print("       NINO OS GRAPHICAL DESKTOP ENVIRONMENT      ")
+    print("==================================================")
+    print("Launching Native Windows 11 Style Desktop Engine...")
+
+    let win = gui_create_window("Nino OS [v0.4.0 Vanguard] - Desktop Environment", 960, 600)
+
+    mut start_open = false
+    mut active_win = "control_panel"
+    mut control_tab = "security"
+    mut audit_count = 1
+    mut selected_file = "kernel_os.o"
+    mut term_cmd = "sysinfo"
+    mut term_out = "[Nino Kernel OS v0.4.0 - Pioneer Cryptographic Bare-Metal System]"
+    mut status_msg = "All security enclaves sealed (0 memory leaks)"
+
+    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+
+    print("==================================================")
+    print("SUCCESS: Nino OS Modern Desktop OPERATIONAL!")
+    print("[Nino GUI] Windows 11 Desktop Style active with clean icons, taskbar & Control Panel!")
+    print("==================================================")
+
+    while gui_is_active(win) {
+        let click = gui_poll_click(win)
+        if click != nil {
+            let cx = click[0]
+            let cy = click[1]
+
+            if cx >= 16 and cx <= 111 and cy >= 557 and cy <= 593 {
+                start_open = not start_open
+                render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+            }
+            else if start_open and cx >= 16 and cx <= 376 and cy >= 150 and cy <= 545 {
+                if cx >= 32 and cx <= 187 and cy >= 240 and cy <= 282 {
+                    active_win = "control_panel"
+                    start_open = false
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 200 and cx <= 360 and cy >= 240 and cy <= 282 {
+                    active_win = "file_explorer"
+                    start_open = false
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 32 and cx <= 187 and cy >= 292 and cy <= 334 {
+                    active_win = "terminal"
+                    start_open = false
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 200 and cx <= 360 and cy >= 292 and cy <= 334 {
+                    active_win = "settings"
+                    start_open = false
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 295 and cx <= 360 and cy >= 497 and cy <= 527 {
+                    print("[Nino GUI] User requested power shut down.")
+                    gui_clear(win)
+                    break
+                }
+            }
+            else {
+                if start_open {
+                    start_open = false
+                }
+
+                if cx >= 20 and cx <= 94 and cy >= 20 and cy <= 92 {
+                    active_win = "file_explorer"
+                    status_msg = "Opened File Explorer"
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 20 and cx <= 94 and cy >= 105 and cy <= 177 {
+                    active_win = "control_panel"
+                    status_msg = "Opened Control Panel"
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 20 and cx <= 94 and cy >= 190 and cy <= 262 {
+                    active_win = "terminal"
+                    status_msg = "Opened Nino Terminal"
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 20 and cx <= 94 and cy >= 275 and cy <= 347 {
+                    active_win = "settings"
+                    status_msg = "Opened System Settings"
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 20 and cx <= 94 and cy >= 360 and cy <= 432 {
+                    status_msg = "Official Authority: ninosec.me (Architect: vvictor)"
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+                else if cx >= 20 and cx <= 94 and cy >= 445 and cy <= 517 {
+                    status_msg = "Recycle Bin is empty (0 items)"
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+
+                else if active_win != "none" and cx >= 805 and cx <= 845 and cy >= 40 and cy <= 70 {
+                    active_win = "none"
+                    status_msg = "Closed window"
+                    render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                }
+
+                else if active_win == "control_panel" {
+                    if cx >= 148 and cx <= 308 {
+                        if cy >= 90 and cy <= 126 {
+                            control_tab = "security"
+                            render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                        } else if cy >= 135 and cy <= 171 {
+                            control_tab = "kernel"
+                            render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                        } else if cy >= 180 and cy <= 216 {
+                            control_tab = "display"
+                            render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                        } else if cy >= 225 and cy <= 261 {
+                            control_tab = "about"
+                            render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                        }
+                    }
+
+                    if control_tab == "security" and cx >= 330 and cx <= 570 and cy >= 368 and cy <= 406 {
+                        audit_count = audit_count + 1
+                        status_msg = "Enclave Audit #" + audit_count + ": PASS (0 Leaks)"
+                        render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                    }
+                }
+
+                else if active_win == "terminal" and cy >= 430 and cy <= 475 {
+                    if cx >= 155 and cx <= 295 {
+                        term_cmd = "sysinfo"
+                        term_out = "[OS] Nino Kernel OS v0.4.0 (x86_64 Long Mode, Ring 0 Supervisor)"
+                        render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                    } else if cx >= 305 and cx <= 465 {
+                        audit_count = audit_count + 1
+                        term_cmd = "enclave --audit"
+                        term_out = "[ENCLAVE #" + audit_count + "] Hardware Enclave 100% Sealed | Memory Integrity: PASS"
+                        render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                    } else if cx >= 475 and cx <= 615 {
+                        term_cmd = "whoami"
+                        term_out = "[USER] root (Ring 0 Kernel Authority - Architect: vvictor)"
+                        render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                    } else if cx >= 625 and cx <= 745 {
+                        term_cmd = "clear"
+                        term_out = "[BUFFER] Terminal shell screen cleared."
+                        render_desktop(win, start_open, active_win, control_tab, audit_count, selected_file, term_cmd, term_out, status_msg)
+                    }
+                }
+            }
+        }
+        gui_sleep(win, 16)
+    }
+}

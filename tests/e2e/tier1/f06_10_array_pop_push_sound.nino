@@ -1,0 +1,17 @@
+fn sound_pop_push(c: bool) -> int {
+    mut a = [1, 2, 3]
+    if c {
+        a = pop(a)
+    } else {
+        a = push(a, 9)
+    }
+    ensure(len(a) >= 2 && len(a) <= 4, "pop/push preserves length bounds")
+    return len(a)
+}
+
+fn main() -> int {
+    require(sound_pop_push(true) == 2, "pop branch len")
+    require(sound_pop_push(false) == 4, "push branch len")
+    print("T1-F06-10:PASS")
+    return 0
+}

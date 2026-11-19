@@ -1,0 +1,12 @@
+fn helper_io(path: string, data: string) {
+    file_write(path, data)
+}
+
+fn restricted() -> int with capability [read_only, !network, !disk] {
+    helper_io("temp_cap_deny.txt", "blocked")
+    return 0
+}
+
+fn main() -> int {
+    return restricted()
+}

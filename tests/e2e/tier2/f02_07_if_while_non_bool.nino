@@ -1,0 +1,9 @@
+fn main() -> int {
+    if "non_bool" {
+        print("bad_if")
+    }
+    while 42 {
+        break
+    }
+    return 0
+}

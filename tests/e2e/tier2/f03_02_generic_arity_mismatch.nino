@@ -1,0 +1,5 @@
+fn main() -> int {
+    let bad: Option<int, string> = (Option_int){ .is_some = true, .val = 1 }
+    print(bad.is_some)
+    return 0
+}

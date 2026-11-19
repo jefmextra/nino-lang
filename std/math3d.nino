@@ -1,0 +1,48 @@
+struct Vec3 {
+    mut x: f64,
+    mut y: f64,
+    mut z: f64
+}
+
+struct Ray3D {
+    origin: Vec3,
+    direction: Vec3
+}
+
+fn vec3_new(x: f64, y: f64, z: f64) -> Vec3 {
+    return Vec3 { x: x, y: y, z: z }
+}
+
+fn vec3_add(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
+}
+
+fn vec3_sub(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }
+}
+
+fn vec3_scale(v: Vec3, s: f64) -> Vec3 {
+    return Vec3 { x: v.x * s, y: v.y * s, z: v.z * s }
+}
+
+fn vec3_dot(a: Vec3, b: Vec3) -> f64 {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z)
+}
+
+fn vec3_cross(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 {
+        x: (a.y * b.z) - (a.z * b.y),
+        y: (a.z * b.x) - (a.x * b.z),
+        z: (a.x * b.y) - (a.y * b.x)
+    }
+}
+
+fn vec3_length(v: Vec3) -> f64 {
+    return sqrt((v.x * v.x) + (v.y * v.y) + (v.z * v.z))
+}
+
+fn vec3_normalize(v: Vec3) -> Vec3 {
+    let len = vec3_length(v)
+    require(len > 0.0, "Cannot normalize zero-length vector")
+    return Vec3 { x: v.x / len, y: v.y / len, z: v.z / len }
+}

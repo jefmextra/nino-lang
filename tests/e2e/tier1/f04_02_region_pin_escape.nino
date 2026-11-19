@@ -1,0 +1,10 @@
+fn main() -> int {
+    mut outer_s: string = ""
+    let m = arena_mark()
+    let inner_tmp = "pinned_" + int_to_str(77)
+    outer_s = region_pin(inner_tmp)
+    arena_rollback(m)
+    require(outer_s == "pinned_77", "region_pin value must survive arena_rollback")
+    print("T1-F04-02:PASS")
+    return 0
+}

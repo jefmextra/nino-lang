@@ -1,0 +1,15 @@
+fn main() -> int {
+    let pg_bad = db_postgres_connect("127.0.0.1", 59997, "u:p", "db")
+    let pg_mode = db_driver_mode(pg_bad)
+    let pg_ex = db_postgres_exec(pg_bad, "SELECT 1")
+    let sq = db_sqlite_open(":memory:")
+    let sq_mode = db_driver_mode(sq)
+    db_sqlite_exec(sq, "CREATE TABLE accts (id INT, owner TEXT, balance REAL)")
+    db_sqlite_exec(sq, "INSERT INTO accts VALUES (1, 'ada', 900.5)")
+    let rows = db_sqlite_query(sq, "SELECT id, owner, balance FROM accts")
+    db_sqlite_close(sq)
+    require(pg_bad == "" && pg_mode == "disconnected" && pg_ex == -1, "PostgreSQL offline must fail closed without SQLite delegation")
+    require((sq_mode == "embedded:sqlite-mem" || sq_mode == "native:sqlite3") && len(rows) == 1, "SQLite query failed")
+    print("T1-F11-01:PASS")
+    return 0
+}

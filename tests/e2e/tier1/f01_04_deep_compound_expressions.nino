@@ -1,0 +1,23 @@
+fn g(a: int, b: int) -> int {
+    return (a * 3) + (b << 1)
+}
+
+fn h(v: int) -> int {
+    return (v * v) - 5
+}
+
+fn f(p: int, q: int) -> int {
+    return (p + q) >> 1
+}
+
+fn main() -> int {
+    let nested = f(
+        g(1 + 2, 4),
+        h(3 + 4)
+    )
+    let prec = ((2 + 3 * 4) << 2) - (16 >> 1) + (19 % 5)
+    require(nested == 30, "nested call result must be 30")
+    require(prec == 52, "precedence expression must equal 52")
+    print("T1-F01-04:PASS")
+    return 0
+}

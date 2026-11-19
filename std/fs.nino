@@ -1,0 +1,109 @@
+fn fs_read_text(path: string) -> string {
+    if file_exists(path) == false {
+        return ""
+    }
+    return read_file(path)
+}
+
+fn fs_write_text(path: string, content: string) -> int {
+    return write_file(path, content)
+}
+
+fn fs_append_text(path: string, extra: string) -> int {
+    mut cur = ""
+    if file_exists(path) {
+        cur = read_file(path)
+    }
+    return write_file(path, cur + extra)
+}
+
+fn fs_copy_file(src_path: string, dst_path: string) -> bool {
+    if file_exists(src_path) == false {
+        return false
+    }
+    let data = read_file(src_path)
+    write_file(dst_path, data)
+    return file_exists(dst_path)
+}
+
+fn fs_exists(path: string) -> bool {
+    return file_exists(path)
+}
+
+fn fs_remove(path: string) -> bool {
+    return file_delete(path)
+}
+
+fn path_normalize(p: string) -> string {
+    let plen = len(p)
+    mut out = ""
+    for i in 0..plen {
+        let ch = char_at(p, i)
+        if ch == "\\" {
+            out = out + "/"
+        } else {
+            out = out + ch
+        }
+    }
+    return out
+}
+
+fn path_join(dir: string, leaf: string) -> string {
+    let nd = path_normalize(dir)
+    let nl = path_normalize(leaf)
+    if len(nd) == 0 {
+        return nl
+    }
+    if slice(nd, len(nd) - 1, 1) == "/" {
+        return nd + nl
+    }
+    return nd + "/" + nl
+}
+
+fn path_basename(p: string) -> string {
+    let np = path_normalize(p)
+    let nlen = len(np)
+    mut last_sl = -1
+    for i in 0..nlen {
+        if char_at(np, i) == "/" {
+            last_sl = i
+        }
+    }
+    if last_sl == -1 {
+        return np
+    }
+    return slice(np, last_sl + 1, nlen - last_sl - 1)
+}
+
+fn path_dirname(p: string) -> string {
+    let np = path_normalize(p)
+    let nlen = len(np)
+    mut last_sl = -1
+    for i in 0..nlen {
+        if char_at(np, i) == "/" {
+            last_sl = i
+        }
+    }
+    if last_sl == -1 {
+        return "."
+    }
+    if last_sl == 0 {
+        return "/"
+    }
+    return slice(np, 0, last_sl)
+}
+
+fn path_ext(p: string) -> string {
+    let base = path_basename(p)
+    let blen = len(base)
+    mut last_dot = -1
+    for i in 0..blen {
+        if char_at(base, i) == "." {
+            last_dot = i
+        }
+    }
+    if last_dot <= 0 {
+        return ""
+    }
+    return slice(base, last_dot, blen - last_dot)
+}

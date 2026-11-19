@@ -1,0 +1,97 @@
+extern fn Z3_mk_config() -> i64
+extern fn Z3_set_param_value(cfg: i64, param_id: string, param_value: string) -> void
+extern fn Z3_del_config(cfg: i64) -> void
+extern fn Z3_mk_context(cfg: i64) -> i64
+extern fn Z3_del_context(ctx: i64) -> void
+extern fn Z3_mk_solver(ctx: i64) -> i64
+extern fn Z3_solver_inc_ref(ctx: i64, s: i64) -> void
+extern fn Z3_solver_dec_ref(ctx: i64, s: i64) -> void
+extern fn Z3_solver_check(ctx: i64, s: i64) -> i32
+extern fn Z3_mk_int_symbol(ctx: i64, i: i32) -> i64
+extern fn Z3_mk_string_symbol(ctx: i64, s: string) -> i64
+extern fn Z3_mk_int_sort(ctx: i64) -> i64
+extern fn Z3_mk_bool_sort(ctx: i64) -> i64
+extern fn Z3_mk_const(ctx: i64, symbol: i64, sort: i64) -> i64
+extern fn Z3_solver_assert(ctx: i64, s: i64, a: i64) -> void
+
+fn z3_create_context() -> i64 {
+    let cfg = Z3_mk_config()
+    if cfg == 0 {
+        return 0
+    }
+    let ctx = Z3_mk_context(cfg)
+    Z3_del_config(cfg)
+    return ctx
+}
+
+fn z3_is_native_loaded() -> bool {
+    let cfg = Z3_mk_config()
+    if cfg == 0 {
+        return false
+    }
+    Z3_del_config(cfg)
+    return true
+}
+
+fn z3_has_sub(hay: string, ndl: string) -> bool {
+    let hlen = len(hay)
+    let nlen = len(ndl)
+    if nlen == 0 {
+        return true
+    }
+    mut i = 0
+    while i + nlen <= hlen {
+        if slice(hay, i, nlen) == ndl {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn z3_solve_smt2(smt_script: string) -> string {
+    if len(smt_script) == 0 {
+        return "error"
+    }
+    let pid_s = int_to_str(nino_get_pid())
+    mut tmp_dir = get_env("TEMP")
+    if len(tmp_dir) == 0 {
+        tmp_dir = get_env("TMPDIR")
+    }
+    if len(tmp_dir) == 0 {
+        tmp_dir = is_windows() ? "." : "/tmp"
+    }
+    let sep = is_windows() ? "\\" : "/"
+    let smt_path = tmp_dir + sep + "_nino_z3_req_" + pid_s + ".smt2"
+    let out_path = tmp_dir + sep + "_nino_z3_res_" + pid_s + ".txt"
+    write_file(smt_path, smt_script)
+    mut z3_bin = "z3"
+    if is_windows() && file_exists("tools/z3.exe") {
+        z3_bin = "tools\\z3.exe"
+    } else if file_exists("tools/z3") {
+        z3_bin = "./tools/z3"
+    }
+    let cmd = z3_bin + " \"" + smt_path + "\" > \"" + out_path + "\" 2>&1"
+    exec_cmd(cmd)
+    mut res_txt = ""
+    if file_exists(out_path) {
+        res_txt = read_file(out_path)
+    }
+    file_delete(smt_path)
+    file_delete(out_path)
+    if z3_has_sub(res_txt, "unsat") {
+        return "unsat"
+    }
+    if z3_has_sub(res_txt, "sat") {
+        return "sat"
+    }
+    if z3_has_sub(res_txt, "unknown") {
+        return "unknown"
+    }
+    return "unavailable"
+}
+
+fn z3_verify_invariant(invariant_holds: bool, label: string) -> bool {
+    require(invariant_holds, label)
+    return true
+}

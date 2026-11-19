@@ -1,0 +1,998 @@
+// compiler/nir.nino: NIR AST mutability analysis, BCE verification & affine SIMD loop vectorization
+fn nir_ast_mutates_root(pool: AstPool, nid: int, target: string) -> bool {
+    mut cur = nid
+    while cur >= 0 && cur < len(pool.nodes) {
+        let nd: AstNode = pool.nodes[cur]
+        if nd.kind == NK_IDENT() {
+            return nd.name == target
+        }
+        if nd.kind == NK_MEMBER() {
+            cur = nd.left
+        } else {
+            return false
+        }
+    }
+    return false
+}
+
+fn nir_is_pure_loop_builtin(nm: string) -> bool {
+    return nm == "len" || nm == "sqrt" || nm == "fp_sqrt" || nm == "fp_abs" || nm == "math_ln" || nm == "to_float" || nm == "int_to_str" || nm == "parse_int" || nm == "char_code" || nm == "char_at" || nm == "slice" || nm == "trim" || nm == "sha256" || nm == "hmac_sha256" || nm == "unseal" || nm == "unseal_i64" || nm == "require" || nm == "ensure" || nm == "invariant" || nm == "print" || nm == "print_raw" || nm == "arr_sum" || nm == "arr_min" || nm == "arr_max" || nm == "arr_contains" || nm == "time_now_ns" || nm == "cpu_get_cycles"
+}
+
+fn nir_ast_mutates_ident(pool: AstPool, nid: int, target: string) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_ASSIGN_STMT() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let lhs: AstNode = pool.nodes[nd.left]
+        if lhs.kind == NK_IDENT() && lhs.name == target {
+            return true
+        }
+        if lhs.kind == NK_MEMBER() && nir_ast_mutates_root(pool, lhs.left, target) {
+            return true
+        }
+    }
+    if nd.kind == NK_CALL() && nd.left >= 0 && nd.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[nd.left]
+        if cal.kind == NK_IDENT() {
+            if cal.name == "arr_free" || cal.name == "pop" || cal.name == "push" || cal.name == "arena_rollback" || cal.name == "arena_reset" || cal.name == "nino_abort" {
+                return true
+            }
+            if nir_is_pure_loop_builtin(cal.name) == false {
+                return true
+            }
+        } else {
+            return true
+        }
+    }
+    if nd.kind == NK_ABORT_STMT() {
+        return true
+    }
+    if nd.left != -1 && nir_ast_mutates_ident(pool, nd.left, target) {
+        return true
+    }
+    if nd.right != -1 && nir_ast_mutates_ident(pool, nd.right, target) {
+        return true
+    }
+    if nd.extra != -1 && nir_ast_mutates_ident(pool, nd.extra, target) {
+        return true
+    }
+    for ci in 0..nd.child_count {
+        let cid = pool.children[nd.child_start + ci]
+        if nir_ast_mutates_ident(pool, cid, target) {
+            return true
+        }
+    }
+    return false
+}
+
+fn nir_vec_str_in(arr: [string], s: string) -> bool {
+    for i in 0..len(arr) {
+        if arr[i] == s {
+            return true
+        }
+    }
+    return false
+}
+
+fn nir_vec_add_uniq(mut arr: [string], s: string) -> [string] {
+    if len(s) > 0 && nir_vec_str_in(arr, s) == false {
+        arr = push(arr, s)
+    }
+    return arr
+}
+
+fn nir_vec_expr_ok(pool: AstPool, nid: int, iv: string, writes_str: string, acc_name: string) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INT_LIT() || nd.kind == NK_FLOAT_LIT() || nd.kind == NK_BOOL_LIT() {
+        return true
+    }
+    if nd.kind == NK_IDENT() {
+        if nd.name == acc_name {
+            return false
+        }
+        if find_str(writes_str, "|" + nd.name + "|", 0) != -1 {
+            return false
+        }
+        return true
+    }
+    if nd.kind == NK_UNARY_OP() {
+        if nd.op == "-" || nd.op == "+" {
+            return nir_vec_expr_ok(pool, nd.left, iv, writes_str, acc_name)
+        }
+        return false
+    }
+    if nd.kind == NK_BIN_OP() {
+        if nd.op == "+" || nd.op == "-" || nd.op == "*" || nd.op == "&" || nd.op == "|" || nd.op == "^" {
+            return nir_vec_expr_ok(pool, nd.left, iv, writes_str, acc_name) && nir_vec_expr_ok(pool, nd.right, iv, writes_str, acc_name)
+        }
+        return false
+    }
+    if nd.kind == NK_INDEX() && nd.left >= 0 && nd.right >= 0 {
+        let arr_nd: AstNode = pool.nodes[nd.left]
+        let idx_nd: AstNode = pool.nodes[nd.right]
+        if arr_nd.kind == NK_IDENT() && idx_nd.kind == NK_IDENT() && idx_nd.name == iv {
+            return true
+        }
+        return false
+    }
+    return false
+}
+
+fn nir_vec_collect_expr_arrs(pool: AstPool, nid: int, iv: string, mut arrs: [string]) -> [string] {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return arrs
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INDEX() && nd.left >= 0 && nd.right >= 0 {
+        let arr_nd: AstNode = pool.nodes[nd.left]
+        let idx_nd: AstNode = pool.nodes[nd.right]
+        if arr_nd.kind == NK_IDENT() && idx_nd.kind == NK_IDENT() && idx_nd.name == iv {
+            arrs = nir_vec_add_uniq(arrs, arr_nd.name)
+        }
+        return arrs
+    }
+    if nd.left != -1 {
+        arrs = nir_vec_collect_expr_arrs(pool, nd.left, iv, arrs)
+    }
+    if nd.right != -1 {
+        arrs = nir_vec_collect_expr_arrs(pool, nd.right, iv, arrs)
+    }
+    return arrs
+}
+
+fn nir_vec_hi_ok(pool: AstPool, hi_id: int) -> bool {
+    if hi_id < 0 || hi_id >= len(pool.nodes) {
+        return false
+    }
+    let hi_nd: AstNode = pool.nodes[hi_id]
+    if hi_nd.kind == NK_INT_LIT() || hi_nd.kind == NK_IDENT() {
+        return true
+    }
+    if hi_nd.kind == NK_CALL() && hi_nd.left >= 0 && hi_nd.child_count == 1 {
+        let cal: AstNode = pool.nodes[hi_nd.left]
+        let a0: AstNode = pool.nodes[pool.children[hi_nd.child_start]]
+        if cal.kind == NK_IDENT() && cal.name == "len" && a0.kind == NK_IDENT() {
+            return true
+        }
+    }
+    return false
+}
+
+fn nir_vec_collect_stmts(pool: AstPool, body_id: int) -> [int] {
+    mut stmts: [int] = []
+    if body_id < 0 || body_id >= len(pool.nodes) {
+        return stmts
+    }
+    let bnd: AstNode = pool.nodes[body_id]
+    if bnd.kind == NK_BLOCK() {
+        for ci in 0..bnd.child_count {
+            stmts = push(stmts, pool.children[bnd.child_start + ci])
+        }
+        return stmts
+    }
+    stmts = push(stmts, body_id)
+    return stmts
+}
+
+fn nir_vec_analyze_for(pool: AstPool, for_nid: int) -> int {
+    if for_nid < 0 || for_nid >= len(pool.nodes) {
+        return 0
+    }
+    let fnd: AstNode = pool.nodes[for_nid]
+    if fnd.kind != NK_FOR_RANGE() || fnd.extra != -1 || fnd.left < 0 || fnd.right < 0 || fnd.child_count < 1 {
+        return 0
+    }
+    let lo_nd: AstNode = pool.nodes[fnd.left]
+    if lo_nd.kind != NK_INT_LIT() || lo_nd.str_val != "0" {
+        return 0
+    }
+    if nir_vec_hi_ok(pool, fnd.right) == false {
+        return 0
+    }
+    let iv = fnd.name
+    let body_id = pool.children[fnd.child_start]
+    let stmts = nir_vec_collect_stmts(pool, body_id)
+    if len(stmts) == 0 {
+        return 0
+    }
+    mut has_map = false
+    mut has_red = false
+    mut writes_str = "|" + iv + "|"
+    mut hi_name = ""
+    let hi_nd: AstNode = pool.nodes[fnd.right]
+    if hi_nd.kind == NK_IDENT() {
+        hi_name = hi_nd.name
+    } else if hi_nd.kind == NK_CALL() && hi_nd.child_count == 1 {
+        let a0: AstNode = pool.nodes[pool.children[hi_nd.child_start]]
+        hi_name = a0.name
+    }
+    for si in 0..len(stmts) {
+        let sid = stmts[si]
+        if sid < 0 || sid >= len(pool.nodes) { return 0 }
+        let snd: AstNode = pool.nodes[sid]
+        if snd.kind != NK_ASSIGN_STMT() || snd.op != "=" || snd.left < 0 || snd.right < 0 {
+            return 0
+        }
+        let lnd: AstNode = pool.nodes[snd.left]
+        if lnd.kind == NK_INDEX() && lnd.left >= 0 && lnd.right >= 0 {
+            let arr_nd: AstNode = pool.nodes[lnd.left]
+            let idx_nd: AstNode = pool.nodes[lnd.right]
+            if arr_nd.kind != NK_IDENT() || idx_nd.kind != NK_IDENT() || idx_nd.name != iv {
+                return 0
+            }
+            if arr_nd.name == iv || (len(hi_name) > 0 && arr_nd.name == hi_name && hi_nd.kind == NK_IDENT()) {
+                return 0
+            }
+            has_map = true
+        } else if lnd.kind == NK_IDENT() && len(stmts) == 1 {
+            if lnd.name == iv || (len(hi_name) > 0 && lnd.name == hi_name) {
+                return 0
+            }
+            has_red = true
+            writes_str = writes_str + lnd.name + "|"
+        } else {
+            return 0
+        }
+    }
+    if has_map && has_red {
+        return 0
+    }
+    if has_map {
+        for si in 0..len(stmts) {
+            let snd: AstNode = pool.nodes[stmts[si]]
+            if nir_vec_expr_ok(pool, snd.right, iv, writes_str, "") == false {
+                return 0
+            }
+        }
+        return 1
+    }
+    if has_red && len(stmts) == 1 {
+        let snd: AstNode = pool.nodes[stmts[0]]
+        let lnd: AstNode = pool.nodes[snd.left]
+        let rnd: AstNode = pool.nodes[snd.right]
+        if rnd.kind == NK_BIN_OP() && rnd.op == "+" && rnd.left >= 0 && rnd.right >= 0 {
+            let rl: AstNode = pool.nodes[rnd.left]
+            let rr: AstNode = pool.nodes[rnd.right]
+            mut term_id = -1
+            if rl.kind == NK_IDENT() && rl.name == lnd.name {
+                term_id = rnd.right
+            } else if rr.kind == NK_IDENT() && rr.name == lnd.name {
+                term_id = rnd.left
+            }
+            if term_id != -1 && nir_vec_expr_ok(pool, term_id, iv, writes_str, lnd.name) {
+                mut r_arrs: [string] = []
+                r_arrs = nir_vec_collect_expr_arrs(pool, term_id, iv, r_arrs)
+                if len(r_arrs) >= 1 {
+                    return 2
+                }
+            }
+        }
+    }
+    return 0
+}
+
+fn nir_is_vec_arr_c11(ct: string) -> bool {
+    return ct == "int64_t*" || ct == "int32_t*" || ct == "uint64_t*" || ct == "uint32_t*" || ct == "double*" || ct == "float*" || ct == "uint8_t*"
+}
+
+fn nir_is_vec_sym_ok(pool: AstPool, for_nid: int, vmode: int, sym: SymTable) -> bool {
+    if vmode == 0 {
+        return false
+    }
+    let fnd: AstNode = pool.nodes[for_nid]
+    let iv = fnd.name
+    let stmts = nir_vec_collect_stmts(pool, pool.children[fnd.child_start])
+    mut arrs: [string] = []
+    for si in 0..len(stmts) {
+        let snd: AstNode = pool.nodes[stmts[si]]
+        if vmode == 1 {
+            let lnd: AstNode = pool.nodes[snd.left]
+            let wn = pool.nodes[lnd.left].name
+            arrs = nir_vec_add_uniq(arrs, wn)
+            arrs = nir_vec_collect_expr_arrs(pool, snd.right, iv, arrs)
+        } else if vmode == 2 {
+            let lnd: AstNode = pool.nodes[snd.left]
+            let sid_a = sym_lookup(sym, lnd.name)
+            if sid_a == -1 { return false }
+            let acc_ct = sym.entries[sid_a].c11_type
+            if acc_ct != "int64_t" && acc_ct != "int32_t" {
+                return false
+            }
+            arrs = nir_vec_collect_expr_arrs(pool, snd.right, iv, arrs)
+        }
+    }
+    if len(arrs) == 0 {
+        return false
+    }
+    for ai in 0..len(arrs) {
+        let sid = sym_lookup(sym, arrs[ai])
+        if sid == -1 || nir_is_vec_arr_c11(sym.entries[sid].c11_type) == false {
+            return false
+        }
+    }
+    return true
+}
+
+fn nir_ast_shadows_ident(pool: AstPool, nid: int, target: string) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if (nd.kind == NK_LET_STMT() || nd.kind == NK_FOR_RANGE() || nd.kind == NK_FOR_IN()) && nd.name == target {
+        return true
+    }
+    if nir_ast_shadows_ident(pool, nd.left, target) {
+        return true
+    }
+    if nir_ast_shadows_ident(pool, nd.right, target) {
+        return true
+    }
+    if nir_ast_shadows_ident(pool, nd.extra, target) {
+        return true
+    }
+    for ci in 0..nd.child_count {
+        let cid = pool.children[nd.child_start + ci]
+        if nir_ast_shadows_ident(pool, cid, target) {
+            return true
+        }
+    }
+    return false
+}
+
+fn nir_optimize_node(mut pool: AstPool, nid: int) {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.left != -1 {
+        nir_optimize_node(pool, nd.left)
+    }
+    if nd.right != -1 {
+        nir_optimize_node(pool, nd.right)
+    }
+    if nd.extra != -1 {
+        nir_optimize_node(pool, nd.extra)
+    }
+    for ci in 0..nd.child_count {
+        let cid = pool.children[nd.child_start + ci]
+        nir_optimize_node(pool, cid)
+    }
+    let cur_nd: AstNode = pool.nodes[nid]
+    if cur_nd.kind == NK_BIN_OP() && cur_nd.left >= 0 && cur_nd.right >= 0 {
+        let lnd: AstNode = pool.nodes[cur_nd.left]
+        let rnd: AstNode = pool.nodes[cur_nd.right]
+        if lnd.kind == NK_INT_LIT() && rnd.kind == NK_INT_LIT() && nir_is_small_int(lnd.str_val) && nir_is_small_int(rnd.str_val) {
+            let lv = parse_int(lnd.str_val)
+            let rv = parse_int(rnd.str_val)
+            mut folded_ok = false
+            mut res_v = 0
+            if cur_nd.op == "+" {
+                res_v = lv + rv
+                folded_ok = true
+            } else if cur_nd.op == "-" {
+                res_v = lv - rv
+                folded_ok = true
+            } else if cur_nd.op == "*" && len(lnd.str_val) <= 9 && len(rnd.str_val) <= 9 {
+                res_v = lv * rv
+                folded_ok = true
+            } else if cur_nd.op == "/" && rv != 0 {
+                res_v = lv / rv
+                folded_ok = true
+            } else if cur_nd.op == "%" && rv != 0 {
+                res_v = lv % rv
+                folded_ok = true
+            }
+            if folded_ok {
+                mut upd: AstNode = cur_nd
+                let k_lit = NK_INT_LIT()
+                let s_val = int_to_str(res_v)
+                let neg1 = -1
+                upd.kind = k_lit
+                upd.str_val = s_val
+                upd.op = ""
+                upd.left = neg1
+                upd.right = neg1
+                pool.nodes[nid] = upd
+                return
+            }
+        }
+    }
+    if cur_nd.kind == NK_BLOCK() {
+        mut dead = false
+        for bi in 0..cur_nd.child_count {
+            let sid = pool.children[cur_nd.child_start + bi]
+            if sid >= 0 && sid < len(pool.nodes) {
+                mut snd: AstNode = pool.nodes[sid]
+                if dead {
+                    let next_f = snd.flags | NF_DEAD()
+                    snd.flags = next_f
+                    pool.nodes[sid] = snd
+                } else if snd.kind == NK_RETURN_STMT() || snd.kind == NK_BREAK_STMT() || snd.kind == NK_CONTINUE_STMT() {
+                    dead = true
+                }
+            }
+        }
+    }
+    if cur_nd.kind == NK_FOR_RANGE() && cur_nd.left >= 0 && cur_nd.right >= 0 && cur_nd.extra == -1 && cur_nd.child_count >= 1 {
+        let lo_nd: AstNode = pool.nodes[cur_nd.left]
+        let hi_nd: AstNode = pool.nodes[cur_nd.right]
+        if lo_nd.kind == NK_INT_LIT() && lo_nd.str_val == "0" && hi_nd.kind == NK_CALL() && hi_nd.left >= 0 && hi_nd.child_count == 1 {
+            let cal_nd: AstNode = pool.nodes[hi_nd.left]
+            let arr_id = pool.children[hi_nd.child_start]
+            if cal_nd.kind == NK_IDENT() && cal_nd.name == "len" && arr_id >= 0 && arr_id < len(pool.nodes) {
+                let arr_nd: AstNode = pool.nodes[arr_id]
+                let body_id = pool.children[cur_nd.child_start]
+                if arr_nd.kind == NK_IDENT() && nir_ast_mutates_ident(pool, body_id, arr_nd.name) == false && nir_ast_mutates_ident(pool, body_id, cur_nd.name) == false && nir_ast_shadows_ident(pool, body_id, arr_nd.name) == false && nir_ast_shadows_ident(pool, body_id, cur_nd.name) == false {
+                    mut upd_for: AstNode = cur_nd
+                    let next_f = upd_for.flags | NF_BCE_SAFE()
+                    upd_for.flags = next_f
+                    pool.nodes[nid] = upd_for
+                }
+            }
+        }
+        let vm = nir_vec_analyze_for(pool, nid)
+        if vm > 0 {
+            mut upd_v: AstNode = pool.nodes[nid]
+            let next_vf = upd_v.flags | NF_VEC_SAFE()
+            upd_v.flags = next_vf
+            pool.nodes[nid] = upd_v
+        }
+    }
+}
+
+fn nir_optimize_ast(mut pool: AstPool) {
+    if pool.root >= 0 {
+        nir_optimize_node(pool, pool.root)
+    }
+}
+
+struct NirStats {
+    mut fold_c: int,
+    mut ident_c: int,
+    mut dce_c: int,
+    mut bce_c: int,
+    mut vec_c: int
+}
+
+fn nir_ast_can_fold_int(pool: AstPool, nid: int) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_INT_LIT() {
+        return nir_is_small_int(nd.str_val)
+    }
+    if nd.kind == NK_BIN_OP() {
+        if nd.op == "+" || nd.op == "-" || nd.op == "*" || nd.op == "/" || nd.op == "%" {
+            return nir_ast_can_fold_int(pool, nd.left) && nir_ast_can_fold_int(pool, nd.right)
+        }
+    }
+    return false
+}
+
+fn nir_ast_is_str_expr(pool: AstPool, nid: int, sym: SymTable) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_STR_LIT() || nd.kind == NK_STR_INTERP() {
+        return true
+    }
+    if nd.kind == NK_IDENT() {
+        let sid = sym_lookup(sym, nd.name)
+        if sid != -1 {
+            let e: SymbolInfo = sym.entries[sid]
+            if e.c11_type == "const char*" || e.nino_type == "string" || e.nino_type == "str" {
+                return true
+            }
+        }
+        return false
+    }
+    if nd.kind == NK_BIN_OP() && nd.op == "+" {
+        return nir_ast_is_str_expr(pool, nd.left, sym) || nir_ast_is_str_expr(pool, nd.right, sym)
+    }
+    return false
+}
+
+fn nir_ast_is_simple_int_or_id(pool: AstPool, nid: int) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_IDENT() {
+        return true
+    }
+    if nd.kind == NK_INT_LIT() {
+        return nir_is_small_int(nd.str_val)
+    }
+    return false
+}
+
+fn nir_ast_is_zero(pool: AstPool, nid: int) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    return nd.kind == NK_INT_LIT() && nd.str_val == "0"
+}
+
+fn nir_ast_is_one(pool: AstPool, nid: int) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    return nd.kind == NK_INT_LIT() && nd.str_val == "1"
+}
+
+fn nir_ast_is_identity(pool: AstPool, nid: int, sym: SymTable) -> bool {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return false
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind != NK_BIN_OP() {
+        return false
+    }
+    if nd.op == "+" {
+        if nir_ast_is_str_expr(pool, nd.left, sym) || nir_ast_is_str_expr(pool, nd.right, sym) {
+            return false
+        }
+        if (nir_ast_is_zero(pool, nd.right) && nir_ast_is_simple_int_or_id(pool, nd.left)) || (nir_ast_is_zero(pool, nd.left) && nir_ast_is_simple_int_or_id(pool, nd.right)) {
+            return true
+        }
+    } else if nd.op == "-" {
+        if nir_ast_is_zero(pool, nd.right) && nir_ast_is_simple_int_or_id(pool, nd.left) {
+            return true
+        }
+    } else if nd.op == "*" {
+        if (nir_ast_is_one(pool, nd.right) && nir_ast_is_simple_int_or_id(pool, nd.left)) || (nir_ast_is_one(pool, nd.left) && nir_ast_is_simple_int_or_id(pool, nd.right)) {
+            return true
+        }
+        if (nir_ast_is_zero(pool, nd.left) || nir_ast_is_zero(pool, nd.right)) && nir_ast_is_simple_int_or_id(pool, nd.left) && nir_ast_is_simple_int_or_id(pool, nd.right) {
+            return true
+        }
+    }
+    return false
+}
+
+fn nir_collect_stats(pool: AstPool, nid: int, mut sym: SymTable, mut stats: NirStats) {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return
+    }
+    let nd: AstNode = pool.nodes[nid]
+    if nd.kind == NK_PROGRAM() {
+        for ci in 0..nd.child_count {
+            let cid = pool.children[nd.child_start + ci]
+            nir_collect_stats(pool, cid, sym, stats)
+        }
+        return
+    }
+    if nd.kind == NK_FN_DECL() {
+        let sc_fn = SCOPE_FN()
+        sym_push_scope(sym, sc_fn, 0)
+        for pi in 0..nd.child_count {
+            let pid_n = pool.children[nd.child_start + pi]
+            let pnd: AstNode = pool.nodes[pid_n]
+            mut pinfo = sym_info_empty()
+            pinfo.kind = SK_PARAM()
+            pinfo.nino_type = pnd.type_ann
+            pinfo.c11_type = map_type(pnd.type_ann)
+            sym_insert(sym, pnd.name, pinfo)
+        }
+        if nd.left != -1 {
+            nir_collect_stats(pool, nd.left, sym, stats)
+        }
+        sym_pop_scope(sym)
+        return
+    }
+    if nd.kind == NK_BLOCK() {
+        let sc_blk = SCOPE_BLOCK()
+        sym_push_scope(sym, sc_blk, 0)
+        mut dead = false
+        for bi in 0..nd.child_count {
+            let sid = pool.children[nd.child_start + bi]
+            if sid >= 0 && sid < len(pool.nodes) {
+                let snd: AstNode = pool.nodes[sid]
+                if dead {
+                    let next_dce = stats.dce_c + 1
+                    stats.dce_c = next_dce
+                } else {
+                    nir_collect_stats(pool, sid, sym, stats)
+                    if snd.kind == NK_RETURN_STMT() || snd.kind == NK_BREAK_STMT() || snd.kind == NK_CONTINUE_STMT() {
+                        dead = true
+                    }
+                }
+            }
+        }
+        sym_pop_scope(sym)
+        return
+    }
+    if nd.kind == NK_LET_STMT() {
+        mut vinfo = sym_info_empty()
+        vinfo.kind = SK_VAR()
+        vinfo.nino_type = nd.type_ann
+        if len(nd.type_ann) > 0 {
+            vinfo.c11_type = map_type(nd.type_ann)
+        } else if nir_ast_is_str_expr(pool, nd.left, sym) {
+            vinfo.c11_type = "const char*"
+        } else if nd.left >= 0 && nd.left < len(pool.nodes) {
+            let lnd0: AstNode = pool.nodes[nd.left]
+            if lnd0.kind == NK_INT_LIT() || lnd0.kind == NK_BIN_OP() {
+                vinfo.c11_type = "int64_t"
+            } else if lnd0.kind == NK_FLOAT_LIT() {
+                vinfo.c11_type = "double"
+            } else if lnd0.kind == NK_ARRAY_LIT() && lnd0.child_count > 0 {
+                let fe: AstNode = pool.nodes[pool.children[lnd0.child_start]]
+                vinfo.c11_type = (fe.kind == NK_FLOAT_LIT()) ? "double*" : "int64_t*"
+            }
+        }
+        sym_insert(sym, nd.name, vinfo)
+        if nd.left >= 0 && nd.left < len(pool.nodes) {
+            let rnd: AstNode = pool.nodes[nd.left]
+            if rnd.kind == NK_BIN_OP() && nir_ast_can_fold_int(pool, nd.left) {
+                let next_f = stats.fold_c + 1
+                stats.fold_c = next_f
+            } else if nir_ast_is_identity(pool, nd.left, sym) {
+                let next_i = stats.ident_c + 1
+                stats.ident_c = next_i
+            }
+        }
+        return
+    }
+    if nd.kind == NK_IF_STMT() {
+        if nd.right != -1 {
+            nir_collect_stats(pool, nd.right, sym, stats)
+        }
+        if nd.extra != -1 {
+            nir_collect_stats(pool, nd.extra, sym, stats)
+        }
+        return
+    }
+    if nd.kind == NK_WHILE_STMT() || nd.kind == NK_FOR_IN() || nd.kind == NK_GUARD_STMT() {
+        if nd.right != -1 {
+            nir_collect_stats(pool, nd.right, sym, stats)
+        }
+        return
+    }
+    if nd.kind == NK_FOR_RANGE() {
+        if nd.left >= 0 && nd.right >= 0 && nd.extra == -1 && nd.child_count >= 1 {
+            let lo_nd: AstNode = pool.nodes[nd.left]
+            let hi_nd: AstNode = pool.nodes[nd.right]
+            if lo_nd.kind == NK_INT_LIT() && lo_nd.str_val == "0" && hi_nd.kind == NK_CALL() && hi_nd.left >= 0 && hi_nd.child_count == 1 {
+                let cal_nd: AstNode = pool.nodes[hi_nd.left]
+                let arr_id = pool.children[hi_nd.child_start]
+                if cal_nd.kind == NK_IDENT() && cal_nd.name == "len" && arr_id >= 0 && arr_id < len(pool.nodes) {
+                    let arr_nd: AstNode = pool.nodes[arr_id]
+                    let body_id = pool.children[nd.child_start]
+                    if arr_nd.kind == NK_IDENT() && nir_ast_mutates_ident(pool, body_id, arr_nd.name) == false && nir_ast_mutates_ident(pool, body_id, nd.name) == false && nir_ast_shadows_ident(pool, body_id, arr_nd.name) == false && nir_ast_shadows_ident(pool, body_id, nd.name) == false {
+                        let next_b = stats.bce_c + 1
+                        stats.bce_c = next_b
+                    }
+                }
+            }
+        }
+        let vm = nir_vec_analyze_for(pool, nid)
+        if nir_is_vec_sym_ok(pool, nid, vm, sym) {
+            let next_vc = stats.vec_c + 1
+            stats.vec_c = next_vc
+        }
+        if nd.child_count >= 1 {
+            nir_collect_stats(pool, pool.children[nd.child_start], sym, stats)
+        }
+        return
+    }
+    if nd.kind == NK_MATCH_STMT() {
+        for ci in 0..nd.child_count {
+            let aid = pool.children[nd.child_start + ci]
+            let and_nd: AstNode = pool.nodes[aid]
+            if and_nd.right != -1 {
+                nir_collect_stats(pool, and_nd.right, sym, stats)
+            }
+        }
+        return
+    }
+    if nd.kind == NK_TRANSACT_STMT() {
+        if nd.left != -1 {
+            nir_collect_stats(pool, nd.left, sym, stats)
+        }
+        if nd.right != -1 {
+            nir_collect_stats(pool, nd.right, sym, stats)
+        }
+        return
+    }
+    if nd.kind == NK_COMPTIME() || nd.kind == NK_RECEIVE_STMT() {
+        if nd.left != -1 {
+            nir_collect_stats(pool, nd.left, sym, stats)
+        }
+        return
+    }
+}
+
+fn nir_stats_summary(source: string, base_dir: string) -> string {
+    let pool = ast_parse_unit_ex(source, base_dir, "source.nino", true)
+    mut sym = sym_table_new()
+    mut stats = NirStats { fold_c: 0, ident_c: 0, dce_c: 0, bce_c: 0, vec_c: 0 }
+    if pool.root >= 0 {
+        let root_nd: AstNode = pool.nodes[pool.root]
+        for ci in 0..root_nd.child_count {
+            let iid = pool.children[root_nd.child_start + ci]
+            let ind: AstNode = pool.nodes[iid]
+            if ind.kind == NK_FN_DECL() {
+                mut finfo = sym_info_empty()
+                finfo.kind = SK_FN()
+                finfo.ret_nino_type = ind.type_ann
+                finfo.ret_c11_type = map_type(ind.type_ann)
+                sym_insert(sym, ind.name, finfo)
+            } else if ind.kind == NK_GLOBAL_LET() {
+                mut ginfo = sym_info_empty()
+                ginfo.kind = SK_VAR()
+                ginfo.nino_type = ind.type_ann
+                ginfo.c11_type = map_type(ind.type_ann)
+                sym_insert(sym, ind.name, ginfo)
+            }
+        }
+        nir_collect_stats(pool, pool.root, sym, stats)
+    }
+    return "ConstFold=" + int_to_str(stats.fold_c) + ", Ident=" + int_to_str(stats.ident_c) + ", DCE=" + int_to_str(stats.dce_c) + ", BCE=" + int_to_str(stats.bce_c) + ", VecLoop=" + int_to_str(stats.vec_c)
+}
+
+fn f1_ascii_lower(s: string) -> string {
+    let n = len(s)
+    mut res = ""
+    for i in 0..n {
+        let ch = char_at(s, i)
+        let cc = char_code(ch)
+        if cc >= 65 && cc <= 90 {
+            res = res + char_from_code(cc + 32)
+        } else {
+            res = res + ch
+        }
+    }
+    return res
+}
+
+fn lower_has_bce_pair(ctx: LowerCtx, arr_name: string, idx_name: string) -> bool {
+    let n = len(ctx.bce_pairs)
+    for i in 0..n {
+        let p: BcePair = ctx.bce_pairs[i]
+        if p.arr_name == arr_name && p.idx_name == idx_name {
+            return true
+        }
+    }
+    return false
+}
+
+fn lower_pop_bce_depth(mut ctx: LowerCtx, d: int) {
+    while len(ctx.bce_pairs) > 0 {
+        let top_i = len(ctx.bce_pairs) - 1
+        let top: BcePair = ctx.bce_pairs[top_i]
+        if top.scope_depth >= d {
+            mut barr = ctx.bce_pairs
+            barr = pop(barr)
+            ctx.bce_pairs = barr
+        } else {
+            return
+        }
+    }
+}
+
+fn strip_generic_args(raw_t: string) -> string {
+    let t = trim(raw_t)
+    let lt = find_char(t, "<", 0)
+    if lt == -1 {
+        return t
+    }
+    return trim(slice(t, 0, lt))
+}
+
+fn sym_register_generic_struct_one(mut sym: SymTable, raw_t: string) {
+    let t = trim(raw_t)
+    let lt = find_char(t, "<", 0)
+    if lt == -1 || ends_with(t, ">") == false {
+        return
+    }
+    let gt = type_find_matching_gt(t, lt)
+    if gt != len(t) - 1 {
+        return
+    }
+    let head = trim(slice(t, 0, lt))
+    let inn = trim(slice(t, lt + 1, gt - lt - 1))
+    let args = type_split_top_args(inn)
+    let ac = len(args)
+    for i in 0..ac {
+        sym_register_generic_struct_one(sym, args[i])
+    }
+    if head != "Option" && head != "Result" && head != "Pair" && head != "Box" {
+        return
+    }
+    let mangled = mangle_nino_type(t)
+    if sym_lookup(sym, mangled) != -1 {
+        return
+    }
+    let f_start = len(sym.fields)
+    mut farr = sym.fields
+    mut fcnt = 0
+    if head == "Option" && ac == 1 {
+        let f0 = FieldInfo { name: "is_some", nino_type: "bool", c11_type: "bool", is_mut: false }
+        let f1 = FieldInfo { name: "val", nino_type: args[0], c11_type: map_type(args[0]), is_mut: false }
+        farr = push(farr, f0)
+        farr = push(farr, f1)
+        fcnt = 2
+    } else if head == "Result" && ac == 2 {
+        let f0 = FieldInfo { name: "is_ok", nino_type: "bool", c11_type: "bool", is_mut: false }
+        let f1 = FieldInfo { name: "ok_val", nino_type: args[0], c11_type: map_type(args[0]), is_mut: false }
+        let f2 = FieldInfo { name: "err_val", nino_type: args[1], c11_type: map_type(args[1]), is_mut: false }
+        farr = push(farr, f0)
+        farr = push(farr, f1)
+        farr = push(farr, f2)
+        fcnt = 3
+    } else if head == "Pair" && ac == 2 {
+        let f0 = FieldInfo { name: "first", nino_type: args[0], c11_type: map_type(args[0]), is_mut: false }
+        let f1 = FieldInfo { name: "second", nino_type: args[1], c11_type: map_type(args[1]), is_mut: false }
+        farr = push(farr, f0)
+        farr = push(farr, f1)
+        fcnt = 2
+    } else if head == "Box" && ac == 1 {
+        let f0 = FieldInfo { name: "val", nino_type: args[0], c11_type: map_type(args[0]), is_mut: false }
+        farr = push(farr, f0)
+        fcnt = 1
+    }
+    if fcnt == 0 {
+        return
+    }
+    sym.fields = farr
+    mut sinfo = sym_info_empty()
+    sinfo.kind = SK_STRUCT()
+    sinfo.nino_type = t
+    sinfo.c11_type = mangled
+    sinfo.child_start = f_start
+    sinfo.child_count = fcnt
+    sym_insert(sym, mangled, sinfo)
+    if head == "Result" && ac == 2 {
+        let m_e = mangle_nino_type(args[1])
+        let m_t = mangle_nino_type(args[0])
+        if m_e == "string" && m_t != "int" && m_t != "string" && m_t != "bool" && m_t != "float" && find_str(m_t, "_", 0) == -1 {
+            let legacy_r = "Result_" + m_t
+            if sym_lookup(sym, legacy_r) == -1 {
+                mut sinfo2 = sym_info_empty()
+                sinfo2.kind = SK_STRUCT()
+                sinfo2.nino_type = t
+                sinfo2.c11_type = legacy_r
+                sinfo2.child_start = f_start
+                sinfo2.child_count = fcnt
+                sym_insert(sym, legacy_r, sinfo2)
+            }
+        }
+    }
+}
+
+fn lower_resolve_member_nino_type(sym: SymTable, obj_c11: string, field_name: string) -> string {
+    let sid = sym_lookup(sym, obj_c11)
+    if sid != -1 {
+        let se: SymbolInfo = sym.entries[sid]
+        if se.kind == SK_STRUCT() {
+            for fi in 0..se.child_count {
+                let finfo: FieldInfo = sym.fields[se.child_start + fi]
+                if finfo.name == field_name {
+                    return finfo.nino_type
+                }
+            }
+        }
+    }
+    if obj_c11 == "OptionI64" {
+        if field_name == "is_some" { return "bool" }
+        if field_name == "val" { return "int" }
+    }
+    if obj_c11 == "OptionStr" {
+        if field_name == "is_some" { return "bool" }
+        if field_name == "val" { return "string" }
+    }
+    if obj_c11 == "ResultI64" {
+        if field_name == "is_ok" { return "bool" }
+        if field_name == "err_val" { return "string" }
+        if field_name == "ok_val" { return "int" }
+    }
+    if obj_c11 == "ResultStr" {
+        if field_name == "is_ok" { return "bool" }
+        if field_name == "err_val" { return "string" }
+        if field_name == "ok_val" { return "string" }
+    }
+    return ""
+}
+
+fn lower_resolve_member_type(sym: SymTable, obj_c11: string, field_name: string) -> string {
+    let sid = sym_lookup(sym, obj_c11)
+    if sid != -1 {
+        let se: SymbolInfo = sym.entries[sid]
+        if se.kind == SK_STRUCT() {
+            for fi in 0..se.child_count {
+                let finfo: FieldInfo = sym.fields[se.child_start + fi]
+                if finfo.name == field_name {
+                    return finfo.c11_type
+                }
+            }
+        }
+    }
+    let nt = lower_resolve_member_nino_type(sym, obj_c11, field_name)
+    if len(nt) > 0 {
+        return map_type(nt)
+    }
+    if starts_with(obj_c11, "Option_") {
+        if field_name == "is_some" { return "bool" }
+        if field_name == "val" { return map_type(slice(obj_c11, 7, len(obj_c11) - 7)) }
+    }
+    if starts_with(obj_c11, "Box_") {
+        if field_name == "val" { return map_type(slice(obj_c11, 4, len(obj_c11) - 4)) }
+    }
+    return ""
+}
+
+fn lower_emit_cleanup(ctx: LowerCtx) -> string {
+    mut out = ""
+    let dc = len(ctx.defers)
+    mut di = dc - 1
+    while di >= 0 {
+        let item: DeferItem = ctx.defers[di]
+        out = out + "    " + item.c_code + "\n"
+        di = di - 1
+    }
+    if ctx.cur_fn_sym_idx >= 0 && ctx.cur_fn_sym_idx < len(ctx.sym.entries) {
+        let fn_e: SymbolInfo = ctx.sym.entries[ctx.cur_fn_sym_idx]
+        for pi in 0..fn_e.child_count {
+            let p: ParamInfo = ctx.sym.params[fn_e.child_start + pi]
+            if p.is_ptr_writeback {
+                out = out + "    if (_nino_ptr_" + p.name + ") *_nino_ptr_" + p.name + " = " + p.name + ";\n"
+            }
+        }
+    }
+    return out
+}
+
+fn lower_set_node_types(mut pool: AstPool, nid: int, nt: string, ct: string) {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return
+    }
+    mut nd: AstNode = pool.nodes[nid]
+    nd.inferred_type = nt
+    nd.c11_type = ct
+    pool.nodes[nid] = nd
+}
+
+fn lower_find_file_id(pool: AstPool, fname: string) -> int {
+    let nf = replace_str(fname, "\\", "/")
+    for i in 0..len(pool.files) {
+        if pool.files[i] == fname || pool.files[i] == nf {
+            return i
+        }
+    }
+    return 0
+}
+
+fn lower_diag_line_text(pool: AstPool, fid: int, line_no: int) -> string {
+    let n = len(pool.lines)
+    if len(pool.line_fids) == n && len(pool.line_nums) == n {
+        for i in 0..n {
+            if pool.line_fids[i] == fid && pool.line_nums[i] == line_no {
+                return trim(pool.lines[i])
+            }
+        }
+    }
+    for i in 0..n {
+        if i + 1 == line_no {
+            return trim(pool.lines[i])
+        }
+    }
+    return ""
+}
+
+fn lower_node_file_name(pool: AstPool, fid: int) -> string {
+    if fid >= 0 && fid < len(pool.files) {
+        return pool.files[fid]
+    }
+    return "source.nino"
+}
+

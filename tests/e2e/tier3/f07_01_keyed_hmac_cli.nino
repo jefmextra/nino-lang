@@ -1,0 +1,34 @@
+import "std/str.nino"
+
+fn main() -> int {
+    let base_tmp = len(get_env("TEMP")) > 0 ? get_env("TEMP") : "/tmp"
+    let pid_s = int_to_str(nino_get_pid())
+    let helper_code = "fn ok_f(x: int) -> int {\n    require(x >= 0 && x <= 100, \"b\")\n    let r = x + x\n    ensure(r >= 0 && r <= 200, \"o\")\n    return r\n}\n\nfn main() -> int {\n    print(ok_f(7))\n    return 0\n}\n"
+    if len(get_env("OS")) > 0 {
+        let ws = str_replace(base_tmp, "/", "\\") + "\\nino_e2e_hmac_" + pid_s
+        let helper_src = ws + "\\h.nino"
+        let helper_bin = ws + "\\h.exe"
+        let bat = ws + "\\run_hmac.bat"
+        exec_cmd("mkdir \"" + ws + "\" >nul 2>&1")
+        write_file(helper_src, helper_code)
+        write_file(bat, "@echo off\nset \"NINO_PCC_HMAC_KEY=e2e_pcc_secret_2026\"\nninoc.exe build \"" + helper_src + "\" -o \"" + helper_bin + "\" --proof >nul || exit /b 1\n")
+        let rc_b = exec_cmd("call \"" + bat + "\"")
+        let rc_ok = exec_cmd("\"" + helper_bin + "\" --verify-proof --hmac-key e2e_pcc_secret_2026 --reverify-z3 >nul")
+        let rc_bad = exec_cmd("\"" + helper_bin + "\" --verify-proof --hmac-key wrong_key >nul 2>&1")
+        exec_cmd("rmdir /s /q \"" + ws + "\" >nul 2>&1")
+        require(rc_b == 0 && rc_ok == 0 && rc_bad != 0, "Windows keyed HMAC PCC check failed")
+    } else {
+        let ws = base_tmp + "/nino_e2e_hmac_" + pid_s
+        let helper_src = ws + "/h.nino"
+        let helper_bin = ws + "/h.out"
+        exec_cmd("mkdir -p \"" + ws + "\"")
+        write_file(helper_src, helper_code)
+        let rc_b = exec_cmd("NINO_PCC_HMAC_KEY=e2e_pcc_secret_2026 ./ninoc build \"" + helper_src + "\" -o \"" + helper_bin + "\" --proof >/dev/null")
+        let rc_ok = exec_cmd("\"" + helper_bin + "\" --verify-proof --hmac-key e2e_pcc_secret_2026 --reverify-z3 >/dev/null")
+        let rc_bad = exec_cmd("\"" + helper_bin + "\" --verify-proof --hmac-key wrong_key >/dev/null 2>&1")
+        exec_cmd("rm -rf \"" + ws + "\"")
+        require(rc_b == 0 && rc_ok == 0 && rc_bad != 0, "POSIX keyed HMAC PCC check failed")
+    }
+    print("T3-F07-01:PASS")
+    return 0
+}

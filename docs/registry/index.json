@@ -1,0 +1,97 @@
+{
+  "registry_version": "1.0.0",
+  "name": "Nino Decentralized Package Registry",
+  "endpoint": "https://ninosec.me/registry/index.json",
+  "packages": {
+    "math3d": {
+      "version": "1.0.0",
+      "description": "3D Linear Algebra, Vector & Quaternion Math",
+      "repository": "https://github.com/jefmextra/nino-math3d",
+      "license": "MIT"
+    },
+    "crypto": {
+      "version": "1.0.0",
+      "description": "Post-Quantum Cryptography & Hardware CSPRNG",
+      "repository": "https://github.com/jefmextra/nino-crypto",
+      "license": "MIT"
+    },
+    "net": {
+      "version": "1.0.0",
+      "description": "High-Throughput Network Sockets & XDP eBPF",
+      "repository": "https://github.com/jefmextra/nino-net",
+      "license": "MIT"
+    },
+    "actor": {
+      "version": "1.0.0",
+      "description": "Fault-Tolerant Actor System & Raft Consensus",
+      "repository": "https://github.com/jefmextra/nino-actor",
+      "license": "MIT"
+    },
+    "gui": {
+      "version": "1.0.0",
+      "description": "Reactive Windowing & 2D Canvas Engine",
+      "repository": "https://github.com/jefmextra/nino-gui",
+      "license": "MIT"
+    },
+    "db": {
+      "version": "1.0.0",
+      "description": "Embedded ACID Transactional Storage Engine",
+      "repository": "https://github.com/jefmextra/nino-db",
+      "license": "MIT"
+    },
+    "json": {
+      "version": "1.0.0",
+      "description": "Zero-Allocation JSON Parser & Serializer (std/json.nino)",
+      "repository": "https://github.com/jefmextra/nino-json",
+      "license": "MIT"
+    },
+    "http": {
+      "version": "1.0.0",
+      "description": "Native HTTP/1.1 REST Client & Server Builder (std/http.nino)",
+      "repository": "https://github.com/jefmextra/nino-http",
+      "license": "MIT"
+    },
+    "fs": {
+      "version": "1.0.0",
+      "description": "Cross-Platform Filesystem & Path Utilities (std/fs.nino)",
+      "repository": "https://github.com/jefmextra/nino-fs",
+      "license": "MIT"
+    },
+    "str": {
+      "version": "1.0.0",
+      "description": "Arena-Backed String Manipulation Suite (std/str.nino)",
+      "repository": "https://github.com/jefmextra/nino-str",
+      "license": "MIT"
+    },
+    "uuid": {
+      "version": "1.0.0",
+      "description": "RFC 4122 UUID v4, Base64 & Hex Codec (std/uuid.nino)",
+      "repository": "https://github.com/jefmextra/nino-uuid",
+      "license": "MIT"
+    },
+    "env": {
+      "version": "1.0.0",
+      "description": "Dotenv (.env) Configuration Parser & Env Loader (std/env.nino)",
+      "repository": "https://github.com/jefmextra/nino-env",
+      "license": "MIT"
+    },
+    "regex": {
+      "version": "1.0.0",
+      "description": "NFA Regular Expression & Pattern Matching Engine (std/regex.nino)",
+      "repository": "https://github.com/jefmextra/nino-regex",
+      "license": "MIT"
+    },
+    "csv": {
+      "version": "1.0.0",
+      "description": "RFC 4180 CSV Tabular Parser & Serializer (std/csv.nino)",
+      "repository": "https://github.com/jefmextra/nino-csv",
+      "license": "MIT"
+    },
+    "jwt": {
+      "version": "1.0.0",
+      "description": "RFC 7519 JWT (HS256) & RFC 2104 HMAC-SHA256 Engine (std/jwt.nino)",
+      "repository": "https://github.com/jefmextra/nino-jwt",
+      "license": "MIT"
+    }
+  }
+}

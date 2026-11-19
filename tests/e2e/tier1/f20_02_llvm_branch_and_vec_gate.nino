@@ -1,0 +1,83 @@
+import "std/str.nino"
+
+fn resolve_ninoc_cmd() -> string {
+    if is_windows() {
+        if file_exists("ninoc.exe") { return "ninoc.exe" }
+        return "ninoc.exe"
+    }
+    if file_exists("./ninoc") { return "./ninoc" }
+    return "ninoc"
+}
+
+fn resolve_clang_cmd() -> string {
+    let ec = get_env("NINO_CLANG")
+    if len(ec) > 0 && file_exists(ec) {
+        return "\"" + ec + "\""
+    }
+    let pf = get_env("ProgramFiles")
+    if len(pf) > 0 {
+        let p1 = pf + "\\LLVM\\bin\\clang.exe"
+        if file_exists(p1) { return "\"" + p1 + "\"" }
+    }
+    return "clang"
+}
+
+fn resolve_gcc_cmd() -> string {
+    let eg = get_env("NINO_GCC")
+    if len(eg) > 0 && file_exists(eg) {
+        return "\"" + eg + "\""
+    }
+    if is_windows() {
+        let la = get_env("LOCALAPPDATA")
+        if len(la) > 0 {
+            let cg = la + "\\Programs\\CLion\\bin\\mingw\\bin\\gcc.exe"
+            if file_exists(cg) { return "\"" + cg + "\"" }
+        }
+    }
+    return "gcc"
+}
+
+fn main() -> int {
+    let ninoc = resolve_ninoc_cmd()
+    let lb = "{"
+    let rb = "}"
+    let src_p = "temp_e2e_f20_02_llvm.nino"
+    let ll_p = "temp_e2e_f20_02_llvm.ll"
+    mut code = "fn check_neg(x: int) -> int " + lb + "\n    if x < 0 " + lb + "\n        return 10\n    " + rb + "\n    return 20\n" + rb + "\n"
+    code = code + "fn gated_loop(n: int) -> int " + lb + "\n    mut s = 0\n    for i in 0..n " + lb + "\n        if i > 2 " + lb + "\n            s = s + i\n        " + rb + "\n    " + rb + "\n    return s\n" + rb + "\n"
+    code = code + "fn main() -> int " + lb + "\n    let a = check_neg(-5)\n    let b = check_neg(5)\n    if a == 10 && b == 20 " + lb + "\n        return 0\n    " + rb + "\n    return 1\n" + rb + "\n"
+    write_file(src_p, code)
+
+    require(exec_cmd(ninoc + " llvm " + src_p + " -o " + ll_p) == 0, "ninoc llvm must emit IR")
+    let ir = read_file(ll_p)
+    require(!str_contains(ir, "icmp ne i64 1, 0"), "LLVM IR must not hardcode always-true branch condition")
+    require(str_contains(ir, "icmp slt i64") && str_contains(ir, "icmp eq i64") && str_contains(ir, "sc.rhs."), "LLVM IR must lower real comparisons and short-circuit boolean conjunction")
+    require(str_contains(ir, "br label %for.cond.1\n") && !str_contains(ir, "br label %for.cond.1, !llvm.loop"), "Loops containing branches must not force !llvm.loop vectorize metadata")
+
+    let cc = resolve_clang_cmd()
+    let gc = resolve_gcc_cmd()
+    let obj_p = "temp_e2e_f20_02_llvm.o"
+    let exe_p = "temp_e2e_f20_02_llvm.exe"
+    let chk_cl = exec_cmd(cc + " --version >nul 2>&1")
+    if !is_windows() {
+        let chk_ux = exec_cmd(cc + " --version >/dev/null 2>&1")
+        if chk_ux == 0 {
+            require(exec_cmd(cc + " -c " + ll_p + " -o " + obj_p) == 0, "clang must compile emitted LLVM IR")
+            require(exec_cmd(gc + " " + obj_p + " -o " + exe_p) == 0, "linker must link compiled IR")
+            require(exec_cmd("./" + exe_p) == 0, "compiled LLVM IR binary must return 0")
+            file_delete(obj_p)
+            file_delete(exe_p)
+        }
+    } else if chk_cl == 0 {
+        require(exec_cmd(cc + " -c " + ll_p + " -o " + obj_p) == 0, "clang must compile emitted LLVM IR")
+        require(exec_cmd(gc + " " + obj_p + " -o " + exe_p) == 0, "linker must link compiled IR")
+        require(exec_cmd(".\\" + exe_p) == 0, "compiled LLVM IR binary must return 0")
+        file_delete(obj_p)
+        file_delete(exe_p)
+    }
+
+    file_delete(src_p)
+    file_delete(ll_p)
+    print("T1-F20-02:PASS")
+    return 0
+}

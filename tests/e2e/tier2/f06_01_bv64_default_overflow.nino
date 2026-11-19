@@ -1,0 +1,10 @@
+fn unsafe_inc(a: int) -> int {
+    require(a > 0, "positive input only")
+    let y = a + 1
+    ensure(y > 0, "impossible if a == INT64_MAX under BV64")
+    return y
+}
+
+fn main() -> int {
+    return unsafe_inc(42)
+}
