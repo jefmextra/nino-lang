@@ -134,7 +134,11 @@ fn wasm_read_leb_s(buf: [i64], limit: i64, mut cur: [i64]) -> i64 {
     }
     cur[0] = p
     if shift < 64 && (last_b & 64) != 0 {
-        res = res | ((0 - 1) << shift)
+        if shift < 63 {
+            res = res | (0 - (1 << shift))
+        } else {
+            res = res | (-9223372036854775807 - 1)
+        }
     }
     return res
 }
@@ -421,6 +425,24 @@ fn wasm_trap_if_oob(mut instance: WasmInstance, addr: i64, width: i64) {
     }
 }
 
+fn wasm_eff_addr(mut instance: WasmInstance, base: i64, offset: i64) -> i64 {
+    if offset < 0 || offset > 4294967295 {
+        instance.is_active = false
+        panic("[Wasm Trap] Linear memory out-of-bounds access")
+    }
+    let ubase = base & 4294967295
+    return ubase + offset
+}
+
+fn wasm_stack_push(mut instance: WasmInstance, mut stack: [i64], sp: i64, val: i64) -> i64 {
+    if sp < 0 || sp >= len(stack) {
+        instance.is_active = false
+        panic("[Wasm Trap] Operand stack overflow")
+    }
+    stack[sp] = val
+    return sp + 1
+}
+
 fn wasm_read_imm_u(buf: [i64], limit: i64, mut cur: [i64], is_byte_stream: bool) -> i64 {
     if is_byte_stream == false {
         let p = cur[0]
@@ -494,6 +516,10 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
             let _imm = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
         } else if opc == 14 {
             let bcnt = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
+            if bcnt < 0 || bcnt > clen - scan_pos[0] {
+                instance.is_active = false
+                panic("[Wasm Trap] Truncated or invalid br_table immediate count")
+            }
             for bi in 0..(bcnt + 1) {
                 let _lbl = wasm_read_imm_u(code, clen, scan_pos, is_byte_stream)
             }
@@ -620,6 +646,10 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
                 }
             } else {
                 let bcnt = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
+                if bcnt < 0 || bcnt > clen - cur_pc[0] {
+                    instance.is_active = false
+                    panic("[Wasm Trap] Truncated or invalid br_table immediate count")
+                }
                 mut tvec: [i64] = []
                 for bi in 0..bcnt {
                     tvec = push(tvec, wasm_read_imm_u(code, clen, cur_pc, is_byte_stream))
@@ -713,9 +743,8 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
                 cbody = push(cbody, instance.code_pool[cstart + ci])
             }
             let cres = wasm_exec_bytecode_depth(instance, cbody, cargs, eloc, depth + 1, true)
-            if rcnt > 0 && sp < len(stack) {
-                stack[sp] = cres
-                sp = sp + 1
+            if rcnt > 0 {
+                sp = wasm_stack_push(instance, stack, sp, cres)
             }
         } else if op == 26 {
             if sp > 0 {
@@ -742,10 +771,7 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
             if lidx >= 0 && lidx < len(locals) {
                 lval = locals[lidx]
             }
-            if sp < len(stack) {
-                stack[sp] = lval
-                sp = sp + 1
-            }
+            sp = wasm_stack_push(instance, stack, sp, lval)
         } else if op == 33 {
             let lidx = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
             if sp > 0 {
@@ -769,10 +795,7 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
             if gidx >= 0 && gidx < len(instance.globals) {
                 gval = instance.globals[gidx]
             }
-            if sp < len(stack) {
-                stack[sp] = gval
-                sp = sp + 1
-            }
+            sp = wasm_stack_push(instance, stack, sp, gval)
         } else if op == 36 {
             let gidx = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
             if sp > 0 {
@@ -786,7 +809,7 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
             let _align = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
             let offset = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
             if sp > 0 {
-                let eff = stack[sp - 1] + offset
+                let eff = wasm_eff_addr(instance, stack[sp - 1], offset)
                 wasm_trap_if_oob(instance, eff, 4)
                 stack[sp - 1] = wasm_memory_read_i32(instance, eff)
             }
@@ -794,7 +817,7 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
             let _align = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
             let offset = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
             if sp > 0 {
-                let eff = stack[sp - 1] + offset
+                let eff = wasm_eff_addr(instance, stack[sp - 1], offset)
                 wasm_trap_if_oob(instance, eff, 1)
                 stack[sp - 1] = wasm_memory_read_u8(instance, eff)
             }
@@ -805,7 +828,7 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
                 sp = sp - 1
                 let val = stack[sp]
                 sp = sp - 1
-                let eff = stack[sp] + offset
+                let eff = wasm_eff_addr(instance, stack[sp], offset)
                 wasm_trap_if_oob(instance, eff, 4)
                 wasm_memory_write_i32(instance, eff, val)
             }
@@ -816,24 +839,22 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
                 sp = sp - 1
                 let val = stack[sp]
                 sp = sp - 1
-                let eff = stack[sp] + offset
+                let eff = wasm_eff_addr(instance, stack[sp], offset)
                 wasm_trap_if_oob(instance, eff, 1)
                 wasm_memory_write_u8(instance, eff, val)
             }
         } else if op == 63 {
             let _z = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
             let page_cnt = len(instance.exported_memory) / 65536
-            if sp < len(stack) {
-                stack[sp] = page_cnt
-                sp = sp + 1
-            }
+            sp = wasm_stack_push(instance, stack, sp, page_cnt)
         } else if op == 64 {
             let _z = wasm_read_imm_u(code, clen, cur_pc, is_byte_stream)
             if sp > 0 {
                 let delta = stack[sp - 1]
                 let old_pages = len(instance.exported_memory) / 65536
-                let new_pages = old_pages + delta
-                if delta >= 0 && new_pages * 64 <= instance.memory_limit_mb * 1024 {
+                let lim_mb = instance.memory_limit_mb > 4096 ? 4096 : (instance.memory_limit_mb < 0 ? 0 : instance.memory_limit_mb)
+                let max_pages = lim_mb * 16
+                if delta >= 0 && delta <= max_pages - old_pages && delta <= 65536 - old_pages {
                     for gi in 0..(delta * 65536) {
                         instance.exported_memory = push(instance.exported_memory, 0)
                     }
@@ -844,10 +865,7 @@ fn wasm_exec_bytecode_depth(mut instance: WasmInstance, code: [i64], args: [i64]
             }
         } else if op == 65 || op == 66 {
             let imm = wasm_read_imm_s(code, clen, cur_pc, is_byte_stream)
-            if sp < len(stack) {
-                stack[sp] = imm
-                sp = sp + 1
-            }
+            sp = wasm_stack_push(instance, stack, sp, imm)
         } else if op == 69 {
             if sp > 0 {
                 stack[sp - 1] = (stack[sp - 1] == 0) ? 1 : 0

@@ -1,0 +1,6 @@
+fn main() -> int {
+    let a = [1, 2, 3]
+    mut b = a
+    b[0] = 999
+    return 0
+}

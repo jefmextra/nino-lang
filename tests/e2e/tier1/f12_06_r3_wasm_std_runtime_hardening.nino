@@ -1,0 +1,76 @@
+import "std/wasm.nino"
+import "std/privacy.nino"
+import "std/db.nino"
+import "std/json.nino"
+import "std/mpc.nino"
+import "std/str.nino"
+
+struct R3Inner {
+    id: int
+}
+
+struct R3Outer {
+    nested: R3Inner,
+    id: int,
+    a: str,
+    b: int
+}
+
+fn main() -> int {
+    mut w = wasm_spawn("grow_guard", 1, 10000)
+    let code_grow: [i64] = [65, 144115188075855872, 64, 0]
+    let gr = wasm_exec_bytecode(w, code_grow, [])
+    require(gr == -1, "wasm memory.grow overflow must return -1")
+
+    let ds = dp_sum([1000000000.0, 1000000000.0], 100000.0, 1.0)
+    require(ds > -50.0 && ds < 50.0, "dp_sum must clamp outliers to [-sensitivity, sensitivity]")
+
+    let c = db_sqlite_open_conn(":memory:")
+    db_execute_update(c, "create table r3_items (id int, name text)", [])
+    db_execute_update(c, "insert into r3_items values (1, 'alpha')", [])
+    let uc = db_execute_update(c, "update r3_items set name = 'beta' where id = 1", [])
+    require(uc == 1, "embedded sqlite UPDATE must update matching row")
+    let rows: [str] = db_execute_query(c, "select id, name from r3_items where id = 1", [])
+    require(len(rows) == 1 && str_contains(rows[0], "beta"), "db_execute_query must return typed [str] with updated row")
+
+    let jv = json_get_string("{\"\\u0061dmin\":\"yes\"}", "admin")
+    require(jv == "yes", "json_get_string must decode \\uXXXX object keys")
+
+    let g = mpc_ec_g()
+    let p5 = mpc_ec_mul(5, g)
+    let m5 = mpc_ec_mul(-5, g)
+    require(m5.is_inf == false, "mpc_ec_mul(-5, G) must not return point at infinity")
+    let z = mpc_ec_add(p5, m5)
+    require(z.is_inf == true, "5G + (-5)G must equal point at infinity")
+
+    let k1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_1"
+    let k2 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_2"
+    mut d = {"init": "0"}
+    d[k1] = "V1"
+    d[k2] = "V2"
+    require(d[k1] == "V1" && d[k2] == "V2", "NinoDict must preserve >=64-byte keys without truncation")
+
+    let aid = spawn_actor("R3Worker")
+    let sup = spawn_supervisor(aid, "restart")
+    let r1 = supervisor_dispatch(sup, "DEFAULT_CONFIG")
+    require(r1["status"] == "OK" && r1["restart_count"] == "0", "DEFAULT_CONFIG must not trigger FAULT restart")
+    let r2 = supervisor_dispatch(sup, "FAULT")
+    require(r2["status"] == "RECOVERED_SUPERVISOR_ACTION" && r2["restart_count"] == "1", "FAULT must trigger supervisor recovery")
+
+    let set_arr = [10, 20, 30]
+    let p_ok = zk_prove_membership(20, set_arr)
+    require(zk_verify_membership(p_ok, set_arr) == true, "authentic ZK membership proof must verify")
+    mut p_bad = zk_prove_membership(99, set_arr)
+    p_bad["in_set"] = "true"
+    require(zk_verify_membership(p_bad, set_arr) == false, "forged ZK membership proof must be rejected")
+
+    let o = R3Outer_from_json("{\"nested\":{\"id\":999},\"id\":42,\"a\":\"x\\\\\",\"b\":7}")
+    require(o.id == 42 && o.b == 7, "struct from_json must match depth-1 key and escaped backslash")
+
+    let t1 = time_now_ns()
+    let t2 = time_now_ns()
+    require(t1 > 0 && t2 >= t1, "time_now_ns must be positive and monotonic")
+
+    print("T1-F12-06:PASS")
+    return 0
+}

@@ -1,0 +1,7 @@
+fn main() -> int {
+    let s = "abc"
+    match s {
+        _ => {}
+    }
+    return 0
+}

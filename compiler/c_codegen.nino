@@ -952,6 +952,68 @@ fn lower_try_emit_vec_for(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_l
     return true
 }
 
+fn lower_push_loop_ctrl(mut ctx: LowerCtx) -> string {
+    let bid = ctx.temp_seq
+    let next_seq = bid + 1
+    ctx.temp_seq = next_seq
+    let lbl = "_nino_brk_" + int_to_str(bid)
+    mut lbls = ctx.loop_brk_lbls
+    lbls = push(lbls, lbl)
+    ctx.loop_brk_lbls = lbls
+    mut used = ctx.loop_brk_used
+    let fl_f = false
+    used = push(used, fl_f)
+    ctx.loop_brk_used = used
+    mut txs = ctx.loop_tx_bases
+    txs = push(txs, ctx.tx_depth)
+    ctx.loop_tx_bases = txs
+    mut mbs = ctx.loop_match_bases
+    mbs = push(mbs, ctx.match_depth)
+    ctx.loop_match_bases = mbs
+    return lbl
+}
+
+fn lower_pop_loop_ctrl(mut ctx: LowerCtx) -> string {
+    mut suffix = ""
+    let n = len(ctx.loop_brk_lbls)
+    if n > 0 {
+        let lbl = ctx.loop_brk_lbls[n - 1]
+        let is_used = ctx.loop_brk_used[n - 1]
+        if is_used {
+            suffix = "    " + lbl + ": ;\n"
+        }
+        mut lbls = ctx.loop_brk_lbls
+        lbls = pop(lbls)
+        ctx.loop_brk_lbls = lbls
+        mut used = ctx.loop_brk_used
+        used = pop(used)
+        ctx.loop_brk_used = used
+        mut txs = ctx.loop_tx_bases
+        txs = pop(txs)
+        ctx.loop_tx_bases = txs
+        mut mbs = ctx.loop_match_bases
+        mbs = pop(mbs)
+        ctx.loop_match_bases = mbs
+    }
+    return suffix
+}
+
+fn lower_emit_loop_tx_commits(ctx: LowerCtx) -> string {
+    let n = len(ctx.loop_tx_bases)
+    if n <= 0 {
+        return ""
+    }
+    let extra_tx = ctx.tx_depth - ctx.loop_tx_bases[n - 1]
+    if extra_tx <= 0 {
+        return ""
+    }
+    mut out = ""
+    for k in 0..extra_tx {
+        out = out + "    nino_tx_commit();\n"
+    }
+    return out
+}
+
 fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
     if nid < 0 || nid >= len(pool.nodes) || ctx.has_error {
         return
@@ -1294,7 +1356,18 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
     if nd.kind == NK_BREAK_STMT() {
         mut out_b = ctx.body_code
         if emit_ldir { out_b = f1_scat(out_b, ldir) }
-        out_b = out_b + "    break;\n"
+        out_b = f1_scat(out_b, lower_emit_loop_tx_commits(ctx))
+        let ln = len(ctx.loop_match_bases)
+        if ln > 0 && ctx.match_depth > ctx.loop_match_bases[ln - 1] {
+            let blbl = ctx.loop_brk_lbls[ln - 1]
+            mut used_arr = ctx.loop_brk_used
+            let fl_t = true
+            used_arr[ln - 1] = fl_t
+            ctx.loop_brk_used = used_arr
+            out_b = out_b + "    goto " + blbl + ";\n"
+        } else {
+            out_b = out_b + "    break;\n"
+        }
         ctx.body_code = out_b
         let fl_false = false
         ctx.last_stmt_was_return = fl_false
@@ -1303,6 +1376,7 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
     if nd.kind == NK_CONTINUE_STMT() {
         mut out_b = ctx.body_code
         if emit_ldir { out_b = f1_scat(out_b, ldir) }
+        out_b = f1_scat(out_b, lower_emit_loop_tx_commits(ctx))
         out_b = out_b + "    continue;\n"
         ctx.body_code = out_b
         let fl_false = false
@@ -1361,9 +1435,11 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         ctx.body_code = out_b
         let sc_lp = SCOPE_LOOP()
         sym_push_scope(ctx.sym, sc_lp, 0)
+        let _lbl_w = lower_push_loop_ctrl(ctx)
         lower_stmt(pool, nd.right, ctx, emit_ldir)
+        let brk_sfx = lower_pop_loop_ctrl(ctx)
         sym_pop_scope(ctx.sym)
-        mut out_b2 = ctx.body_code + "    " + rb + "\n"
+        mut out_b2 = ctx.body_code + "    " + rb + "\n" + brk_sfx
         ctx.body_code = out_b2
         let fl_false = false
         ctx.last_stmt_was_return = fl_false
@@ -1414,13 +1490,15 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         out_b = f1_scat(out_b, pre)
         out_b = f1_scat(out_b, hdr_c)
         ctx.body_code = out_b
+        let _lbl_fr = lower_push_loop_ctrl(ctx)
         if nd.child_count >= 1 {
             let body_id = pool.children[nd.child_start]
             lower_stmt(pool, body_id, ctx, emit_ldir)
         }
+        let brk_sfx = lower_pop_loop_ctrl(ctx)
         lower_pop_bce_depth(ctx, loop_d)
         sym_pop_scope(ctx.sym)
-        mut out_b2 = ctx.body_code + "    " + rb + "\n"
+        mut out_b2 = ctx.body_code + "    " + rb + "\n" + brk_sfx
         ctx.body_code = out_b2
         let fl_false = false
         ctx.last_stmt_was_return = fl_false
@@ -1456,9 +1534,11 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         out_b = f1_scat(out_b, pre)
         out_b = f1_scat(out_b, loop_hdr)
         ctx.body_code = out_b
+        let _lbl_fi = lower_push_loop_ctrl(ctx)
         lower_stmt(pool, nd.right, ctx, emit_ldir)
+        let brk_sfx = lower_pop_loop_ctrl(ctx)
         sym_pop_scope(ctx.sym)
-        mut out_b2 = ctx.body_code + "    " + rb + "\n"
+        mut out_b2 = ctx.body_code + "    " + rb + "\n" + brk_sfx
         ctx.body_code = out_b2
         let fl_false = false
         ctx.last_stmt_was_return = fl_false
@@ -1474,6 +1554,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         out_b = f1_scat(out_b, pre)
         out_b = out_b + "    switch (" + sc_c + ") " + lb + "\n"
         ctx.body_code = out_b
+        let next_md = ctx.match_depth + 1
+        ctx.match_depth = next_md
         for ci in 0..nd.child_count {
             let aid = pool.children[nd.child_start + ci]
             let and_nd: AstNode = pool.nodes[aid]
@@ -1487,6 +1569,8 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
             mut out_e = ctx.body_code + "    " + rb + " break;\n"
             ctx.body_code = out_e
         }
+        let prev_md = next_md - 1
+        ctx.match_depth = prev_md
         mut out_b2 = ctx.body_code + "    " + rb + "\n"
         ctx.body_code = out_b2
         let fl_false = false
@@ -1522,7 +1606,11 @@ fn lower_stmt(mut pool: AstPool, nid: int, mut ctx: LowerCtx, emit_ldir: bool) {
         if emit_ldir { out_b = f1_scat(out_b, ldir) }
         out_b = out_b + try_hdr
         ctx.body_code = out_b
+        let next_td = ctx.tx_depth + 1
+        ctx.tx_depth = next_td
         lower_stmt(pool, nd.left, ctx, emit_ldir)
+        let prev_td = next_td - 1
+        ctx.tx_depth = prev_td
         mut out_b2 = ctx.body_code + else_hdr
         ctx.body_code = out_b2
         if nd.right != -1 {
@@ -2131,9 +2219,13 @@ fn lower_program_to_c(mut pool: AstPool, file_name: string, pcc_code: string, st
     if len(norm_fn) == 0 {
         norm_fn = "source.nino"
     }
-    let st = sym_table_new()
+    mut st = sym_table_new()
     mut d_init: [DeferItem] = []
     mut b_init: [BcePair] = []
+    mut brk_l_init: [string] = []
+    mut brk_u_init: [bool] = []
+    mut tx_b_init: [int] = []
+    mut mb_init: [int] = []
     mut ctx = LowerCtx {
         sym: st,
         norm_fname: norm_fn,
@@ -2153,6 +2245,12 @@ fn lower_program_to_c(mut pool: AstPool, file_name: string, pcc_code: string, st
         temp_seq: 0,
         defers: d_init,
         bce_pairs: b_init,
+        tx_depth: 0,
+        match_depth: 0,
+        loop_brk_lbls: brk_l_init,
+        loop_brk_used: brk_u_init,
+        loop_tx_bases: tx_b_init,
+        loop_match_bases: mb_init,
         last_stmt_was_return: false,
         is_no_std: false,
         actor_inits: ""

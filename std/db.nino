@@ -50,7 +50,7 @@ fn db_redis_connect_conn(host: str, port: i64) -> DatabaseConnection {
     }
 }
 
-fn db_execute_query(conn: DatabaseConnection, sql_str: str, params: [any]) -> [any] {
+fn db_execute_query(conn: DatabaseConnection, sql_str: str, params: [any]) -> [str] {
     require(conn.is_active, "Cannot query an inactive database connection")
     return db_query(conn.conn_id, sql_str, params)
 }

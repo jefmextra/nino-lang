@@ -1,0 +1,33 @@
+fn main() -> int {
+    mut s = 0
+    for i in 0..6 {
+        transact {
+            if i == 1 {
+                continue
+            }
+            if i == 4 {
+                break
+            }
+            s = s + i
+        }
+    }
+    mut rolled = 0
+    transact {
+        rolled = 77
+        abort("outer_rollback_check")
+    }
+    require(s == 5, "transact break/continue loop sum mismatch")
+    require(rolled == 0, "outer transact rollback failed after loop tx break/continue")
+
+    mut last = -1
+    for j in 0..10 {
+        last = j
+        match j {
+            3 => { break }
+            _ => {}
+        }
+    }
+    require(last == 3, "break inside match must exit enclosing loop")
+    print("T1-F10-04:PASS")
+    return 0
+}

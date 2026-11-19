@@ -624,7 +624,7 @@ fn llvm_ast_lower_expr(pool: AstPool, nid: int, mut ll: LlvmState, mut ty_out: [
             let iv = llvm_coerce_val(ll, sv, sub_t[0], "i64")
             ll.reg_seq = ll.reg_seq + 1
             let r = "%r" + int_to_str(ll.reg_seq)
-            ll.body_ir = ll.body_ir + "  " + r + " = sub nsw i64 0, " + iv + "\n"
+            ll.body_ir = ll.body_ir + "  " + r + " = sub i64 0, " + iv + "\n"
             ty_out[0] = "i64"
             return r
         }
@@ -776,6 +776,12 @@ fn llvm_ast_lower_expr(pool: AstPool, nid: int, mut ll: LlvmState, mut ty_out: [
             ll.body_ir = ll.body_ir + "  " + r_ovf + " = and i1 " + r_min + ", " + r_m1 + "\n"
             ll.body_ir = ll.body_ir + "  " + r_safe + " = xor i1 " + r_ovf + ", true\n"
             ll.body_ir = ll.body_ir + "  call void @nino_require(i1 " + r_safe + ", ptr " + g_ovf + ")\n"
+        } else if nd.op == "<<" || nd.op == ">>" {
+            ll.reg_seq = ll.reg_seq + 1
+            let r_shok = "%r" + int_to_str(ll.reg_seq)
+            let g_sh = llvm_intern_str("Shift count out of bounds [0, 64)", ll)
+            ll.body_ir = ll.body_ir + "  " + r_shok + " = icmp ult i64 " + ri + ", 64\n"
+            ll.body_ir = ll.body_ir + "  call void @nino_require(i1 " + r_shok + ", ptr " + g_sh + ")\n"
         }
         mut iop = ""
         if nd.op == "+" { iop = "add nsw" }

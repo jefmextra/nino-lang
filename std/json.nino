@@ -22,6 +22,72 @@ fn json_escape_str(s: string) -> string {
     return out
 }
 
+fn json_hex_nib(ch: string) -> int {
+    let c = char_code(ch)
+    if c >= 48 && c <= 57 { return c - 48 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    if c >= 65 && c <= 70 { return c - 55 }
+    return -1
+}
+
+fn json_decode_string_at(json: string, start_q: int, mut out_next: [int]) -> string {
+    let jlen = len(json)
+    mut i = start_q + 1
+    mut out = ""
+    while i < jlen {
+        let ch = char_at(json, i)
+        if ch == "\\" && i + 1 < jlen {
+            let nxt = char_at(json, i + 1)
+            if nxt == "n" {
+                out = out + "\n"
+                i = i + 2
+            } else if nxt == "r" {
+                out = out + "\r"
+                i = i + 2
+            } else if nxt == "t" {
+                out = out + "\t"
+                i = i + 2
+            } else if nxt == "b" {
+                out = out + char_from_code(8)
+                i = i + 2
+            } else if nxt == "f" {
+                out = out + char_from_code(12)
+                i = i + 2
+            } else if nxt == "u" && i + 5 < jlen {
+                let d0 = json_hex_nib(char_at(json, i + 2))
+                let d1 = json_hex_nib(char_at(json, i + 3))
+                let d2 = json_hex_nib(char_at(json, i + 4))
+                let d3 = json_hex_nib(char_at(json, i + 5))
+                if d0 >= 0 && d1 >= 0 && d2 >= 0 && d3 >= 0 {
+                    let cp = (d0 << 12) | (d1 << 8) | (d2 << 4) | d3
+                    if cp > 0 && cp < 128 {
+                        out = out + char_from_code(cp)
+                    } else if cp >= 128 && cp < 2048 {
+                        out = out + char_from_code(192 | (cp >> 6)) + char_from_code(128 | (cp & 63))
+                    } else if cp >= 2048 {
+                        out = out + char_from_code(224 | (cp >> 12)) + char_from_code(128 | ((cp >> 6) & 63)) + char_from_code(128 | (cp & 63))
+                    }
+                    i = i + 6
+                } else {
+                    out = out + nxt
+                    i = i + 2
+                }
+            } else {
+                out = out + nxt
+                i = i + 2
+            }
+        } else if ch == "\"" {
+            i = i + 1
+            break
+        } else {
+            out = out + ch
+            i = i + 1
+        }
+    }
+    out_next[0] = i
+    return out
+}
+
 fn json_find_key_value_pos(json: string, key: string) -> int {
     let jlen = len(json)
     mut i = 0
@@ -76,30 +142,9 @@ fn json_find_key_value_pos(json: string, key: string) -> int {
             expect_key = false
             i = i + 1
         } else if ch == "\"" {
-            i = i + 1
-            mut parsed_s = ""
-            while i < jlen {
-                let sc = char_at(json, i)
-                if sc == "\\" && i + 1 < jlen {
-                    let nx = char_at(json, i + 1)
-                    if nx == "n" {
-                        parsed_s = parsed_s + "\n"
-                    } else if nx == "r" {
-                        parsed_s = parsed_s + "\r"
-                    } else if nx == "t" {
-                        parsed_s = parsed_s + "\t"
-                    } else {
-                        parsed_s = parsed_s + nx
-                    }
-                    i = i + 2
-                } else if sc == "\"" {
-                    i = i + 1
-                    break
-                } else {
-                    parsed_s = parsed_s + sc
-                    i = i + 1
-                }
-            }
+            mut nx_pos: [int] = [0]
+            let parsed_s = json_decode_string_at(json, i, nx_pos)
+            i = nx_pos[0]
             if obj_depth == 1 && arr_depth == 0 && expect_key {
                 expect_key = false
                 mut after = i
@@ -139,14 +184,6 @@ fn json_has_key(json: string, key: string) -> bool {
     return json_find_key_value_pos(json, key) != -1
 }
 
-fn json_hex_nib(ch: string) -> int {
-    let c = char_code(ch)
-    if c >= 48 && c <= 57 { return c - 48 }
-    if c >= 97 && c <= 102 { return c - 87 }
-    if c >= 65 && c <= 70 { return c - 55 }
-    return -1
-}
-
 fn json_get_string(json: string, key: string) -> string {
     let vpos = json_find_key_value_pos(json, key)
     if vpos == -1 {
@@ -156,58 +193,8 @@ fn json_get_string(json: string, key: string) -> string {
     if vpos >= jlen || char_at(json, vpos) != "\"" {
         return ""
     }
-    mut i = vpos + 1
-    mut out = ""
-    while i < jlen {
-        let ch = char_at(json, i)
-        if ch == "\\" && i + 1 < jlen {
-            let nxt = char_at(json, i + 1)
-            if nxt == "n" {
-                out = out + "\n"
-                i = i + 2
-            } else if nxt == "r" {
-                out = out + "\r"
-                i = i + 2
-            } else if nxt == "t" {
-                out = out + "\t"
-                i = i + 2
-            } else if nxt == "b" {
-                out = out + char_from_code(8)
-                i = i + 2
-            } else if nxt == "f" {
-                out = out + char_from_code(12)
-                i = i + 2
-            } else if nxt == "u" && i + 5 < jlen {
-                let d0 = json_hex_nib(char_at(json, i + 2))
-                let d1 = json_hex_nib(char_at(json, i + 3))
-                let d2 = json_hex_nib(char_at(json, i + 4))
-                let d3 = json_hex_nib(char_at(json, i + 5))
-                if d0 >= 0 && d1 >= 0 && d2 >= 0 && d3 >= 0 {
-                    let cp = (d0 << 12) | (d1 << 8) | (d2 << 4) | d3
-                    if cp > 0 && cp < 128 {
-                        out = out + char_from_code(cp)
-                    } else if cp >= 128 && cp < 2048 {
-                        out = out + char_from_code(192 | (cp >> 6)) + char_from_code(128 | (cp & 63))
-                    } else if cp >= 2048 {
-                        out = out + char_from_code(224 | (cp >> 12)) + char_from_code(128 | ((cp >> 6) & 63)) + char_from_code(128 | (cp & 63))
-                    }
-                    i = i + 6
-                } else {
-                    out = out + nxt
-                    i = i + 2
-                }
-            } else {
-                out = out + nxt
-                i = i + 2
-            }
-        } else if ch == "\"" {
-            return out
-        } else {
-            out = out + ch
-            i = i + 1
-        }
-    }
-    return out
+    mut nx_pos: [int] = [0]
+    return json_decode_string_at(json, vpos, nx_pos)
 }
 
 fn json_get_number(json: string, key: string) -> int {

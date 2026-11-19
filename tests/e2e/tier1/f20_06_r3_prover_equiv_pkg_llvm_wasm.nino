@@ -1,0 +1,85 @@
+import "std/str.nino"
+
+fn resolve_ninoc_cmd() -> string {
+    if is_windows() {
+        if file_exists("ninoc.exe") { return "ninoc.exe" }
+        return "ninoc.exe"
+    }
+    if file_exists("./ninoc") { return "./ninoc" }
+    return "ninoc"
+}
+
+fn cleanup_built(base: string) {
+    file_delete(base + ".nino")
+    file_delete(base + ".nino.c")
+    file_delete(base + ".exe")
+    file_delete(base)
+}
+
+fn main() -> int {
+    let ninoc = resolve_ninoc_cmd()
+    let lb = "{"
+    let rb = "}"
+
+    let c1_bad = "temp_e2e_f20_06_c1_bad"
+    write_file(c1_bad + ".nino", "fn helper() -> int " + lb + " return 99 " + rb + "\nfn t(n: int) " + lb + "\n    let x = 5\n    if n > 0 " + lb + "\n        let x = helper()\n        ensure(x == 5)\n    " + rb + "\n" + rb + "\nfn main() " + lb + " t(1) " + rb + "\n")
+    require(exec_cmd(ninoc + " prove " + c1_bad + ".nino") != 0, "prove must refute shadowed unsupported let")
+    cleanup_built(c1_bad)
+
+    let c1_ok = "temp_e2e_f20_06_c1_ok"
+    write_file(c1_ok + ".nino", "fn helper() -> int " + lb + " return 99 " + rb + "\nfn t(n: int) " + lb + "\n    let x = 5\n    if n > 0 " + lb + "\n        let x = helper()\n    " + rb + "\n    ensure(x == 5)\n" + rb + "\nfn main() " + lb + " t(1) " + rb + "\n")
+    require(exec_cmd(ninoc + " prove " + c1_ok + ".nino") == 0, "prove must preserve outer scope after shadowed block exits")
+    cleanup_built(c1_ok)
+
+    let h5_bad = "temp_e2e_f20_06_h5_bad"
+    write_file(h5_bad + ".nino", "fn f(x: int) " + lb + "\n    require(x < 0)\n    let y = -x\n    ensure(y > 0)\n" + rb + "\nfn main() " + lb + " f(-1) " + rb + "\n")
+    require(exec_cmd(ninoc + " prove --int-logic " + h5_bad + ".nino") != 0, "prove --int-logic must refute -INT64_MIN overflow")
+    cleanup_built(h5_bad)
+
+    let h5_ok = "temp_e2e_f20_06_h5_ok"
+    write_file(h5_ok + ".nino", "fn f(x: int) " + lb + "\n    require(x > -100 && x < 0)\n    let y = -x\n    ensure(y > 0)\n" + rb + "\nfn main() " + lb + " f(-1) " + rb + "\n")
+    require(exec_cmd(ninoc + " prove --int-logic " + h5_ok + ".nino") == 0, "prove --int-logic must prove bounded negation UNSAT")
+    cleanup_built(h5_ok)
+
+    let eq_a = "temp_e2e_f20_06_ea.nino"
+    let eq_b = "temp_e2e_f20_06_eb.nino"
+    write_file(eq_a, "fn helper() -> int " + lb + " return 1 " + rb + "\nfn target(x: int) -> int " + lb + " return x + 1 " + rb + "\n")
+    write_file(eq_b, "fn helper() -> int " + lb + " return 1 " + rb + "\nfn target(x: int) -> int " + lb + " return x + 2 " + rb + "\n")
+    require(exec_cmd(ninoc + " equiv " + eq_a + " " + eq_b) != 0, "equiv whole-file must catch second function divergence")
+    require(exec_cmd(ninoc + " equiv " + eq_a + " " + eq_b + " target") != 0, "equiv named target must catch divergence")
+    require(exec_cmd(ninoc + " equiv " + eq_a + " " + eq_b + " helper") == 0, "equiv named helper must verify UNSAT")
+    file_delete(eq_a)
+    file_delete(eq_b)
+
+    require(exec_cmd(ninoc + " pkg add ../../temp_e2e_f20_06_escaped") != 0, "pkg add must reject path traversal")
+    require(file_exists("../../temp_e2e_f20_06_escaped/module.nino") == false, "pkg add must not write outside workspace")
+
+    let ir_src = "temp_e2e_f20_06_ir.nino"
+    let ir_out = "temp_e2e_f20_06_ir.ll"
+    write_file(ir_src, "fn calc(x: int, sh: int) -> int " + lb + "\n    let a = -x\n    return a << sh\n" + rb + "\nfn main() " + lb + " print(calc(1, 2)) " + rb + "\n")
+    require(exec_cmd(ninoc + " llvm " + ir_src + " -o " + ir_out) == 0, "ninoc llvm must emit IR for neg and shift")
+    let ir = read_file(ir_out)
+    require(str_contains(ir, "sub nsw i64 0") == false, "LLVM IR negation must not emit nsw poison on INT64_MIN")
+    require(str_contains(ir, "sub i64 0,"), "LLVM IR negation must emit wrapping sub i64 0")
+    require(str_contains(ir, "icmp ult i64"), "LLVM IR shift must emit < 64 bounds check")
+    file_delete(ir_src)
+    file_delete(ir_out)
+
+    let w_oob = "temp_e2e_f20_06_woob"
+    write_file(w_oob + ".nino", "import \"std/wasm.nino\"\nfn main() " + lb + "\n    mut w = wasm_spawn(\"oob\", 1, 10000)\n    let code: [i64] = [65, -8, 65, 42, 54, 2, 8]\n    wasm_exec_bytecode(w, code, [])\n" + rb + "\n")
+    require(exec_cmd(ninoc + " run " + w_oob + ".nino") != 0, "wasm negative base + offset wrap must trap OOB")
+    cleanup_built(w_oob)
+
+    let w_stk = "temp_e2e_f20_06_wstk"
+    write_file(w_stk + ".nino", "import \"std/wasm.nino\"\nfn main() " + lb + "\n    mut w = wasm_spawn(\"stk\", 1, 100000)\n    mut code: [i64] = []\n    for i in 0..260 " + lb + " code = push(code, 65); code = push(code, 1) " + rb + "\n    wasm_exec_bytecode(w, code, [])\n" + rb + "\n")
+    require(exec_cmd(ninoc + " run " + w_stk + ".nino") != 0, "wasm operand stack overflow must trap")
+    cleanup_built(w_stk)
+
+    let w_brt = "temp_e2e_f20_06_wbrt"
+    write_file(w_brt + ".nino", "import \"std/wasm.nino\"\nfn main() " + lb + "\n    mut w = wasm_spawn(\"brt\", 1, 1000)\n    let code: [i64] = [14, 1000000000, 0]\n    wasm_exec_bytecode(w, code, [])\n" + rb + "\n")
+    require(exec_cmd(ninoc + " run " + w_brt + ".nino") != 0, "wasm truncated br_table huge count must trap")
+    cleanup_built(w_brt)
+
+    print("T1-F20-06:PASS")
+    return 0
+}

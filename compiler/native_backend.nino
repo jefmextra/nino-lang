@@ -158,6 +158,50 @@ fn pkg_verify_lock_integrity(lock_txt: string, mut checked_out: [int]) -> int {
     return failures
 }
 
+fn pkg_is_ascii_alnum(cc: int) -> bool {
+    return (cc >= 48 && cc <= 57) || (cc >= 65 && cc <= 90) || (cc >= 97 && cc <= 122)
+}
+
+fn pkg_has_unsafe_shell_chars(s: string) -> bool {
+    let n = len(s)
+    if n == 0 { return true }
+    let bad = ";|&`$\"'\\><(){}[]*?~!%^#"
+    for i in 0..n {
+        let ch = char_at(s, i)
+        let cc = char_code(ch)
+        if cc < 33 || cc > 126 { return true }
+        if find_char(bad, ch, 0) != -1 { return true }
+    }
+    return false
+}
+
+fn pkg_is_safe_name(s: string) -> bool {
+    let n = len(s)
+    if n < 1 || n > 64 { return false }
+    if pkg_is_ascii_alnum(char_code(char_at(s, 0))) == false { return false }
+    for i in 0..n {
+        let cc = char_code(char_at(s, i))
+        if pkg_is_ascii_alnum(cc) == false && cc != 95 && cc != 45 {
+            return false
+        }
+    }
+    return true
+}
+
+fn pkg_is_safe_ver(v: string) -> bool {
+    let n = len(v)
+    if n < 1 || n > 32 { return false }
+    if find_str(v, "..", 0) != -1 { return false }
+    if pkg_is_ascii_alnum(char_code(char_at(v, 0))) == false { return false }
+    for i in 0..n {
+        let cc = char_code(char_at(v, i))
+        if pkg_is_ascii_alnum(cc) == false && cc != 95 && cc != 45 && cc != 46 {
+            return false
+        }
+    }
+    return true
+}
+
 fn handle_pkg_command(arg_count: int) -> int {
     if arg_count < 3 {
         print("\033[96m================================================================================\033[0m")
@@ -332,8 +376,8 @@ fn handle_pkg_command(arg_count: int) -> int {
             return 1
         }
         let raw_arg = argv(3)
-        if find_char(raw_arg, ";", 0) != -1 || find_char(raw_arg, "|", 0) != -1 || find_char(raw_arg, "&", 0) != -1 || find_char(raw_arg, "`", 0) != -1 || find_char(raw_arg, "$", 0) != -1 || find_char(raw_arg, "\"", 0) != -1 {
-            print("\033[91m[Nino Security Error CWE-78]\033[0m Rejected unsafe shell metacharacters in package identifier.")
+        if pkg_has_unsafe_shell_chars(raw_arg) || find_str(raw_arg, "..", 0) != -1 || starts_with(raw_arg, "-") {
+            print("\033[91m[Nino Security Error CWE-78/CWE-22]\033[0m Rejected unsafe characters or path traversal in package identifier.")
             return 1
         }
         mut pkg_name = raw_arg
@@ -343,22 +387,41 @@ fn handle_pkg_command(arg_count: int) -> int {
         if at_pos != -1 {
             pkg_ver = slice(raw_arg, at_pos + 1, len(raw_arg) - at_pos - 1)
             pkg_name = slice(raw_arg, 0, at_pos)
-        }
-        if pkg_name == "math3d" || pkg_name == "crypto" || pkg_name == "net" || pkg_name == "actor" || pkg_name == "gui" || pkg_name == "db" || pkg_name == "json" || pkg_name == "http" || pkg_name == "fs" || pkg_name == "str" || pkg_name == "uuid" || pkg_name == "env" || pkg_name == "regex" || pkg_name == "csv" || pkg_name == "jwt" {
-            pkg_source = "https://github.com/jefmextra/nino-" + pkg_name
-        }
-        if starts_with(pkg_name, "http://") || starts_with(pkg_name, "https://") || starts_with(pkg_name, "github.com/") {
-            pkg_source = pkg_name
-            let slash_pos = find_char(pkg_name, "/", len(pkg_name) - 15)
-            if slash_pos != -1 {
-                pkg_name = slice(pkg_name, slash_pos + 1, len(pkg_name) - slash_pos - 1)
+            if find_char(pkg_ver, "@", 0) != -1 || pkg_is_safe_ver(pkg_ver) == false {
+                print("\033[91m[Nino Security Error CWE-22]\033[0m Rejected invalid package version specifier.")
+                return 1
             }
         }
-        let is_git = starts_with(raw_arg, "http://") || starts_with(raw_arg, "https://") || starts_with(raw_arg, "git@") || starts_with(raw_arg, "github.com/")
+        let is_git = starts_with(pkg_name, "http://") || starts_with(pkg_name, "https://") || starts_with(pkg_name, "github.com/")
+        if is_git {
+            pkg_source = pkg_name
+            if starts_with(pkg_source, "github.com/") {
+                pkg_source = "https://" + pkg_source
+            }
+            mut last_sl = -1
+            for si in 0..len(pkg_name) {
+                if char_at(pkg_name, si) == "/" { last_sl = si }
+            }
+            if last_sl == -1 || last_sl + 1 >= len(pkg_name) {
+                print("\033[91m[Nino Security Error CWE-22]\033[0m Invalid repository package URL.")
+                return 1
+            }
+            pkg_name = slice(pkg_name, last_sl + 1, len(pkg_name) - last_sl - 1)
+            if ends_with(pkg_name, ".git") && len(pkg_name) > 4 {
+                pkg_name = slice(pkg_name, 0, len(pkg_name) - 4)
+            }
+        } else if pkg_name == "math3d" || pkg_name == "crypto" || pkg_name == "net" || pkg_name == "actor" || pkg_name == "gui" || pkg_name == "db" || pkg_name == "json" || pkg_name == "http" || pkg_name == "fs" || pkg_name == "str" || pkg_name == "uuid" || pkg_name == "env" || pkg_name == "regex" || pkg_name == "csv" || pkg_name == "jwt" {
+            pkg_source = "https://github.com/jefmextra/nino-" + pkg_name
+        }
+        if pkg_is_safe_name(pkg_name) == false {
+            print("\033[91m[Nino Security Error CWE-22]\033[0m Rejected unsafe package name '" + pkg_name + "' (must match ^[A-Za-z0-9][A-Za-z0-9_-]*$).")
+            return 1
+        }
+        let pkg_ident = replace_str(pkg_name, "-", "_")
         let pkg_dir = "pkg/" + pkg_name
         if is_git {
             print("  Git Transport: Synchronizing remote repository " + pkg_source + " ...")
-            let clone_cmd = "git clone --depth 1 \"" + pkg_source + "\" \"" + pkg_dir + "\" " + null_redir()
+            let clone_cmd = "git clone --depth 1 -- \"" + pkg_source + "\" \"" + pkg_dir + "\" " + null_redir()
             exec_cmd(clone_cmd)
         } else {
             if is_host_windows() {
@@ -373,9 +436,9 @@ fn handle_pkg_command(arg_count: int) -> int {
         let std_cand = "std/" + pkg_name + ".nino"
         if file_exists(std_cand) {
             let std_src = read_file(std_cand)
-            write_file(mod_file, std_src + "\nfn " + pkg_name + "_version() -> str {\n    return \"" + pkg_ver + "\"\n}\n")
+            write_file(mod_file, std_src + "\nfn " + pkg_ident + "_version() -> str {\n    return \"" + pkg_ver + "\"\n}\n")
         } else if file_exists(mod_file) == false {
-            mut mod_content = "fn " + pkg_name + "_version() -> str {\n"
+            mut mod_content = "fn " + pkg_ident + "_version() -> str {\n"
             mod_content = mod_content + "    return \"" + pkg_ver + "\"\n"
             mod_content = mod_content + "}\n"
             write_file(mod_file, mod_content)

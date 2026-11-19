@@ -30,10 +30,14 @@ fn tensor_from_array(rows: i64, cols: i64, array_data: [f64]) -> Tensor {
     require(rows > 0, "Tensor rows must be positive")
     require(cols > 0, "Tensor cols must be positive")
     require(len(array_data) == (rows * cols), "Array length must match dimensions")
+    mut copied: [f64] = []
+    for i in 0..len(array_data) {
+        copied = push(copied, array_data[i])
+    }
     return Tensor {
         shape_rows: rows,
         shape_cols: cols,
-        data: array_data
+        data: copied
     }
 }
 

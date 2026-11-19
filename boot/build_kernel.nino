@@ -33,6 +33,10 @@ fn resolve_clang_bin() -> string {
 fn resolve_lld_bin() -> string {
     let env_ld = get_env("NINO_LLD")
     if len(env_ld) > 0 && file_exists(env_ld) {
+        let elen = len(env_ld)
+        if (elen >= 10 && slice(env_ld, elen - 10, 10) == "ld.lld.exe") || (elen >= 6 && slice(env_ld, elen - 6, 6) == "ld.lld") {
+            return "\"" + env_ld + "\""
+        }
         return "\"" + env_ld + "\" -flavor gnu"
     }
     let pf = get_env("ProgramFiles")

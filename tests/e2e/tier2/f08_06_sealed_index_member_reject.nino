@@ -1,0 +1,6 @@
+fn main() -> int {
+    sealed let s = "TOP_SECRET_TOKEN"
+    mut a = ["public"]
+    a[0] = s
+    return 0
+}

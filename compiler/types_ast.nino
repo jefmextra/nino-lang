@@ -303,6 +303,12 @@ struct LowerCtx {
     mut temp_seq: int,
     mut defers: [DeferItem],
     mut bce_pairs: [BcePair],
+    mut tx_depth: int,
+    mut match_depth: int,
+    mut loop_brk_lbls: [string],
+    mut loop_brk_used: [bool],
+    mut loop_tx_bases: [int],
+    mut loop_match_bases: [int],
     mut last_stmt_was_return: bool,
     mut is_no_std: bool,
     mut actor_inits: string

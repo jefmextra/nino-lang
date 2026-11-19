@@ -191,8 +191,21 @@ fn mpc_ec_add(p1: MpcEcPoint, p2: MpcEcPoint) -> MpcEcPoint {
 
 fn mpc_ec_mul(k: i64, pt: MpcEcPoint) -> MpcEcPoint {
     mut res = MpcEcPoint { is_inf: true, x: 0, y: 0 }
+    if k == 0 || pt.is_inf {
+        return res
+    }
+    let p = mpc_ec_p()
     mut qpt = pt
     mut n = k
+    if k < 0 {
+        qpt = MpcEcPoint { is_inf: false, x: mpc_mod_norm(pt.x, p), y: mpc_mod_norm(0 - pt.y, p) }
+        if k < -9223372036854775807 {
+            res = qpt
+            n = 9223372036854775807
+        } else {
+            n = 0 - k
+        }
+    }
     while n > 0 {
         if n % 2 == 1 {
             res = mpc_ec_add(res, qpt)

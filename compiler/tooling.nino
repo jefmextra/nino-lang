@@ -843,7 +843,7 @@ fn run_lsp_server() -> int {
                         sid = "null"
                     }
                     let caps = "{\"textDocumentSync\":1,\"hoverProvider\":true}"
-                    let sinfo = "{\"name\":\"ninoc-lsp\",\"version\":\"1.2.2\"}"
+                    let sinfo = "{\"name\":\"ninoc-lsp\",\"version\":\"1.2.3\"}"
                     let res_obj = "{\"capabilities\":" + caps + ",\"serverInfo\":" + sinfo + "}"
                     let resp = "{\"jsonrpc\":\"2.0\",\"id\":" + sid + ",\"result\":" + res_obj + "}"
                     lsp_send(resp)
@@ -2128,7 +2128,7 @@ fn print_usage() {
 
 fn print_version() {
     let arch_t = is_host_windows() ? "x86_64-pc-windows-gnu" : "x86_64-unknown-linux-gnu"
-    print("Nino Sovereign Systems Language Toolchain v1.2.2")
+    print("Nino Sovereign Systems Language Toolchain v1.2.3")
     print("Compiler Engine    : ninoc (Modular Self-Hosted Native Machine Code)")
     print("Architecture Target: " + arch_t + " (Standalone Executable)")
     print("Runtime Subsystem  : Morphic Deterministic Memory / Zero-Overhead Contracts")
@@ -2517,33 +2517,53 @@ fn eq_smt_lower_stmt(pool: AstPool, nid: int, mut ctx: EqSmtCtx) {
     ctx.unsupported = true
 }
 
-fn eq_smt_first_fn(pool: AstPool) -> int {
+fn eq_smt_collect_fns(pool: AstPool) -> [int] {
+    mut res: [int] = []
     if pool.has_error || pool.root < 0 || pool.root >= len(pool.nodes) {
-        return -1
+        return res
     }
     let rnd: AstNode = pool.nodes[pool.root]
     for ci in 0..rnd.child_count {
         let cid = pool.children[rnd.child_start + ci]
         if cid >= 0 && cid < len(pool.nodes) && pool.nodes[cid].kind == NK_FN_DECL() {
-            return cid
+            res = push(res, cid)
+        }
+    }
+    return res
+}
+
+fn eq_smt_find_fn_by_name(pool: AstPool, fns: [int], fn_name: string) -> int {
+    for fi in 0..len(fns) {
+        let fid = fns[fi]
+        if pool.nodes[fid].name == fn_name {
+            return fid
         }
     }
     return -1
 }
 
-fn synthesize_equiv_smt(src_a: string, src_b: string) -> string {
-    let pa = ast_parse_unit_ex(src_a, ".", "equiv_a.nino", false)
-    let pb = ast_parse_unit_ex(src_b, ".", "equiv_b.nino", false)
-    let fa = eq_smt_first_fn(pa)
-    let fb = eq_smt_first_fn(pb)
-    if fa == -1 || fb == -1 {
-        return "(set-logic ALL)\n(assert true)\n(check-sat)\n(get-model)\n"
-    }
+fn eq_smt_first_fn(pool: AstPool) -> int {
+    let fns = eq_smt_collect_fns(pool)
+    if len(fns) > 0 { return fns[0] }
+    return -1
+}
+
+fn eq_smt_fail_closed_smt() -> string {
+    return "(set-logic ALL)\n(declare-const _div_a Int)\n(declare-const _div_b Int)\n(assert (not (= _div_a _div_b)))\n(check-sat)\n(get-model)\n"
+}
+
+fn eq_smt_build_fn_pair(pa: AstPool, fa: int, pb: AstPool, fb: int, pair_idx: int, mut out_smt: [string], mut out_diff: [string]) -> bool {
     let fnd_a: AstNode = pa.nodes[fa]
     let fnd_b: AstNode = pb.nodes[fb]
     if fnd_a.child_count != fnd_b.child_count {
-        return "(set-logic ALL)\n(declare-const _div_a Int)\n(declare-const _div_b Int)\n(assert (not (= _div_a _div_b)))\n(check-sat)\n(get-model)\n"
+        return false
     }
+    let ret_bool_a = (trim(fnd_a.type_ann) == "bool")
+    let ret_bool_b = (trim(fnd_b.type_ann) == "bool")
+    if ret_bool_a != ret_bool_b {
+        return false
+    }
+    let pid = "f" + int_to_str(pair_idx) + "_"
     mut param_decls = ""
     mut map_a = "|"
     mut map_b = "|"
@@ -2551,14 +2571,12 @@ fn synthesize_equiv_smt(src_a: string, src_b: string) -> string {
     for pi in 0..fnd_a.child_count {
         let pan: AstNode = pa.nodes[pa.children[fnd_a.child_start + pi]]
         let pbn: AstNode = pb.nodes[pb.children[fnd_b.child_start + pi]]
-        let ta = trim(pan.type_ann)
-        let tb = trim(pbn.type_ann)
-        let a_bool = (ta == "bool")
-        let b_bool = (tb == "bool")
+        let a_bool = (trim(pan.type_ann) == "bool")
+        let b_bool = (trim(pbn.type_ann) == "bool")
         if a_bool != b_bool {
-            return "(set-logic ALL)\n(declare-const _div_a Int)\n(declare-const _div_b Int)\n(assert (not (= _div_a _div_b)))\n(check-sat)\n(get-model)\n"
+            return false
         }
-        let psym = "_eq_p_" + int_to_str(pi)
+        let psym = "_eq_" + pid + "p_" + int_to_str(pi)
         mut psort = "Int"
         if a_bool {
             psort = "Bool"
@@ -2568,40 +2586,94 @@ fn synthesize_equiv_smt(src_a: string, src_b: string) -> string {
         map_a = eq_smt_map_set(map_a, pan.name, psym)
         map_b = eq_smt_map_set(map_b, pbn.name, psym)
     }
-    mut ca = EqSmtCtx { pfx: "a_", sym_map: map_a, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
-    mut cb = EqSmtCtx { pfx: "b_", sym_map: map_b, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
+    mut ca = EqSmtCtx { pfx: "a_" + pid, sym_map: map_a, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
+    mut cb = EqSmtCtx { pfx: "b_" + pid, sym_map: map_b, bool_syms: bsyms, blk_decls: "|", decls: "", asserts: "", ret_conds: [], ret_vals: [], path_cond: "", seq: 0, unsupported: false, always_returned: false }
     if fnd_a.left != -1 {
         eq_smt_lower_stmt(pa, fnd_a.left, ca)
     }
     if fnd_b.left != -1 {
         eq_smt_lower_stmt(pb, fnd_b.left, cb)
     }
-    mut ret_sort = "Int"
-    if trim(fnd_a.type_ann) == "bool" {
-        ret_sort = "Bool"
-    }
     if ca.unsupported || cb.unsupported || len(ca.ret_vals) == 0 || len(cb.ret_vals) == 0 {
-        return "(set-logic ALL)\n" + param_decls + "(declare-const _ret_a " + ret_sort + ")\n(declare-const _ret_b " + ret_sort + ")\n(assert (not (= _ret_a _ret_b)))\n(check-sat)\n(get-model)\n"
+        return false
     }
-    mut out = "(set-logic ALL)\n" + param_decls
-    out = out + "(declare-const _ret_a " + ret_sort + ")\n(declare-const _ret_b " + ret_sort + ")\n"
-    out = out + ca.decls + cb.decls + ca.asserts + cb.asserts
+    let ret_sort = ret_bool_a ? "Bool" : "Int"
+    let ra = "_ret_" + pid + "a"
+    let rb = "_ret_" + pid + "b"
+    mut chunk = param_decls + "(declare-const " + ra + " " + ret_sort + ")\n(declare-const " + rb + " " + ret_sort + ")\n"
+    chunk = chunk + ca.decls + cb.decls + ca.asserts + cb.asserts
     for i in 0..len(ca.ret_vals) {
         if len(ca.ret_conds[i]) == 0 {
-            out = out + "(assert (= _ret_a " + ca.ret_vals[i] + "))\n"
+            chunk = chunk + "(assert (= " + ra + " " + ca.ret_vals[i] + "))\n"
         } else {
-            out = out + "(assert (=> " + ca.ret_conds[i] + " (= _ret_a " + ca.ret_vals[i] + ")))\n"
+            chunk = chunk + "(assert (=> " + ca.ret_conds[i] + " (= " + ra + " " + ca.ret_vals[i] + ")))\n"
         }
     }
     for i in 0..len(cb.ret_vals) {
         if len(cb.ret_conds[i]) == 0 {
-            out = out + "(assert (= _ret_b " + cb.ret_vals[i] + "))\n"
+            chunk = chunk + "(assert (= " + rb + " " + cb.ret_vals[i] + "))\n"
         } else {
-            out = out + "(assert (=> " + cb.ret_conds[i] + " (= _ret_b " + cb.ret_vals[i] + ")))\n"
+            chunk = chunk + "(assert (=> " + cb.ret_conds[i] + " (= " + rb + " " + cb.ret_vals[i] + ")))\n"
         }
     }
-    out = out + "(assert (not (= _ret_a _ret_b)))\n(check-sat)\n(get-model)\n"
-    return out
+    out_smt[0] = out_smt[0] + chunk
+    out_diff = push(out_diff, "(not (= " + ra + " " + rb + "))")
+    return true
+}
+
+fn synthesize_equiv_smt_ex(src_a: string, src_b: string, target_fn: string) -> string {
+    let pa = ast_parse_unit_ex(src_a, ".", "equiv_a.nino", false)
+    let pb = ast_parse_unit_ex(src_b, ".", "equiv_b.nino", false)
+    let fns_a = eq_smt_collect_fns(pa)
+    let fns_b = eq_smt_collect_fns(pb)
+    if len(fns_a) == 0 || len(fns_b) == 0 {
+        return eq_smt_fail_closed_smt()
+    }
+    mut pair_a: [int] = []
+    mut pair_b: [int] = []
+    let t_clean = trim(target_fn)
+    if len(t_clean) > 0 {
+        let fa = eq_smt_find_fn_by_name(pa, fns_a, t_clean)
+        let fb = eq_smt_find_fn_by_name(pb, fns_b, t_clean)
+        if fa == -1 || fb == -1 {
+            return eq_smt_fail_closed_smt()
+        }
+        pair_a = push(pair_a, fa)
+        pair_b = push(pair_b, fb)
+    } else {
+        if len(fns_a) != len(fns_b) {
+            return eq_smt_fail_closed_smt()
+        }
+        for fi in 0..len(fns_a) {
+            let fa = fns_a[fi]
+            let fb = eq_smt_find_fn_by_name(pb, fns_b, pa.nodes[fa].name)
+            if fb == -1 {
+                return eq_smt_fail_closed_smt()
+            }
+            pair_a = push(pair_a, fa)
+            pair_b = push(pair_b, fb)
+        }
+    }
+    mut body_smt: [string] = ["(set-logic ALL)\n"]
+    mut diffs: [string] = []
+    for pi in 0..len(pair_a) {
+        if eq_smt_build_fn_pair(pa, pair_a[pi], pb, pair_b[pi], pi, body_smt, diffs) == false {
+            return eq_smt_fail_closed_smt()
+        }
+    }
+    if len(diffs) == 1 {
+        return body_smt[0] + "(assert " + diffs[0] + ")\n(check-sat)\n(get-model)\n"
+    }
+    mut or_expr = "(or"
+    for di in 0..len(diffs) {
+        or_expr = or_expr + " " + diffs[di]
+    }
+    or_expr = or_expr + ")"
+    return body_smt[0] + "(assert " + or_expr + ")\n(check-sat)\n(get-model)\n"
+}
+
+fn synthesize_equiv_smt(src_a: string, src_b: string) -> string {
+    return synthesize_equiv_smt_ex(src_a, src_b, "")
 }
 
 fn generate_cyclonedx_sbom(src_path: string, src_text: string) -> string {

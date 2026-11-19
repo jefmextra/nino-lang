@@ -794,7 +794,7 @@ fn smt_fp_collect_safety(expr_raw: string, ssa_map: string, pg: string, depth: i
     return ""
 }
 
-fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: int, fp_syms: string) -> string {
+fn smt_arith_collect_ovf_ex(expr_raw: string, ssa_map: string, pg: string, depth: int, bv_mode: bool, fp_syms: string) -> string {
     if depth > 16 {
         return ""
     }
@@ -818,48 +818,48 @@ fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: i
             }
         }
         if strip_p {
-            return smt_bv_collect_ovf_fp(slice(ex, 1, elen - 2), ssa_map, pg, depth + 1, fp_syms)
+            return smt_arith_collect_ovf_ex(slice(ex, 1, elen - 2), ssa_map, pg, depth + 1, bv_mode, fp_syms)
         }
     }
     let or_p = find_top_binary_op(ex, "||")
     if or_p != -1 {
         let l_s = slice(ex, 0, or_p)
         let r_s = slice(ex, or_p + 2, elen - or_p - 2)
-        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
-        return m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg + "(assert (not " + l_g + "))\n", depth + 1, fp_syms))
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, bv_mode, fp_syms), ssa_map)
+        return m1_scat(smt_arith_collect_ovf_ex(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(r_s, ssa_map, pg + "(assert (not " + l_g + "))\n", depth + 1, bv_mode, fp_syms))
     }
     let or_kw = find_top_binary_op(ex, " or ")
     if or_kw != -1 {
         let l_s = slice(ex, 0, or_kw)
         let r_s = slice(ex, or_kw + 4, elen - or_kw - 4)
-        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
-        return m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg + "(assert (not " + l_g + "))\n", depth + 1, fp_syms))
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, bv_mode, fp_syms), ssa_map)
+        return m1_scat(smt_arith_collect_ovf_ex(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(r_s, ssa_map, pg + "(assert (not " + l_g + "))\n", depth + 1, bv_mode, fp_syms))
     }
     let and_p = find_top_binary_op(ex, "&&")
     if and_p != -1 {
         let l_s = slice(ex, 0, and_p)
         let r_s = slice(ex, and_p + 2, elen - and_p - 2)
-        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
-        return m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg + "(assert " + l_g + ")\n", depth + 1, fp_syms))
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, bv_mode, fp_syms), ssa_map)
+        return m1_scat(smt_arith_collect_ovf_ex(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(r_s, ssa_map, pg + "(assert " + l_g + ")\n", depth + 1, bv_mode, fp_syms))
     }
     let and_kw = find_top_binary_op(ex, " and ")
     if and_kw != -1 {
         let l_s = slice(ex, 0, and_kw)
         let r_s = slice(ex, and_kw + 5, elen - and_kw - 5)
-        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
-        return m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg + "(assert " + l_g + ")\n", depth + 1, fp_syms))
+        let l_g = smt_subst_vars(expr_to_smt_fp(l_s, bv_mode, fp_syms), ssa_map)
+        return m1_scat(smt_arith_collect_ovf_ex(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(r_s, ssa_map, pg + "(assert " + l_g + ")\n", depth + 1, bv_mode, fp_syms))
     }
     let bor_p = find_top_binary_op(ex, "|")
     if bor_p != -1 {
-        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, bor_p), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, bor_p + 1, elen - bor_p - 1), ssa_map, pg, depth + 1, fp_syms))
+        return m1_scat(smt_arith_collect_ovf_ex(slice(ex, 0, bor_p), ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(slice(ex, bor_p + 1, elen - bor_p - 1), ssa_map, pg, depth + 1, bv_mode, fp_syms))
     }
     let bxor_p = find_top_binary_op(ex, "^")
     if bxor_p != -1 {
-        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, bxor_p), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, bxor_p + 1, elen - bxor_p - 1), ssa_map, pg, depth + 1, fp_syms))
+        return m1_scat(smt_arith_collect_ovf_ex(slice(ex, 0, bxor_p), ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(slice(ex, bxor_p + 1, elen - bxor_p - 1), ssa_map, pg, depth + 1, bv_mode, fp_syms))
     }
     let band_p = find_top_binary_op(ex, "&")
     if band_p != -1 {
-        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, band_p), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, band_p + 1, elen - band_p - 1), ssa_map, pg, depth + 1, fp_syms))
+        return m1_scat(smt_arith_collect_ovf_ex(slice(ex, 0, band_p), ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(slice(ex, band_p + 1, elen - band_p - 1), ssa_map, pg, depth + 1, bv_mode, fp_syms))
     }
     let eq_p = find_top_binary_op(ex, "==")
     let neq_p = find_top_binary_op(ex, "!=")
@@ -868,7 +868,7 @@ fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: i
         if neq_p > cmp_p {
             cmp_p = neq_p
         }
-        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, cmp_p), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, cmp_p + 2, elen - cmp_p - 2), ssa_map, pg, depth + 1, fp_syms))
+        return m1_scat(smt_arith_collect_ovf_ex(slice(ex, 0, cmp_p), ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(slice(ex, cmp_p + 2, elen - cmp_p - 2), ssa_map, pg, depth + 1, bv_mode, fp_syms))
     }
     let lte_p = find_top_binary_op(ex, "<=")
     let gte_p = find_top_binary_op(ex, ">=")
@@ -889,7 +889,7 @@ fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: i
             max_c = gt_p
             op_len = 1
         }
-        return m1_scat(smt_bv_collect_ovf_fp(slice(ex, 0, max_c), ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(slice(ex, max_c + op_len, elen - max_c - op_len), ssa_map, pg, depth + 1, fp_syms))
+        return m1_scat(smt_arith_collect_ovf_ex(slice(ex, 0, max_c), ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(slice(ex, max_c + op_len, elen - max_c - op_len), ssa_map, pg, depth + 1, bv_mode, fp_syms))
     }
     let shl_p = find_top_binary_op(ex, "<<")
     let shr_p = find_top_binary_op(ex, ">>")
@@ -900,9 +900,12 @@ fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: i
         }
         let l_s = trim(slice(ex, 0, sp_idx))
         let r_s = trim(slice(ex, sp_idx + 2, elen - sp_idx - 2))
-        mut res = m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg, depth + 1, fp_syms))
-        let r_bv = smt_subst_vars(expr_to_smt_fp(r_s, true, fp_syms), ssa_map)
-        let sh_ok = "(and (bvsge " + r_bv + " (_ bv0 64)) (bvslt " + r_bv + " (_ bv64 64)))"
+        mut res = m1_scat(smt_arith_collect_ovf_ex(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(r_s, ssa_map, pg, depth + 1, bv_mode, fp_syms))
+        let r_t = smt_subst_vars(expr_to_smt_fp(r_s, bv_mode, fp_syms), ssa_map)
+        mut sh_ok = "(and (>= " + r_t + " 0) (< " + r_t + " 64))"
+        if bv_mode {
+            sh_ok = "(and (bvsge " + r_t + " (_ bv0 64)) (bvslt " + r_t + " (_ bv64 64)))"
+        }
         res = res + "(push)\n" + pg + "(assert (not " + sh_ok + "))\n(check-sat)\n(pop)\n"
         return res
     }
@@ -911,21 +914,29 @@ fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: i
     if plus_p > 0 || minus_p > 0 {
         mut op_p = plus_p
         mut bvop = "bvadd"
+        mut iop = "+"
         if minus_p > op_p {
             op_p = minus_p
             bvop = "bvsub"
+            iop = "-"
         }
         let l_s = trim(slice(ex, 0, op_p))
         let r_s = trim(slice(ex, op_p + 1, elen - op_p - 1))
-        mut res = m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg, depth + 1, fp_syms))
-        if smt_contains_fp(l_s, fp_syms, true) || smt_contains_fp(r_s, fp_syms, true) {
+        mut res = m1_scat(smt_arith_collect_ovf_ex(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(r_s, ssa_map, pg, depth + 1, bv_mode, fp_syms))
+        if smt_contains_fp(l_s, fp_syms, bv_mode) || smt_contains_fp(r_s, fp_syms, bv_mode) {
             return res
         }
-        let w_l = "((_ sign_extend 64) " + smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map) + ")"
-        let w_r = "((_ sign_extend 64) " + smt_subst_vars(expr_to_smt_fp(r_s, true, fp_syms), ssa_map) + ")"
-        let r128 = "(" + bvop + " " + w_l + " " + w_r + ")"
-        let ok128 = "(and (bvsge " + r128 + " (bvneg (_ bv9223372036854775808 128))) (bvsle " + r128 + " (_ bv9223372036854775807 128)))"
-        res = res + "(push)\n" + pg + "(assert (not " + ok128 + "))\n(check-sat)\n(pop)\n"
+        let l_t = smt_subst_vars(expr_to_smt_fp(l_s, bv_mode, fp_syms), ssa_map)
+        let r_t = smt_subst_vars(expr_to_smt_fp(r_s, bv_mode, fp_syms), ssa_map)
+        mut ok_s = ""
+        if bv_mode {
+            let r128 = "(" + bvop + " ((_ sign_extend 64) " + l_t + ") ((_ sign_extend 64) " + r_t + "))"
+            ok_s = "(and (bvsge " + r128 + " (bvneg (_ bv9223372036854775808 128))) (bvsle " + r128 + " (_ bv9223372036854775807 128)))"
+        } else {
+            let ri = "(" + iop + " " + l_t + " " + r_t + ")"
+            ok_s = "(and (>= " + ri + " (- 9223372036854775808)) (<= " + ri + " 9223372036854775807))"
+        }
+        res = res + "(push)\n" + pg + "(assert (not " + ok_s + "))\n(check-sat)\n(pop)\n"
         return res
     }
     let mul_p = find_top_binary_op(ex, "*")
@@ -944,47 +955,63 @@ fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: i
         }
         let l_s = trim(slice(ex, 0, op_p))
         let r_s = trim(slice(ex, op_p + 1, elen - op_p - 1))
-        mut res = m1_scat(smt_bv_collect_ovf_fp(l_s, ssa_map, pg, depth + 1, fp_syms), smt_bv_collect_ovf_fp(r_s, ssa_map, pg, depth + 1, fp_syms))
-        if smt_contains_fp(l_s, fp_syms, true) || smt_contains_fp(r_s, fp_syms, true) {
+        mut res = m1_scat(smt_arith_collect_ovf_ex(l_s, ssa_map, pg, depth + 1, bv_mode, fp_syms), smt_arith_collect_ovf_ex(r_s, ssa_map, pg, depth + 1, bv_mode, fp_syms))
+        if smt_contains_fp(l_s, fp_syms, bv_mode) || smt_contains_fp(r_s, fp_syms, bv_mode) {
             return res
         }
+        let l_t = smt_subst_vars(expr_to_smt_fp(l_s, bv_mode, fp_syms), ssa_map)
+        let r_t = smt_subst_vars(expr_to_smt_fp(r_s, bv_mode, fp_syms), ssa_map)
         if kind == 0 {
-            let w_l = "((_ sign_extend 64) " + smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map) + ")"
-            let w_r = "((_ sign_extend 64) " + smt_subst_vars(expr_to_smt_fp(r_s, true, fp_syms), ssa_map) + ")"
-            let r128 = "(bvmul " + w_l + " " + w_r + ")"
-            let ok128 = "(and (bvsge " + r128 + " (bvneg (_ bv9223372036854775808 128))) (bvsle " + r128 + " (_ bv9223372036854775807 128)))"
-            res = res + "(push)\n" + pg + "(assert (not " + ok128 + "))\n(check-sat)\n(pop)\n"
+            mut ok_m = ""
+            if bv_mode {
+                let r128 = "(bvmul ((_ sign_extend 64) " + l_t + ") ((_ sign_extend 64) " + r_t + "))"
+                ok_m = "(and (bvsge " + r128 + " (bvneg (_ bv9223372036854775808 128))) (bvsle " + r128 + " (_ bv9223372036854775807 128)))"
+            } else {
+                let rm = "(* " + l_t + " " + r_t + ")"
+                ok_m = "(and (>= " + rm + " (- 9223372036854775808)) (<= " + rm + " 9223372036854775807))"
+            }
+            res = res + "(push)\n" + pg + "(assert (not " + ok_m + "))\n(check-sat)\n(pop)\n"
             return res
         }
-        let l_bv = smt_subst_vars(expr_to_smt_fp(l_s, true, fp_syms), ssa_map)
-        let r_bv = smt_subst_vars(expr_to_smt_fp(r_s, true, fp_syms), ssa_map)
-        let div_ok = "(and (not (= " + r_bv + " (_ bv0 64))) (not (and (= " + l_bv + " (bvneg (_ bv9223372036854775808 64))) (= " + r_bv + " (bvneg (_ bv1 64))))))"
+        mut div_ok = ""
+        if bv_mode {
+            div_ok = "(and (not (= " + r_t + " (_ bv0 64))) (not (and (= " + l_t + " (bvneg (_ bv9223372036854775808 64))) (= " + r_t + " (bvneg (_ bv1 64))))))"
+        } else {
+            div_ok = "(and (not (= " + r_t + " 0)) (not (and (= " + l_t + " (- 9223372036854775808)) (= " + r_t + " (- 1)))))"
+        }
         res = res + "(push)\n" + pg + "(assert (not " + div_ok + "))\n(check-sat)\n(pop)\n"
         return res
     }
     if starts_with(ex, "not ") {
-        return smt_bv_collect_ovf_fp(slice(ex, 4, elen - 4), ssa_map, pg, depth + 1, fp_syms)
+        return smt_arith_collect_ovf_ex(slice(ex, 4, elen - 4), ssa_map, pg, depth + 1, bv_mode, fp_syms)
     }
     if starts_with(ex, "!") || starts_with(ex, "~") || starts_with(ex, "+") {
-        return smt_bv_collect_ovf_fp(slice(ex, 1, elen - 1), ssa_map, pg, depth + 1, fp_syms)
+        return smt_arith_collect_ovf_ex(slice(ex, 1, elen - 1), ssa_map, pg, depth + 1, bv_mode, fp_syms)
     }
     if starts_with(ex, "-") {
         let rest = trim(slice(ex, 1, elen - 1))
-        if smt_contains_fp(rest, fp_syms, true) {
+        if smt_contains_fp(rest, fp_syms, bv_mode) {
             return ""
         }
         if is_digits(rest) == false && starts_with(rest, "0x") == false && starts_with(rest, "0X") == false {
-            let r_bv = smt_subst_vars(expr_to_smt_fp(rest, true, fp_syms), ssa_map)
-            let neg_ok = "(not (= " + r_bv + " (bvneg (_ bv9223372036854775808 64))))"
-            return smt_bv_collect_ovf_fp(rest, ssa_map, pg, depth + 1, fp_syms) + "(push)\n" + pg + "(assert (not " + neg_ok + "))\n(check-sat)\n(pop)\n"
+            let r_t = smt_subst_vars(expr_to_smt_fp(rest, bv_mode, fp_syms), ssa_map)
+            mut neg_ok = "(not (= " + r_t + " (- 9223372036854775808)))"
+            if bv_mode {
+                neg_ok = "(not (= " + r_t + " (bvneg (_ bv9223372036854775808 64))))"
+            }
+            return smt_arith_collect_ovf_ex(rest, ssa_map, pg, depth + 1, bv_mode, fp_syms) + "(push)\n" + pg + "(assert (not " + neg_ok + "))\n(check-sat)\n(pop)\n"
         }
         return ""
     }
     let brk_p = smt_find_top_bracket_open(ex)
     if brk_p > 0 && ends_with(ex, "]") {
-        return smt_bv_collect_ovf_fp(slice(ex, brk_p + 1, elen - brk_p - 2), ssa_map, pg, depth + 1, fp_syms)
+        return smt_arith_collect_ovf_ex(slice(ex, brk_p + 1, elen - brk_p - 2), ssa_map, pg, depth + 1, bv_mode, fp_syms)
     }
     return ""
+}
+
+fn smt_bv_collect_ovf_fp(expr_raw: string, ssa_map: string, pg: string, depth: int, fp_syms: string) -> string {
+    return smt_arith_collect_ovf_ex(expr_raw, ssa_map, pg, depth, true, fp_syms)
 }
 
 fn smt_bv_collect_ovf(expr_raw: string, ssa_map: string, pg: string, depth: int) -> string {
@@ -2123,6 +2150,43 @@ fn smt_ast_havoc_syms(mut st: SmtState, syms_bar: string) {
     }
 }
 
+fn smt_ast_havoc_expr_calls(pool: AstPool, eid: int, mut st: SmtState, depth: int) {
+    if depth > 24 || eid < 0 || eid >= len(pool.nodes) { return }
+    let e: AstNode = pool.nodes[eid]
+    if e.kind == NK_CALL() && e.left >= 0 && e.left < len(pool.nodes) {
+        let cal: AstNode = pool.nodes[e.left]
+        if cal.kind == NK_IDENT() {
+            if (cal.name == "pop" || cal.name == "push" || cal.name == "arr_free") && e.child_count >= 1 {
+                let a0_id = pool.children[e.child_start]
+                if a0_id >= 0 && a0_id < len(pool.nodes) && pool.nodes[a0_id].kind == NK_IDENT() {
+                    smt_ast_havoc_syms(st, "|" + pool.nodes[a0_id].name + "|")
+                }
+            } else if cal.name != "print" && cal.name != "require" && cal.name != "ensure" && cal.name != "invariant" && cal.name != "panic" && cal.name != "abort" && cal.name != "len" && starts_with(cal.name, "trace_") == false {
+                for ci in 0..e.child_count {
+                    let aid = pool.children[e.child_start + ci]
+                    if aid >= 0 && aid < len(pool.nodes) && pool.nodes[aid].kind == NK_IDENT() {
+                        let anm = pool.nodes[aid].name
+                        if find_str(st.arr_syms, "|" + anm + "|", 0) != -1 {
+                            smt_ast_havoc_syms(st, "|" + anm + "|")
+                        }
+                    }
+                    smt_ast_havoc_expr_calls(pool, aid, st, depth + 1)
+                }
+                return
+            }
+        }
+    }
+    if e.left >= 0 && e.left < len(pool.nodes) {
+        smt_ast_havoc_expr_calls(pool, e.left, st, depth + 1)
+    }
+    if e.right >= 0 && e.right < len(pool.nodes) {
+        smt_ast_havoc_expr_calls(pool, e.right, st, depth + 1)
+    }
+    for ci2 in 0..e.child_count {
+        smt_ast_havoc_expr_calls(pool, pool.children[e.child_start + ci2], st, depth + 1)
+    }
+}
+
 fn smt_ast_restore_sym_flag(cur_set: string, outer_set: string, sym: string) -> string {
     if find_str(outer_set, "|" + sym + "|", 0) != -1 {
         return smt_sym_add(cur_set, sym)
@@ -2200,9 +2264,7 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
         let all_s = smt_state_all_syms(st)
         mut cond_smt = ""
         if smt_expr_supported_ex(raw_c, all_s, st.bv_mode) {
-            if st.bv_mode {
-                st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(raw_c, st.ssa_map, pg_before, 0, st.fp_syms)
-            }
+            st.bv_ovf_stream = st.bv_ovf_stream + smt_arith_collect_ovf_ex(raw_c, st.ssa_map, pg_before, 0, st.bv_mode, st.fp_syms)
             st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(raw_c, st.ssa_map, pg_before, 0, st.bv_mode, st.fp_syms)
             st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(raw_c, st.arr_syms, st.ssa_map, pg_before, st.bv_mode)
             cond_smt = smt_subst_vars(expr_to_smt_fp(raw_c, st.bv_mode, st.fp_syms), st.ssa_map)
@@ -2339,9 +2401,7 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
         let all_s = smt_state_all_syms(st)
         mut cond_smt = ""
         if smt_expr_supported_ex(raw_c, all_s, st.bv_mode) {
-            if st.bv_mode {
-                st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(raw_c, st.ssa_map, pg_before, 0, st.fp_syms)
-            }
+            st.bv_ovf_stream = st.bv_ovf_stream + smt_arith_collect_ovf_ex(raw_c, st.ssa_map, pg_before, 0, st.bv_mode, st.fp_syms)
             st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(raw_c, st.ssa_map, pg_before, 0, st.bv_mode, st.fp_syms)
             cond_smt = smt_subst_vars(expr_to_smt_fp(raw_c, st.bv_mode, st.fp_syms), st.ssa_map)
         } else {
@@ -2394,9 +2454,7 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
         let pg = smt_state_pg(st)
         let all_s = smt_state_all_syms(st)
         if len(st.unsup_reason) == 0 && smt_expr_supported_ex(raw_c, all_s, st.bv_mode) {
-            if st.bv_mode {
-                st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(raw_c, st.ssa_map, pg, 0, st.fp_syms)
-            }
+            st.bv_ovf_stream = st.bv_ovf_stream + smt_arith_collect_ovf_ex(raw_c, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
             st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(raw_c, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
             st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(raw_c, st.arr_syms, st.ssa_map, pg, st.bv_mode)
             let mapped_c = smt_subst_vars(expr_to_smt_fp(raw_c, st.bv_mode, st.fp_syms), st.ssa_map)
@@ -2478,9 +2536,7 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
                 ens_cols = push(ens_cols, nd.col > 0 ? nd.col - 1 : 0)
                 ens_msgs = push(ens_msgs, "invariant base: " + ic)
                 if smt_expr_supported_ex(ic, all_l, st.bv_mode) {
-                    if st.bv_mode {
-                        st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(ic, base_ssa, pg + base_extra, 0, st.fp_syms)
-                    }
+                    st.bv_ovf_stream = st.bv_ovf_stream + smt_arith_collect_ovf_ex(ic, base_ssa, pg + base_extra, 0, st.bv_mode, st.fp_syms)
                     let ibase = smt_subst_vars(expr_to_smt_fp(ic, st.bv_mode, st.fp_syms), base_ssa)
                     st.fn_stream = st.fn_stream + "(push)\n" + pg + base_extra + "(assert (not " + ibase + "))\n(check-sat)\n(pop)\n"
                 } else {
@@ -2633,22 +2689,26 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
                     init_expr = "(store " + init_expr + " " + idx_k + " " + esmt + ")"
                 } else {
                     arr_ok = false
+                    smt_ast_havoc_expr_calls(pool, pool.children[rnd_a.child_start + ei], st, 0)
                 }
             }
+            st.ssa_seq = st.ssa_seq + 1
+            let a_sym = vname + "_arr_" + int_to_str(st.ssa_seq)
+            let l_sym = vname + "_len_" + int_to_str(st.ssa_seq)
+            st.int_syms = smt_sym_rem(st.int_syms, vname)
+            st.bool_syms = smt_sym_rem(st.bool_syms, vname)
+            st.fp_syms = smt_sym_rem(st.fp_syms, vname)
+            st.arr_syms = smt_sym_add(st.arr_syms, vname)
+            st.fn_stream = st.fn_stream + "(declare-const " + a_sym + " " + st.arr_sort + ")\n"
+            st.fn_stream = st.fn_stream + "(declare-const " + l_sym + " " + st.int_sort + ")\n"
+            mut len_c = int_to_str(ac)
+            if st.bv_mode { len_c = "(_ bv" + len_c + " 64)" }
+            st.fn_stream = st.fn_stream + "(assert (= " + l_sym + " " + len_c + "))\n"
             if arr_ok {
-                st.ssa_seq = st.ssa_seq + 1
-                let a_sym = vname + "_arr_" + int_to_str(st.ssa_seq)
-                let l_sym = vname + "_len_" + int_to_str(st.ssa_seq)
-                st.arr_syms = smt_sym_add(st.arr_syms, vname)
-                st.fn_stream = st.fn_stream + "(declare-const " + a_sym + " " + st.arr_sort + ")\n"
-                st.fn_stream = st.fn_stream + "(declare-const " + l_sym + " " + st.int_sort + ")\n"
-                mut len_c = int_to_str(ac)
-                if st.bv_mode { len_c = "(_ bv" + len_c + " 64)" }
-                st.fn_stream = st.fn_stream + "(assert (= " + l_sym + " " + len_c + "))\n"
                 st.fn_stream = st.fn_stream + "(assert (= " + a_sym + " " + init_expr + "))\n"
-                st.ssa_map = smt_ssa_set(st.ssa_map, vname + "_arr", a_sym)
-                st.ssa_map = smt_ssa_set(st.ssa_map, vname + "_len", l_sym)
             }
+            st.ssa_map = smt_ssa_set(st.ssa_map, vname + "_arr", a_sym)
+            st.ssa_map = smt_ssa_set(st.ssa_map, vname + "_len", l_sym)
             return false
         }
         let rhs_raw = smt_ast_expr_str(pool, rhs_id, false)
@@ -2693,17 +2753,21 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
                 return false
             }
         }
-        if is_valid_identifier(vname) && smt_expr_supported_ex(rhs_raw, all_syms, st.bv_mode) {
-            if st.bv_mode {
-                st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(rhs_raw, st.ssa_map, pg, 0, st.fp_syms)
-            }
-            st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(rhs_raw, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
-            st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(rhs_raw, st.arr_syms, st.ssa_map, pg, st.bv_mode)
+        if is_valid_identifier(vname) {
+            let rhs_sup = smt_expr_supported_ex(rhs_raw, all_syms, st.bv_mode)
             let is_b = smt_ast_expr_is_bool(pool, rhs_id, st.bool_syms) || vtype_ann == "bool"
             let is_fp = (vtype_ann == "float" || vtype_ann == "f64" || vtype_ann == "f32" || vtype_ann == "double" || smt_ast_expr_is_fp(pool, rhs_id, st.fp_syms)) && (is_b == false)
-            mut rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs_raw, st.bv_mode, st.fp_syms), st.ssa_map)
-            if is_fp {
-                rhs_smt = smt_subst_vars(smt_as_fp_term(rhs_raw, st.bv_mode, st.fp_syms), st.ssa_map)
+            mut rhs_smt = ""
+            if rhs_sup {
+                st.bv_ovf_stream = st.bv_ovf_stream + smt_arith_collect_ovf_ex(rhs_raw, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
+                st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(rhs_raw, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
+                st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(rhs_raw, st.arr_syms, st.ssa_map, pg, st.bv_mode)
+                rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs_raw, st.bv_mode, st.fp_syms), st.ssa_map)
+                if is_fp {
+                    rhs_smt = smt_subst_vars(smt_as_fp_term(rhs_raw, st.bv_mode, st.fp_syms), st.ssa_map)
+                }
+            } else {
+                smt_ast_havoc_expr_calls(pool, rhs_id, st, 0)
             }
             st.ssa_seq = st.ssa_seq + 1
             let ssa_nm = vname + "_0_" + int_to_str(st.ssa_seq)
@@ -2724,10 +2788,12 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
                     st.fn_stream = st.fn_stream + smt_type_bounds_assert_ex(ssa_nm, vtype_ann, st.bv_mode)
                 }
             }
-            if len(pc) > 0 {
-                st.fn_stream = st.fn_stream + "(assert (=> " + pc + " (= " + ssa_nm + " " + rhs_smt + ")))\n"
-            } else {
-                st.fn_stream = st.fn_stream + "(assert (= " + ssa_nm + " " + rhs_smt + "))\n"
+            if rhs_sup {
+                if len(pc) > 0 {
+                    st.fn_stream = st.fn_stream + "(assert (=> " + pc + " (= " + ssa_nm + " " + rhs_smt + ")))\n"
+                } else {
+                    st.fn_stream = st.fn_stream + "(assert (= " + ssa_nm + " " + rhs_smt + "))\n"
+                }
             }
             st.ssa_map = smt_ssa_set(st.ssa_map, vname, ssa_nm)
         }
@@ -2803,9 +2869,7 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
                         if a0_id >= 0 && a0_id < len(pool.nodes) && pool.nodes[a0_id].kind == NK_IDENT() && pool.nodes[a0_id].name == lhs_a {
                             let val_raw = smt_ast_expr_str(pool, val_id, false)
                             if smt_expr_supported_ex(val_raw, all_syms, st.bv_mode) {
-                                if st.bv_mode {
-                                    st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(val_raw, st.ssa_map, pg, 0, st.fp_syms)
-                                }
+                                st.bv_ovf_stream = st.bv_ovf_stream + smt_arith_collect_ovf_ex(val_raw, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
                                 st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(val_raw, st.arr_syms, st.ssa_map, pg, st.bv_mode)
                                 let val_smt = smt_subst_vars(expr_to_smt_fp(val_raw, st.bv_mode, st.fp_syms), st.ssa_map)
                                 st.ssa_seq = st.ssa_seq + 1
@@ -2845,9 +2909,7 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
             let asort = smt_var_sort_all(lhs_a, st.bool_syms, st.fp_syms, st.int_sort)
             st.fn_stream = st.fn_stream + "(declare-const " + nxt_s + " " + asort + ")\n"
             if smt_expr_supported_ex(rhs_a, all_syms, st.bv_mode) {
-                if st.bv_mode {
-                    st.bv_ovf_stream = st.bv_ovf_stream + smt_bv_collect_ovf_fp(rhs_a, st.ssa_map, pg, 0, st.fp_syms)
-                }
+                st.bv_ovf_stream = st.bv_ovf_stream + smt_arith_collect_ovf_ex(rhs_a, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
                 st.bv_ovf_stream = st.bv_ovf_stream + smt_fp_collect_safety(rhs_a, st.ssa_map, pg, 0, st.bv_mode, st.fp_syms)
                 st.arr_bnd_stream = st.arr_bnd_stream + smt_arr_collect_bounds(rhs_a, st.arr_syms, st.ssa_map, pg, st.bv_mode)
                 mut rhs_smt = smt_subst_vars(expr_to_smt_fp(rhs_a, st.bv_mode, st.fp_syms), st.ssa_map)
@@ -2859,6 +2921,8 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
                 } else {
                     st.fn_stream = st.fn_stream + "(assert (= " + nxt_s + " " + rhs_smt + "))\n"
                 }
+            } else {
+                smt_ast_havoc_expr_calls(pool, nd.right, st, 0)
             }
             st.ssa_map = smt_ssa_set(st.ssa_map, lhs_a, nxt_s)
         }
@@ -2898,28 +2962,7 @@ fn smt_ast_lower_stmt(pool: AstPool, nid: int, mut st: SmtState, mut ens_lines: 
         return false
     }
     if nd.kind == NK_EXPR_STMT() && nd.left >= 0 && nd.left < len(pool.nodes) {
-        let e: AstNode = pool.nodes[nd.left]
-        if e.kind == NK_CALL() && e.left >= 0 && e.left < len(pool.nodes) {
-            let cal: AstNode = pool.nodes[e.left]
-            if cal.kind == NK_IDENT() {
-                if (cal.name == "pop" || cal.name == "push" || cal.name == "arr_free") && e.child_count >= 1 {
-                    let a0_id = pool.children[e.child_start]
-                    if a0_id >= 0 && a0_id < len(pool.nodes) && pool.nodes[a0_id].kind == NK_IDENT() {
-                        smt_ast_havoc_syms(st, "|" + pool.nodes[a0_id].name + "|")
-                    }
-                } else if cal.name != "print" && cal.name != "require" && cal.name != "ensure" && cal.name != "invariant" && cal.name != "panic" && cal.name != "abort" && starts_with(cal.name, "trace_") == false {
-                    for ci in 0..e.child_count {
-                        let aid = pool.children[e.child_start + ci]
-                        if aid >= 0 && aid < len(pool.nodes) && pool.nodes[aid].kind == NK_IDENT() {
-                            let anm = pool.nodes[aid].name
-                            if find_str(st.arr_syms, "|" + anm + "|", 0) != -1 {
-                                smt_ast_havoc_syms(st, "|" + anm + "|")
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        smt_ast_havoc_expr_calls(pool, nd.left, st, 0)
         return false
     }
     if nd.kind == NK_MATCH_STMT() {

@@ -1518,13 +1518,13 @@ fn ast_parse_program(mut pool: AstPool, mut cur: TokCursor) -> int {
 }
 
 fn ast_parse_unit_ex(source: string, base_dir: string, file_name: string, do_expand: bool) -> AstPool {
-    let eu = expand_all_imports_mapped(source, base_dir, file_name, do_expand)
+    mut eu = expand_all_imports_mapped(source, base_dir, file_name, do_expand)
     let ts = lex_tokenize_mapped(eu)
     mut pool = ast_pool_new()
-    let f_cp = eu.files
-    let l_cp = eu.lines
-    let lf_cp = eu.line_fids
-    let ln_cp = eu.line_nums
+    mut f_cp = eu.files
+    mut l_cp = eu.lines
+    mut lf_cp = eu.line_fids
+    mut ln_cp = eu.line_nums
     pool.files = f_cp
     pool.lines = l_cp
     pool.line_fids = lf_cp

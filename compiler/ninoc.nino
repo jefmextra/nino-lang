@@ -364,24 +364,33 @@ fn main() -> int {
     if flag == "equiv" {
         if arg_count < 4 {
             print("\033[91m[Error]\033[0m Missing source files for 'equiv' command.")
-            print("Usage: ninoc equiv <fileA.nino> <fileB.nino>")
+            print("Usage: ninoc equiv <fileA.nino> <fileB.nino> [fn_name]")
             return 1
         }
         let file_a = argv(2)
         let file_b = argv(3)
+        mut target_fn = ""
+        if arg_count >= 5 {
+            target_fn = trim(argv(4))
+        }
         if file_exists(file_a) == false || file_exists(file_b) == false {
             print("\033[91m[Error]\033[0m Both comparison source files must exist.")
             return 1
         }
         let src_a = read_file(file_a)
         let src_b = read_file(file_b)
-        let smt_eq = synthesize_equiv_smt(src_a, src_b)
+        let smt_eq = synthesize_equiv_smt_ex(src_a, src_b, target_fn)
         let smt_path = file_a + ".equiv.smt2"
         write_file(smt_path, smt_eq)
         print("\033[96m================================================================================\033[0m")
         print("\033[93m[Nino Mathematical Differential Equivalence Prover (ninoc equiv)]\033[0m")
         print("  Baseline Unit : " + file_a)
         print("  Candidate Unit: " + file_b)
+        if len(target_fn) > 0 {
+            print("  Target Fn     : " + target_fn)
+        } else {
+            print("  Target Scope  : All Top-Level Functions")
+        }
         let z3_bin = find_z3_binary()
         if len(z3_bin) == 0 {
             delete_temp_file(smt_path)
@@ -397,13 +406,20 @@ fn main() -> int {
             delete_temp_file(out_z3)
         }
         delete_temp_file(smt_path)
-        if starts_with(trim(z3_txt), "unsat") {
-            print("  Proof Verdict : \033[92m[✓ FORMALLY EQUIVALENT (UNSAT) - 0 Divergence Inputs Across All 64-Bit States]\033[0m")
+        let z3_clean = trim(replace_str(z3_txt, "\r\n", "\n"))
+        let nl_p = find_char(z3_clean, "\n", 0)
+        let verdict = (nl_p == -1) ? z3_clean : trim(slice(z3_clean, 0, nl_p))
+        if verdict == "unsat" {
+            print("  Proof Verdict : \033[92m[✓ FORMALLY EQUIVALENT (UNSAT) - 0 Divergence Inputs Across Integer/Bool States]\033[0m")
             print("\033[96m================================================================================\033[0m")
             return 0
         }
-        print("  Proof Verdict : \033[91m[✗ EQUIVALENCE REFUTED (SAT) - Divergence Input Discovered by Z3]\033[0m")
-        print(trim(z3_txt))
+        if verdict == "sat" {
+            print("  Proof Verdict : \033[91m[✗ EQUIVALENCE REFUTED (SAT) - Divergence Input Discovered by Z3]\033[0m")
+        } else {
+            print("  Proof Verdict : \033[93m[? EQUIVALENCE INCONCLUSIVE (" + (len(verdict) > 0 ? verdict : "error") + ") - Fail-Closed]\033[0m")
+        }
+        print(z3_clean)
         print("\033[96m================================================================================\033[0m")
         return 1
     }

@@ -1,0 +1,10 @@
+struct BoxArr {
+    mut arr: [int]
+}
+
+fn main() -> int {
+    let a = [1, 2, 3]
+    mut bx = BoxArr { arr: a }
+    bx.arr[0] = 999
+    return 0
+}

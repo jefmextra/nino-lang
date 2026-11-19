@@ -320,6 +320,74 @@ fn sem_is_io_sink(fnm: string) -> bool {
     return fnm == "print" || fnm == "write_file" || fnm == "file_write" || fnm == "fs_write_text" || fnm == "fs_append_text" || fnm == "tcp_write" || fnm == "http_post" || fnm == "http_put" || fnm == "stderr_write" || fnm == "print_raw"
 }
 
+fn sem_type_has_mut_heap_ref(raw_t: string, sym: SymTable, depth: int) -> bool {
+    if depth > 8 {
+        return false
+    }
+    let nt = sem_norm_nino_type(raw_t)
+    if (starts_with(nt, "[") && ends_with(nt, "]")) || nt == "dict" {
+        return true
+    }
+    let snm = strip_generic_args(nt)
+    if len(snm) == 0 {
+        return false
+    }
+    let sid = sym_lookup(sym, snm)
+    if sid != -1 {
+        let se: SymbolInfo = sym.entries[sid]
+        if se.kind == SK_STRUCT() {
+            for fi in 0..se.child_count {
+                let finfo: FieldInfo = sym.fields[se.child_start + fi]
+                if sem_type_has_mut_heap_ref(finfo.nino_type, sym, depth + 1) {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+fn sem_expr_immut_ref_root(pool: AstPool, nid: int, sym: SymTable) -> string {
+    if nid < 0 || nid >= len(pool.nodes) {
+        return ""
+    }
+    let top_nd: AstNode = pool.nodes[nid]
+    mut cur = nid
+    while cur >= 0 && cur < len(pool.nodes) && (pool.nodes[cur].kind == NK_MEMBER() || pool.nodes[cur].kind == NK_INDEX()) {
+        cur = pool.nodes[cur].left
+    }
+    if cur >= 0 && cur < len(pool.nodes) && pool.nodes[cur].kind == NK_IDENT() {
+        let rname = pool.nodes[cur].name
+        let sid = sym_lookup(sym, rname)
+        if sid != -1 {
+            let se: SymbolInfo = sym.entries[sid]
+            if se.active && se.kind != SK_FN() && se.kind != SK_STRUCT() && se.is_mut == false && se.is_morphic == false {
+                let tgt_t = len(top_nd.inferred_type) > 0 ? top_nd.inferred_type : se.nino_type
+                if sem_type_has_mut_heap_ref(tgt_t, sym, 0) {
+                    return rname
+                }
+            }
+        }
+    }
+    return ""
+}
+
+fn sem_struct_has_mut_field(sym: SymTable, sname: string, fname: string) -> bool {
+    let sid = sym_lookup(sym, strip_generic_args(sname))
+    if sid != -1 {
+        let se: SymbolInfo = sym.entries[sid]
+        if se.kind == SK_STRUCT() {
+            for fi in 0..se.child_count {
+                let finfo: FieldInfo = sym.fields[se.child_start + fi]
+                if finfo.name == fname {
+                    return finfo.is_mut
+                }
+            }
+        }
+    }
+    return false
+}
+
 fn sem_cap_allows(cap_spec: string, op_cat: string) -> bool {
     if len(cap_spec) == 0 || len(op_cat) == 0 {
         return true
@@ -647,6 +715,13 @@ fn sem_check_expr(mut pool: AstPool, nid: int, mut sctx: SemCtx) -> string {
                 if len(f_exp) > 0 && sem_ast_types_compat(f_exp, vt) == false {
                     sem_err(pool, sctx, fnd, "E0308", "type_error", "Field '" + fnd.name + "' on '" + sname + "' expects '" + sem_norm_nino_type(f_exp) + "', found '" + vt + "'", len(fnd.name), "align field initializer type with struct declaration")
                     return ""
+                }
+                if sem_struct_has_mut_field(sctx.sym, sname, fnd.name) {
+                    let im_f = sem_expr_immut_ref_root(pool, fnd.left, sctx.sym)
+                    if len(im_f) > 0 {
+                        sem_err(pool, sctx, fnd, "E0384", "type_error", "Cannot bind immutable reference '" + im_f + "' into mutable struct field '" + sname + "." + fnd.name + "'", len(fnd.name), "declare '" + im_f + "' with 'mut' to allow shared mutable binding")
+                        return ""
+                    }
                 }
             }
         }
@@ -1026,6 +1101,24 @@ fn sem_check_stmt(mut pool: AstPool, nid: int, mut sctx: SemCtx) {
         let is_mut = (nd.flags & NF_MUT()) != 0
         let is_sealed = (nd.flags & NF_SEALED()) != 0
         let is_morphic = (nd.flags & NF_MORPHIC()) != 0
+        if is_mut && nd.left >= 0 && nd.left < len(pool.nodes) {
+            let im_rhs = sem_expr_immut_ref_root(pool, nd.left, sctx.sym)
+            if len(im_rhs) > 0 {
+                sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot alias immutable binding '" + im_rhs + "' into mutable variable '" + nd.name + "'", len(nd.name), "declare '" + im_rhs + "' with 'mut' or bind '" + nd.name + "' with 'let'")
+                return
+            }
+            let rhs_lit: AstNode = pool.nodes[nd.left]
+            if rhs_lit.kind == NK_STRUCT_LIT() {
+                for fci in 0..rhs_lit.child_count {
+                    let cf_nd: AstNode = pool.nodes[pool.children[rhs_lit.child_start + fci]]
+                    let im_cf = sem_expr_immut_ref_root(pool, cf_nd.left, sctx.sym)
+                    if len(im_cf) > 0 {
+                        sem_err(pool, sctx, cf_nd, "E0384", "type_error", "Cannot store immutable reference '" + im_cf + "' inside mutable struct '" + nd.name + "'", len(im_cf), "declare '" + im_cf + "' with 'mut' or declare '" + nd.name + "' with 'let'")
+                        return
+                    }
+                }
+            }
+        }
         mut taint_d = 0
         if is_sealed == false && is_pin_rhs == false && is_mark_rhs == false {
             taint_d = sem_expr_taint_depth(pool, nd.left, sctx)
@@ -1071,6 +1164,11 @@ fn sem_check_stmt(mut pool: AstPool, nid: int, mut sctx: SemCtx) {
             if sctx.has_error { return }
             if sem_ast_types_compat(se.nino_type, rhs_t) == false {
                 sem_err(pool, sctx, nd, "E0308", "type_error", "Cannot assign '" + rhs_t + "' to variable '" + l_nd.name + "' of type '" + sem_norm_nino_type(se.nino_type) + "'", len(l_nd.name), "align assigned expression type with variable type")
+                return
+            }
+            let im_assign = sem_expr_immut_ref_root(pool, nd.right, sctx.sym)
+            if len(im_assign) > 0 {
+                sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot assign immutable reference '" + im_assign + "' into mutable variable '" + l_nd.name + "'", len(l_nd.name), "declare '" + im_assign + "' with 'mut'")
                 return
             }
             let push_td = sem_expr_unwrap_push(pool, nd.right, sctx, l_nd.name)
@@ -1141,6 +1239,16 @@ fn sem_check_stmt(mut pool: AstPool, nid: int, mut sctx: SemCtx) {
             }
             let rhs_t = sem_check_expr(pool, nd.right, sctx)
             if sctx.has_error { return }
+            let sv_mem = sem_expr_has_sealed(pool, nd.right, sctx.sym)
+            if len(sv_mem) > 0 {
+                sem_err(pool, sctx, nd, "E0042", "security_error", "Cannot store sealed secret or alias '" + sv_mem + "' into struct field '" + l_nd.name + "' without explicit unseal()", len(sv_mem), "call unseal(" + sv_mem + ") before assigning to a non-sealed struct field")
+                return
+            }
+            let im_mem = sem_expr_immut_ref_root(pool, nd.right, sctx.sym)
+            if len(im_mem) > 0 {
+                sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot assign immutable reference '" + im_mem + "' into mutable field '" + l_nd.name + "'", len(l_nd.name), "declare '" + im_mem + "' with 'mut'")
+                return
+            }
             let obj_c = map_type(obj_t)
             let f_exp = lower_resolve_member_nino_type(sctx.sym, obj_c, l_nd.name)
             if len(f_exp) > 0 && sem_ast_types_compat(f_exp, rhs_t) == false {
@@ -1183,6 +1291,16 @@ fn sem_check_stmt(mut pool: AstPool, nid: int, mut sctx: SemCtx) {
             if sctx.has_error { return }
             let rhs_t = sem_check_expr(pool, nd.right, sctx)
             if sctx.has_error { return }
+            let sv_idx = sem_expr_has_sealed(pool, nd.right, sctx.sym)
+            if len(sv_idx) > 0 {
+                sem_err(pool, sctx, nd, "E0042", "security_error", "Cannot store sealed secret or alias '" + sv_idx + "' into indexed element without explicit unseal()", len(sv_idx), "call unseal(" + sv_idx + ") before storing into an unsealed array or dictionary")
+                return
+            }
+            let im_idx = sem_expr_immut_ref_root(pool, nd.right, sctx.sym)
+            if len(im_idx) > 0 {
+                sem_err(pool, sctx, nd, "E0384", "type_error", "Cannot store immutable reference '" + im_idx + "' into mutable element", len(im_idx), "declare '" + im_idx + "' with 'mut'")
+                return
+            }
             let ignore_idx = len(tt) + len(it) + len(rhs_t)
             let t_nd: AstNode = pool.nodes[l_nd.left]
             if t_nd.kind == NK_IDENT() {
@@ -1293,7 +1411,10 @@ fn sem_check_stmt(mut pool: AstPool, nid: int, mut sctx: SemCtx) {
     if nd.kind == NK_MATCH_STMT() {
         let st_t = sem_check_expr(pool, nd.left, sctx)
         if sctx.has_error { return }
-        let ignore_st = st_t
+        if len(st_t) > 0 && st_t != "any" && st_t != "bool" && (sem_is_num_type(st_t) == false || st_t == "float") {
+            sem_err(pool, sctx, nd, "E0308", "type_error", "Match scrutinee must be integer or bool type, found '" + st_t + "'", 5, "match arms lower to C integer switch labels; use if/else for strings or floats")
+            return
+        }
         for ci in 0..nd.child_count {
             let aid = pool.children[nd.child_start + ci]
             let arm: AstNode = pool.nodes[aid]
@@ -1381,7 +1502,7 @@ fn ast_semantic_check(mut pool: AstPool, file_name: string) -> bool {
         emit_rustc_style_diag(pool.err_file, pool.err_line, pool.err_col, "E0001", "syntax_error", pool.err_msg, lower_diag_line_text(pool, efid, pool.err_line), 1, "fix syntax error before compilation")
         return false
     }
-    let tbl = sym_table_new()
+    mut tbl = sym_table_new()
     mut mnames: [string] = []
     mut mdepths: [int] = []
     mut sctx = SemCtx {

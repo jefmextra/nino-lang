@@ -31,7 +31,7 @@ ninoc build compiler/ninoc.nino -o ninoc_dev.exe
 ```
 
 ### Running the Test Suite
-Before submitting any pull request, ensure all 29 native test suites pass with zero warnings (`ninoc test`) alongside the 153-test cross-platform Tier 1-4 E2E suite (`tests/e2e/`) and `tools/compliance_check.nino`:
+Before submitting any pull request, ensure all 29 native test suites pass with zero warnings (`ninoc test`) alongside the 160-test cross-platform Tier 1-4 E2E suite (`tests/e2e/`) and `tools/compliance_check.nino`:
 ```bash
 ninoc test
 ```

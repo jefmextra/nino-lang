@@ -39,6 +39,16 @@ fn dp_laplace_noise(scale: f64) -> f64 {
     return noise
 }
 
+fn dp_clamp_value(val: f64, sensitivity: f64) -> f64 {
+    if val > sensitivity {
+        return sensitivity
+    }
+    if val < -sensitivity {
+        return -sensitivity
+    }
+    return val
+}
+
 fn dp_mean(dataset: [f64], epsilon: f64, sensitivity: f64) -> f64 {
     require(epsilon > 0.0, "Privacy parameter epsilon must be strictly positive")
     require(sensitivity > 0.0, "Global sensitivity must be positive")
@@ -47,14 +57,7 @@ fn dp_mean(dataset: [f64], epsilon: f64, sensitivity: f64) -> f64 {
 
     mut sum = 0.0
     for i in 0..n {
-        let val = dataset[i]
-        mut clamped = val
-        if val > sensitivity {
-            clamped = sensitivity
-        } else if val < -sensitivity {
-            clamped = -sensitivity
-        }
-        sum = sum + clamped
+        sum = sum + dp_clamp_value(dataset[i], sensitivity)
     }
 
     let true_mean = sum / n
@@ -66,10 +69,11 @@ fn dp_mean(dataset: [f64], epsilon: f64, sensitivity: f64) -> f64 {
 
 fn dp_sum(dataset: [f64], epsilon: f64, sensitivity: f64) -> f64 {
     require(epsilon > 0.0, "Privacy parameter epsilon must be strictly positive")
+    require(sensitivity > 0.0, "Global sensitivity must be positive")
     let n = len(dataset)
     mut sum = 0.0
     for i in 0..n {
-        sum = sum + dataset[i]
+        sum = sum + dp_clamp_value(dataset[i], sensitivity)
     }
     let noise_scale = sensitivity / epsilon
     let noise = dp_laplace_noise(noise_scale)

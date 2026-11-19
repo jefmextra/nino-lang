@@ -327,8 +327,8 @@ jobs:
           - **3-Stage Deterministic Bootstrap**: Converged bit-for-bit across Stage-2 and Stage-3 on both Linux and Windows.
           - **Formal Metatheory Proofs**: Checked 5 SMT-LIB2 memory-epoch and vectorization invariants in `formal/arena_soundness.smt2` with Z3 (`5/5 unsat`).
           - **Open RFCs & Clause Traceability**: Added `rfcs/RFC-0001` through `RFC-0003` alongside Clause 10 traceability links in `SPECIFICATION.md`.
-          - **Compiler & Runtime Updates**: Modularized self-hosted compiler (`compiler/*.nino`), standard `//` and `/* ... */` comment support, fail-closed direct LLVM IR subset lowering (`ninoc llvm`), AST+Phi-Join SMT verification (`QF_BV`/`QF_BVFP`), hardened BCE/sealed/transact safety, HMAC-SHA256 / Ed25519 PCC verification, and direct PE/ELF native code generation.
-          - **Test Coverage**: Passed all 29 `ninoc test` suites, `tools/compliance_check.nino`, and the 145-test Tier 1-4 E2E matrix on Ubuntu and Windows runners.
+          - **Compiler & Runtime Updates**: Modularized self-hosted compiler (`compiler/*.nino`), AST+Phi-Join SMT verification (`QF_BV`/`QF_BVFP` + `--int-logic` 64-bit overflow checks + shadowed `let` havoc), multi-function & named `ninoc equiv`, transitive `E0384` immutable ref checks, `transact`/`match` loop control hardening, CWE-22/78 `pkg add` guards, WASM sandbox bounds/stack/grow traps, 1-of-N Sigma OR-proof ZK membership verification, depth-1 JSON parsing, dynamic `NinoDict` keys, and bounded Redis/PostgreSQL wire handling.
+          - **Test Coverage**: Passed all 29 `ninoc test` suites, `tools/compliance_check.nino`, and the 160-test Tier 1-4 E2E matrix on Ubuntu and Windows runners.
 
           ### Verified Stage-3 Compiler SHA-256
           - Linux x86_64 (`ninoc`): `{os.environ['LINUX_BIN_SHA']}`
